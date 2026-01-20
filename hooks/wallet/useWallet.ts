@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/authenication/useAuth";
 import { supabase } from "@/supabase/client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type WalletBalance = {
   account_id: string;
@@ -19,6 +19,7 @@ export function useWallet() {
     if (!user) {
       setWallet(null);
       setLoading(false);
+      setError(null);
       return;
     }
 
@@ -26,20 +27,28 @@ export function useWallet() {
     setError(null);
 
     const { data, error } = await supabase
-  .from("wallet_balances")
-  .select("account_id, balance, last_activity_at")
-  .eq("user_id", user.id)
-  .single();
-
+      .from("wallet_balances")
+      .select("account_id, balance, last_activity_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
 
     if (error) {
       console.error("Wallet fetch error:", error);
       setError("Failed to load wallet balance");
       setWallet(null);
-    } else {
-      setWallet(data);
+      setLoading(false);
+      return;
     }
 
+    // If no row yet: wallet isn't initialized / view not returning -> treat as 0, not an error
+    if (!data) {
+      setWallet({ account_id: "", balance: 0, last_activity_at: null });
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    setWallet(data as WalletBalance);
     setLoading(false);
   }, [user]);
 
@@ -47,9 +56,11 @@ export function useWallet() {
     fetchWallet();
   }, [fetchWallet]);
 
-  // 🔔 Realtime: listen to ledger changes
+  // Only subscribe when we have a real account_id
+  const accountId = useMemo(() => wallet?.account_id || "", [wallet?.account_id]);
+
   useEffect(() => {
-    if (!user || !wallet?.account_id) return;
+    if (!user || !accountId) return;
 
     const channel = supabase
       .channel("wallet-balance-realtime")
@@ -59,7 +70,7 @@ export function useWallet() {
           event: "*",
           schema: "public",
           table: "ledger_entries",
-          filter: `account_id=eq.${wallet.account_id}`,
+          filter: `account_id=eq.${accountId}`,
         },
         () => {
           fetchWallet();
@@ -70,10 +81,10 @@ export function useWallet() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, wallet?.account_id, fetchWallet]);
+  }, [user, accountId, fetchWallet]);
 
   return {
-    wallet,              // { account_id, balance, last_activity_at }
+    wallet,
     balance: wallet?.balance ?? 0,
     loading,
     error,

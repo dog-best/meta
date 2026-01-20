@@ -389,3 +389,6 @@ verify_jwt = false
 
 [functions.paystack-dva]
 verify_jwt = true
+
+[functions.paystack-init]
+verify_jwt = true

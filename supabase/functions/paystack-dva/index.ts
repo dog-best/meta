@@ -14,10 +14,16 @@ type DvaRow = {
   raw: any;
 };
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...corsHeaders },
   });
 }
 
@@ -32,6 +38,9 @@ function pickAccount(row: any) {
 }
 
 serve(async (req) => {
+  // CORS preflight
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
   try {
     if (req.method !== "POST") {
       return json(405, { success: false, message: "Method not allowed" });
@@ -54,7 +63,9 @@ serve(async (req) => {
     }
 
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return json(401, { success: false, message: "Unauthorized (missing auth header)" });
+    if (!authHeader) {
+      return json(401, { success: false, message: "Missing Authorization header" });
+    }
 
     // user-scoped client (auth only)
     const userClient = createClient(SB_URL, SB_ANON, {
@@ -63,7 +74,14 @@ serve(async (req) => {
 
     const { data: auth, error: authError } = await userClient.auth.getUser();
     const user = auth?.user;
-    if (!user || authError) return json(401, { success: false, message: "Unauthorized (invalid token)" });
+
+    if (authError || !user) {
+      return json(401, {
+        success: false,
+        message: "Invalid session token",
+        raw: authError?.message ?? null,
+      });
+    }
 
     // admin client (db writes)
     const admin = createClient(SB_URL, SB_SERVICE);
@@ -79,16 +97,14 @@ serve(async (req) => {
       .maybeSingle<DvaRow>();
 
     if (existingErr) return json(500, { success: false, message: existingErr.message });
-    if (existing?.account_number) {
-      return json(200, { success: true, account: pickAccount(existing) });
-    }
+    if (existing?.account_number) return json(200, { success: true, account: pickAccount(existing) });
 
     // 2) get profile
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
       .select("email, full_name")
       .eq("id", user.id)
-      .single();
+      .maybeSingle();
 
     if (profileErr) return json(500, { success: false, message: profileErr.message });
     if (!profile?.email) return json(400, { success: false, message: "User profile missing email" });
@@ -123,7 +139,8 @@ serve(async (req) => {
         }),
       });
 
-      const customerJson = await customerRes.json();
+      const customerJson = await customerRes.json().catch(() => ({}));
+
       if (!customerRes.ok || !customerJson?.status) {
         return json(502, { success: false, message: "Paystack customer create failed", raw: customerJson });
       }
@@ -141,7 +158,8 @@ serve(async (req) => {
       body: JSON.stringify({ customer: customerCode }),
     });
 
-    const dvaJson = await dvaRes.json();
+    const dvaJson = await dvaRes.json().catch(() => ({}));
+
     if (!dvaRes.ok || !dvaJson?.status) {
       return json(502, { success: false, message: "Paystack DVA create failed", raw: dvaJson });
     }
@@ -168,7 +186,13 @@ serve(async (req) => {
 
     return json(200, {
       success: true,
-      account: { account_number: accountNumber, bank_name: bankName, account_name: accountName, currency: "NGN", active: true },
+      account: {
+        account_number: accountNumber,
+        bank_name: bankName,
+        account_name: accountName,
+        currency: "NGN",
+        active: true,
+      },
     });
   } catch (e) {
     console.error("paystack-dva error:", e);
