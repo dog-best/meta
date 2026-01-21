@@ -37,8 +37,11 @@ function pickAccount(row: any) {
   };
 }
 
+function env(name: string, fallback?: string) {
+  return Deno.env.get(name) ?? (fallback ? Deno.env.get(fallback) : undefined);
+}
+
 serve(async (req) => {
-  // CORS preflight
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
@@ -46,18 +49,18 @@ serve(async (req) => {
       return json(405, { success: false, message: "Method not allowed" });
     }
 
-    const SB_URL = Deno.env.get("SB_URL");
-    const SB_ANON = Deno.env.get("SB_ANON_KEY");
-    const SB_SERVICE = Deno.env.get("SB_SERVICE_ROLE_KEY");
-    const PAYSTACK_SECRET = Deno.env.get("PAYSTACK_SECRET_KEY");
+    const SUPABASE_URL = env("SUPABASE_URL", "SB_URL");
+    const SUPABASE_ANON_KEY = env("SUPABASE_ANON_KEY", "SB_ANON_KEY");
+    const SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY", "SB_SERVICE_ROLE_KEY");
+    const PAYSTACK_SECRET = env("PAYSTACK_SECRET_KEY");
 
-    if (!SB_URL || !SB_ANON || !SB_SERVICE || !PAYSTACK_SECRET) {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY || !PAYSTACK_SECRET) {
       return json(500, {
         success: false,
         message: "Missing env vars",
-        hasSB_URL: !!SB_URL,
-        hasSB_ANON_KEY: !!SB_ANON,
-        hasSB_SERVICE_ROLE_KEY: !!SB_SERVICE,
+        hasSUPABASE_URL: !!SUPABASE_URL,
+        hasSUPABASE_ANON_KEY: !!SUPABASE_ANON_KEY,
+        hasSUPABASE_SERVICE_ROLE_KEY: !!SUPABASE_SERVICE_ROLE_KEY,
         hasPAYSTACK_SECRET_KEY: !!PAYSTACK_SECRET,
       });
     }
@@ -68,7 +71,7 @@ serve(async (req) => {
     }
 
     // user-scoped client (auth only)
-    const userClient = createClient(SB_URL, SB_ANON, {
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
 
@@ -84,13 +87,13 @@ serve(async (req) => {
     }
 
     // admin client (db writes)
-    const admin = createClient(SB_URL, SB_SERVICE);
+    const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // 1) return existing DVA (active)
+    // 1) return existing active DVA
     const { data: existing, error: existingErr } = await admin
       .from("user_virtual_accounts")
       .select(
-        "user_id,paystack_customer_code,paystack_dedicated_account_id,account_number,bank_name,account_name,currency,provider_slug,active",
+        "user_id,paystack_customer_code,paystack_dedicated_account_id,account_number,bank_name,account_name,currency,provider_slug,active,raw",
       )
       .eq("user_id", user.id)
       .eq("active", true)
@@ -99,15 +102,20 @@ serve(async (req) => {
     if (existingErr) return json(500, { success: false, message: existingErr.message });
     if (existing?.account_number) return json(200, { success: true, account: pickAccount(existing) });
 
-    // 2) get profile
+    // 2) get profile (your new profiles table)
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
       .select("email, full_name")
       .eq("id", user.id)
-      .maybeSingle();
+      .maybeSingle<{ email: string | null; full_name: string | null }>();
 
     if (profileErr) return json(500, { success: false, message: profileErr.message });
-    if (!profile?.email) return json(400, { success: false, message: "User profile missing email" });
+
+    // Prefer auth email if profiles.email missing
+    const email = profile?.email ?? user.email ?? null;
+    const fullName = profile?.full_name ?? null;
+
+    if (!email) return json(400, { success: false, message: "User missing email (profiles.email or auth.email)" });
 
     // 3) reuse customer code if exists
     let customerCode: string | null = null;
@@ -126,6 +134,9 @@ serve(async (req) => {
 
     // 4) Create Paystack customer if needed
     if (!customerCode) {
+      const first = fullName?.split(" ")?.[0];
+      const last = fullName?.split(" ")?.slice(1).join(" ");
+
       const customerRes = await fetch("https://api.paystack.co/customer", {
         method: "POST",
         headers: {
@@ -133,9 +144,9 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email: profile.email,
-          first_name: profile.full_name?.split(" ")?.[0] ?? undefined,
-          last_name: profile.full_name?.split(" ")?.slice(1).join(" ") ?? undefined,
+          email,
+          first_name: first || undefined,
+          last_name: last || undefined,
         }),
       });
 
@@ -166,7 +177,7 @@ serve(async (req) => {
 
     const accountNumber = dvaJson.data.account_number;
     const bankName = dvaJson.data.bank?.name ?? "Bank";
-    const accountName = dvaJson.data.account_name ?? profile.full_name ?? profile.email;
+    const accountName = dvaJson.data.account_name ?? fullName ?? email;
 
     // 6) Store
     const { error: insErr } = await admin.from("user_virtual_accounts").insert({
