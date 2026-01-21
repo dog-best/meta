@@ -8,19 +8,84 @@ function json(status: number, body: Record<string, unknown>) {
   });
 }
 
+async function readInput(req: Request) {
+  const url = new URL(req.url);
+  let category = url.searchParams.get("category") ?? undefined;
+  let provider = url.searchParams.get("provider") ?? undefined;
+
+  // If not present in query params, try JSON body
+  if (!category || !provider) {
+    try {
+      const ct = req.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const body = await req.json().catch(() => ({}));
+        category = category ?? body?.category;
+        provider = provider ?? body?.provider;
+      }
+    } catch {
+      // ignore body parse errors
+    }
+  }
+
+  return { category, provider };
+}
+
 serve(async (req) => {
   try {
-    const url = new URL(req.url);
-    const category = url.searchParams.get("category"); // data | airtime
-    const provider = url.searchParams.get("provider"); // mtn | airtel
+    const { category, provider } = await readInput(req);
 
-    if (!category || !provider) {
-      return json(400, { success: false, message: "Missing category or provider" });
+    if (!category) {
+      return json(400, { success: false, message: "Missing category" });
+    }
+
+    // Bills categories: return providers if provider not specified
+    const isBillsCategory = category === "electricity" || category === "tv";
+
+    if (isBillsCategory) {
+      // If provider is missing, return provider list for that category
+      if (!provider) {
+        const { data, error } = await supabaseAdmin
+          .from("bill_providers")
+          .select("id, name, category, status")
+          .eq("category", category)
+          .eq("status", "active")
+          .order("name", { ascending: true });
+
+        if (error) {
+          console.error("fetch-utility-category bill_providers error", error);
+          return json(500, { success: false, message: "Failed to load providers" });
+        }
+
+        return json(200, { success: true, providers: data ?? [] });
+      }
+
+      // If provider is specified, return the provider record (placeholder for bill products)
+      const { data: prov, error: provErr } = await supabaseAdmin
+        .from("bill_providers")
+        .select("id, name, category, status")
+        .eq("id", provider)
+        .maybeSingle();
+
+      if (provErr) {
+        console.error("fetch-utility-category provider lookup error", provErr);
+        return json(500, { success: false, message: "Failed to load provider" });
+      }
+
+      if (!prov) {
+        return json(404, { success: false, message: "Provider not found" });
+      }
+
+      // Later: you can fetch bill_products/bill_plans here, if you add those tables.
+      return json(200, { success: true, provider: prov, products: [] });
+    }
+
+    // Fintech categories (data/airtime): require provider
+    if (!provider) {
+      return json(400, { success: false, message: "Missing provider" });
     }
 
     const now = new Date();
 
-    // Products are static rows in service_products; offers are optional time-bounded rows in service_offers.
     const { data: products, error: productsErr } = await supabaseAdmin
       .from("service_products")
       .select("product_code, name, data_size_mb, validity_label, base_price, provider, category, active")
