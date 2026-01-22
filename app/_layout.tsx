@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import "../global.css";
-import { useAuth } from "../hooks/authenication/useAuth";
+import { useAuth } from "../hooks/authentication/useAuth";
 import { supabase } from "../supabase/client";
 
 import * as Application from "expo-application";
