@@ -1,5 +1,5 @@
+import { supabase } from "@/services/supabase";
 import { useEffect, useState } from "react";
-import { supabase } from "../../services/supabase";
 
 export function useBanks() {
   const [banks, setBanks] = useState<{ code: string; name: string }[]>([]);
@@ -14,4 +14,10 @@ export function useBanks() {
   }, []);
 
   return { banks, loading };
+}
+
+export function filterBanks(banks: { code: string; name: string }[], query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return banks.slice(0, 30);
+  return banks.filter((b) => b.name.toLowerCase().includes(q)).slice(0, 30);
 }

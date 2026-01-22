@@ -1,9 +1,18 @@
+import { supabase } from "@/services/supabase";
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "../../services/supabase";
+
+export type WalletTx = {
+  id: string;
+  type: "deposit" | "transfer_in" | "transfer_out" | "withdrawal" | "fee" | "bill";
+  amount: number;
+  reference: string | null;
+  meta: any;
+  created_at: string;
+};
 
 export function useWalletSimple() {
   const [balance, setBalance] = useState<number>(0);
-  const [tx, setTx] = useState<any[]>([]);
+  const [tx, setTx] = useState<WalletTx[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -11,26 +20,20 @@ export function useWalletSimple() {
     setLoading(true);
     setError(null);
 
-    const { data: session } = await supabase.auth.getUser();
-    const userId = session.user?.id;
+    const { data: u } = await supabase.auth.getUser();
+    const userId = u.user?.id;
     if (!userId) {
+      setError("Not signed in");
       setLoading(false);
-      setError("Not logged in");
       return;
     }
 
-    const w = await supabase
-      .from("app_wallets_simple")
-      .select("balance")
-      .eq("user_id", userId)
-      .maybeSingle();
-
+    const w = await supabase.from("app_wallets_simple").select("balance").eq("user_id", userId).maybeSingle();
     if (w.error) {
-      setLoading(false);
       setError(w.error.message);
+      setLoading(false);
       return;
     }
-
     setBalance(Number(w.data?.balance ?? 0));
 
     const t = await supabase
@@ -38,19 +41,21 @@ export function useWalletSimple() {
       .select("id,type,amount,reference,meta,created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(30);
+      .limit(50);
 
     if (t.error) {
-      setLoading(false);
       setError(t.error.message);
+      setLoading(false);
       return;
     }
 
-    setTx(t.data ?? []);
+    setTx((t.data ?? []).map((x: any) => ({ ...x, amount: Number(x.amount) })));
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return { balance, tx, loading, error, reload: load };
 }
