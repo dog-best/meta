@@ -34,12 +34,9 @@ export default function TabLayout() {
         tabBarInactiveTintColor: "#6B7280",
         tabBarHideOnKeyboard: true,
 
-        // Background layer (ios blur, android solid)
         tabBarBackground: () => {
           if (Platform.OS === "ios" && BlurViewComp) {
-            return (
-              <BlurViewComp intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
-            );
+            return <BlurViewComp intensity={70} tint="dark" style={StyleSheet.absoluteFill} />;
           }
           return <View style={[StyleSheet.absoluteFill, { backgroundColor: "#050814" }]} />;
         },

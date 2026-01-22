@@ -4,16 +4,16 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// ✅ IMPORTANT: paths are literals, NOT string
 const ROUTES = {
   crypto: "/crypto",
   market: "/market",
-  airtime: "/airtime",
-  data: "/data",
-  electricity: "/electricity",
-  betting: "/betting",
-  wallet: "/wallet",
-  profile: "/profile",
+
+  airtime: "./airtime",
+  data: "./data",
+  electricity: "./electricity",
+  betting: "./betting",
+  wallet: "./wallet",
+  profile: "./profile",
 } as const;
 
 type RoutePath = (typeof ROUTES)[keyof typeof ROUTES];
