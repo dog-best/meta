@@ -33,16 +33,16 @@ async function verifyPaystackSignature(rawBody: string, signature: string, secre
 
 serve(async (req) => {
   try {
-    const SUPABASE_URL = env("SUPABASE_URL", "SB_URL");
-    const SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY", "SB_SERVICE_ROLE_KEY");
+    const SB_URL = env("SB_URL", "SUPABASE_URL");
+    const SB_SERVICE_ROLE_KEY = env("SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY");
     const PAYSTACK_SECRET = env("PAYSTACK_SECRET_KEY");
 
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !PAYSTACK_SECRET) {
+    if (!SB_URL || !SB_SERVICE_ROLE_KEY || !PAYSTACK_SECRET) {
       return json(500, {
         ok: false,
         message: "Missing env vars",
-        hasSUPABASE_URL: !!SUPABASE_URL,
-        hasSUPABASE_SERVICE_ROLE_KEY: !!SUPABASE_SERVICE_ROLE_KEY,
+        hasSB_URL: !!SB_URL,
+        hasSB_SERVICE_ROLE_KEY: !!SB_SERVICE_ROLE_KEY,
         hasPAYSTACK_SECRET_KEY: !!PAYSTACK_SECRET,
       });
     }
@@ -61,59 +61,88 @@ serve(async (req) => {
 
     if (!event || !data) return json(400, { ok: false, message: "Invalid payload" });
 
-    const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const admin = createClient(SB_URL, SB_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
 
     // ─────────────────────────────────────────────
-    // Wallet funding via bank transfer / DVA
+    // 1) WITHDRAWAL EVENTS
+    // ─────────────────────────────────────────────
+    if (event === "transfer.success" || event === "transfer.failed" || event === "transfer.reversed") {
+      const reference = data?.reference as string | undefined;
+      const transferCode = data?.transfer_code as string | undefined;
+
+      if (!reference) return json(400, { ok: false, message: "Missing transfer reference" });
+
+      if (event === "transfer.success") {
+        const { error } = await admin.rpc("simple_finalize_withdrawal_success", {
+          p_reference: reference,
+          p_transfer_code: transferCode ?? null,
+        });
+        if (error) return json(500, { ok: false, message: error.message });
+        return json(200, { ok: true });
+      }
+
+      // failed or reversed -> refund full debit (amount + fee)
+      const { error: refundErr } = await admin.rpc("simple_refund_withdrawal", {
+        p_reference: reference,
+        p_reason: event,
+      });
+      if (refundErr) return json(500, { ok: false, message: refundErr.message });
+
+      return json(200, { ok: true });
+    }
+
+    // ─────────────────────────────────────────────
+    // 2) DEPOSIT EVENTS (Checkout / DVA later)
     // ─────────────────────────────────────────────
     if (event === "charge.success") {
       const reference = data?.reference as string | undefined;
-      const amount = data?.amount ? Number(data.amount) / 100 : null; // kobo -> NGN
+      const amount = data?.amount ? Number(data.amount) / 100 : null;
 
       if (!reference || !amount || amount <= 0) {
         return json(400, { ok: false, message: "Missing reference/amount" });
       }
 
-      // Identify user by virtual account number (best signal)
-      const authorization = data?.authorization ?? {};
-      const possibleAccountNumber =
-        authorization?.receiver_bank_account_number ||
-        authorization?.account_number ||
-        data?.account_number ||
-        null;
-
       let userId: string | null = null;
 
-      if (possibleAccountNumber) {
-        const { data: va, error: vaErr } = await admin
-          .from("user_virtual_accounts")
-          .select("user_id")
-          .eq("account_number", String(possibleAccountNumber))
-          .eq("active", true)
-          .maybeSingle();
+      // A) Best: metadata.user_id (Paystack checkout deposits)
+      const metaUserId = data?.metadata?.user_id;
+      if (metaUserId) userId = String(metaUserId);
 
-        if (vaErr) console.error("paystack-webhook VA lookup error", vaErr);
-        userId = va?.user_id ?? null;
+      // B) DVA path (future)
+      if (!userId) {
+        const authorization = data?.authorization ?? {};
+        const possibleAccountNumber =
+          authorization?.receiver_bank_account_number ||
+          authorization?.account_number ||
+          data?.account_number ||
+          null;
+
+        if (possibleAccountNumber) {
+          const { data: va } = await admin
+            .from("user_virtual_accounts")
+            .select("user_id")
+            .eq("account_number", String(possibleAccountNumber))
+            .eq("active", true)
+            .maybeSingle();
+
+          userId = va?.user_id ?? null;
+        }
       }
 
-      // Fallback: match by email
+      // C) Fallback: email
       if (!userId) {
         const email = data?.customer?.email as string | undefined;
         if (email) {
-          const { data: profile, error: profErr } = await admin
-            .from("profiles")
-            .select("id")
-            .eq("email", email)
-            .maybeSingle();
-
-          if (profErr) console.error("paystack-webhook profile lookup error", profErr);
+          const { data: profile } = await admin.from("profiles").select("id").eq("email", email).maybeSingle();
           userId = profile?.id ?? null;
         }
       }
 
       if (!userId) return json(404, { ok: false, message: "User not found for this payment" });
 
-      // Credit simplified wallet (idempotent inside RPC)
+      // credit simplified wallet (idempotent inside RPC)
       const { error: creditErr } = await admin.rpc("simple_credit_from_paystack", {
         p_user_id: userId,
         p_amount: amount,
@@ -126,10 +155,10 @@ serve(async (req) => {
       return json(200, { ok: true });
     }
 
-    // Ignore other Paystack events for now (we're doing deposits first)
     return json(200, { ok: true, ignored: true, event });
   } catch (err) {
     console.error("paystack-webhook error:", err);
     return json(500, { ok: false, message: "Server error" });
   }
 });
+

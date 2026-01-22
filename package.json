@@ -63,6 +63,7 @@
     "yup": "^1.7.1"
   },
   "devDependencies": {
+    "@expo/config-plugins": "^54.0.4",
     "@types/node": "^24.10.1",
     "@types/react": "^19.1.0",
     "@types/react-native": "^0.72.8",
