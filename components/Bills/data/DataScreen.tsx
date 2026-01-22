@@ -1,4 +1,4 @@
-import ConfirmPurchaseModal from "@/components/common/ConfirmPurchaseModal";
+import ConfirmPurchaseModal from "@/components/common/confirmpurchase";
 import { useMakePurchase } from "@/hooks/Purchase/useMakePurchase";
 import { useProviders } from "@/hooks/Purchase/useProviders";
 import { useServiceProducts } from "@/hooks/Purchase/useServiceProducts";

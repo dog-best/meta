@@ -1,4 +1,4 @@
-import ConfirmPurchaseModal from "@/components/common/ConfirmPurchaseModal";
+import ConfirmPurchaseModal from "@/components/common/confirmpurchase";
 import { useCrypto } from "@/services/crypto/useCrypto";
 import React, { useMemo, useState } from "react";
 import {

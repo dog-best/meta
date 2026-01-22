@@ -19,7 +19,11 @@ function env(name: string) {
 }
 
 async function safeJson(res: Response) {
-  try { return await res.json(); } catch { return null; }
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 async function getUserFromJwt(sbUrl: string, anonKey: string, jwt: string) {
@@ -56,19 +60,41 @@ serve(async (req) => {
   const body = await req.json().catch(() => ({}));
   const amount = Number(body?.amount ?? 0);
   const account_number = String(body?.account_number ?? "");
-  const bank_code = String(body?.bank_code ?? ""); // Paystack uses bank code
+  const bank_code = String(body?.bank_code ?? "");
   const account_name = String(body?.account_name ?? "");
+  const clientReference = body?.reference ? String(body.reference) : null;
 
-  if (!amount || amount <= 0) return json(400, { success: false, message: "Invalid amount" });
+  if (!Number.isFinite(amount) || amount <= 0) return json(400, { success: false, message: "Invalid amount" });
   if (!account_number || account_number.length < 8) return json(400, { success: false, message: "Invalid account_number" });
   if (!bank_code) return json(400, { success: false, message: "Missing bank_code" });
 
-  const admin = createClient(SB_URL, SB_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const admin = createClient(SB_URL, SB_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
-  // Create a unique reference for idempotency (Paystack requires unique references)
-  const reference = `WD-${user.id}-${crypto.randomUUID()}`;
+  // Idempotency key: allow client-provided reference, else generate
+  const reference = clientReference || `WD-${user.id}-${crypto.randomUUID()}`;
 
-  // 1) Create transfer recipient
+  // If we already created this withdrawal, return it (idempotency)
+  const existing = await admin
+    .from("withdrawals_simple")
+    .select("id,status,paystack_reference,paystack_transfer_code")
+    .eq("paystack_reference", reference)
+    .maybeSingle();
+
+  if (existing.data) {
+    return json(200, {
+      success: true,
+      reference,
+      withdrawal_id: existing.data.id,
+      status: existing.data.status,
+      paystack_transfer_code: existing.data.paystack_transfer_code ?? null,
+      fee_policy: "flat_20",
+      idempotent: true,
+    });
+  }
+
+  // 1) Create transfer recipient (no money movement yet)
   const recipRes = await fetch("https://api.paystack.co/transferrecipient", {
     method: "POST",
     headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, "Content-Type": "application/json" },
@@ -83,18 +109,39 @@ serve(async (req) => {
 
   const recipJson = await safeJson(recipRes);
   if (!recipRes.ok || !recipJson?.status) {
-    return json(502, { success: false, message: "Paystack recipient create failed", status: recipRes.status, raw: recipJson });
+    return json(502, {
+      success: false,
+      message: "Paystack recipient create failed",
+      status: recipRes.status,
+      raw: recipJson,
+    });
   }
 
   const recipientCode = recipJson.data.recipient_code as string;
+  const bankName = recipJson?.data?.details?.bank_name ?? null;
 
-  // 2) Initiate transfer
+  // 2) Debit wallet + create withdrawal record FIRST (locks funds)
+  const { data: withdrawalId, error: wdErr } = await admin.rpc("simple_create_withdrawal", {
+    p_user_id: user.id,
+    p_amount: amount,
+    p_bank_name: bankName,
+    p_account_number: account_number,
+    p_account_name: account_name || null,
+    p_reference: reference,
+    p_meta: { recipient: recipJson?.data ?? {} },
+  });
+
+  if (wdErr) {
+    return json(400, { success: false, message: wdErr.message });
+  }
+
+  // 3) Initiate transfer SECOND (now funds are locked)
   const transferRes = await fetch("https://api.paystack.co/transfer", {
     method: "POST",
     headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       source: "balance",
-      amount: Math.round(amount * 100), // NGN -> kobo
+      amount: Math.round(amount * 100),
       recipient: recipientCode,
       reason: "Withdrawal",
       reference,
@@ -104,32 +151,34 @@ serve(async (req) => {
 
   const transferJson = await safeJson(transferRes);
   if (!transferRes.ok || !transferJson?.status) {
-    return json(502, { success: false, message: "Paystack transfer init failed", status: transferRes.status, raw: transferJson });
+    // If transfer init fails, refund immediately (amount+fee) via SQL refund rpc
+    await admin.rpc("simple_refund_withdrawal", { p_reference: reference, p_reason: "transfer_init_failed" });
+    return json(502, {
+      success: false,
+      message: "Paystack transfer init failed (withdrawal refunded)",
+      status: transferRes.status,
+      raw: transferJson,
+    });
   }
 
-  // 3) Debit wallet + create withdrawal record (fee is computed in SQL)
-  const { data: withdrawalId, error: wdErr } = await admin.rpc("simple_create_withdrawal", {
-    p_user_id: user.id,
-    p_amount: amount,
-    p_bank_name: transferJson?.data?.recipient?.details?.bank_name ?? null,
-    p_account_number: account_number,
-    p_account_name: account_name || null,
-    p_reference: reference,
-    p_meta: { paystack_transfer: transferJson?.data ?? {} },
-  });
+  const transferCode = transferJson?.data?.transfer_code ?? null;
 
-  if (wdErr) {
-    // If wallet debit fails, we should tell client; Paystack transfer may still be pending,
-    // but webhook refund will handle if needed once we add safeguards.
-    return json(400, { success: false, message: wdErr.message });
-  }
+  // Store transfer code on withdrawal record (optional but useful)
+  await admin
+    .from("withdrawals_simple")
+    .update({
+      paystack_transfer_code: transferCode,
+      meta: { ...(transferJson?.data ? { paystack_transfer: transferJson.data } : {}) },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", withdrawalId as string);
 
   return json(200, {
     success: true,
     reference,
     withdrawal_id: withdrawalId,
     paystack: {
-      transfer_code: transferJson?.data?.transfer_code ?? null,
+      transfer_code: transferCode,
       status: transferJson?.data?.status ?? null,
     },
     fee_policy: "flat_20",

@@ -1,4 +1,4 @@
-import ConfirmPurchaseModal from "@/components/common/ConfirmPurchaseModal";
+import ConfirmPurchaseModal from "@/components/common/confirmpurchase";
 import { useMakePurchase } from "@/hooks/Purchase/useMakePurchase";
 import { supabase } from "@/supabase/client";
 import React, { useMemo, useState } from "react";
