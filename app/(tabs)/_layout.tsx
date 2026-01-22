@@ -36,9 +36,22 @@ export default function TabLayout() {
 
         tabBarBackground: () => {
           if (Platform.OS === "ios" && BlurViewComp) {
-            return <BlurViewComp intensity={70} tint="dark" style={StyleSheet.absoluteFill} />;
+            return (
+              <BlurViewComp
+                intensity={70}
+                tint="dark"
+                style={StyleSheet.absoluteFill}
+              />
+            );
           }
-          return <View style={[StyleSheet.absoluteFill, { backgroundColor: "#050814" }]} />;
+          return (
+            <View
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: "#050814" },
+              ]}
+            />
+          );
         },
 
         tabBarStyle: [
@@ -46,12 +59,14 @@ export default function TabLayout() {
           {
             height: TABBAR_HEIGHT + bottomPad,
             paddingBottom: bottomPad,
-            backgroundColor: Platform.OS === "android" ? "#050814" : "transparent",
+            backgroundColor:
+              Platform.OS === "android" ? "#050814" : "transparent",
           },
         ],
         tabBarLabelStyle: styles.label,
       }}
     >
+      {/* ✅ Visible tabs */}
       <Tabs.Screen
         name="index"
         options={{
@@ -93,6 +108,12 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* 🚫 Hidden routes (still navigable via router.push) */}
+      <Tabs.Screen name="electricity" options={{ href: null }} />
+      <Tabs.Screen name="airtime" options={{ href: null }} />
+      <Tabs.Screen name="data" options={{ href: null }} />
+      <Tabs.Screen name="betting" options={{ href: null }} />
     </Tabs>
   );
 }
