@@ -1,14 +1,15 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo } from "react";
 import {
-  FlatList,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    FlatList,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -28,17 +29,18 @@ const ROUTES = {
 
 type RoutePath = (typeof ROUTES)[keyof typeof ROUTES];
 
-type Tile = {
-  key: string;
-  title: string;
-  subtitle?: string;
-  iconLib: "ion" | "mci";
-  iconName: any;
-  to: RoutePath;
-  variant?: "big" | "normal";
-};
-
 const PURPLE = "#7C3AED";
+const BG0 = "#05040B";
+const BG1 = "#0A0620";
+
+function go(to: RoutePath) {
+  router.push(to);
+}
+
+// Navigate wallet but open a specific section in that screen
+function goWallet(action: "fund" | "send" | "withdraw") {
+  router.push({ pathname: "./wallet", params: { action } });
+}
 
 function TxBadge({ type }: { type: string }) {
   const map: Record<string, { label: string; bg: string; fg: string }> = {
@@ -63,38 +65,35 @@ export default function Dashboard() {
   const { user, loading: authLoading } = useAuth();
   const { balance, tx, loading: walletLoading, error, reload } = useWalletSimple();
 
-  // Auth gate
+  // Auth gate (real)
   useEffect(() => {
     if (!authLoading && !user) {
       router.replace("/(auth)/login");
     }
   }, [authLoading, user]);
 
-  const go = (to: RoutePath) => router.push(to);
-
   const refreshing = useMemo(() => authLoading || walletLoading, [authLoading, walletLoading]);
-
-  const exploreTiles: Tile[] = [
-    { key: "crypto", title: "Crypto", subtitle: "Receive • Convert", iconLib: "mci", iconName: "bitcoin", to: ROUTES.crypto, variant: "big" },
-    { key: "market", title: "Marketplace", subtitle: "Buy • Sell • Escrow", iconLib: "mci", iconName: "storefront-outline", to: ROUTES.market, variant: "big" },
-  ];
-
-  const utilityTiles: Tile[] = [
-    { key: "airtime", title: "Airtime", iconLib: "ion", iconName: "call", to: ROUTES.airtime },
-    { key: "data", title: "Data", iconLib: "mci", iconName: "access-point-network", to: ROUTES.data },
-    { key: "electricity", title: "Electricity", iconLib: "ion", iconName: "flash", to: ROUTES.electricity },
-    { key: "betting", title: "Betting", iconLib: "mci", iconName: "soccer", to: ROUTES.betting },
-  ];
-
   const txPreview = useMemo(() => (tx ?? []).slice(0, 6), [tx]);
 
+  const utilities = [
+    { key: "airtime", title: "Airtime", icon: <Ionicons name="call" size={20} color="#fff" />, to: ROUTES.airtime },
+    { key: "data", title: "Data", icon: <MaterialCommunityIcons name="access-point-network" size={20} color="#fff" />, to: ROUTES.data },
+    { key: "electricity", title: "Electricity", icon: <Ionicons name="flash" size={20} color="#fff" />, to: ROUTES.electricity },
+    { key: "betting", title: "Betting", icon: <MaterialCommunityIcons name="soccer" size={20} color="#fff" />, to: ROUTES.betting },
+  ];
+
   return (
-    <View style={[styles.container, { paddingTop: Math.max(insets.top, 14) }]}>
+    <LinearGradient
+      colors={[BG1, BG0]}
+      start={{ x: 0.15, y: 0.0 }}
+      end={{ x: 0.9, y: 1.0 }}
+      style={[styles.screen, { paddingTop: Math.max(insets.top, 14) }]}
+    >
       <ScrollView
         contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={reload} tintColor="#fff" />}
       >
-        {/* Top header */}
+        {/* Header */}
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Dashboard</Text>
@@ -108,7 +107,7 @@ export default function Dashboard() {
           </Pressable>
         </View>
 
-        {/* Wallet summary */}
+        {/* Wallet Card */}
         <View style={styles.walletCard}>
           <View style={{ flex: 1 }}>
             <Text style={styles.walletLabel}>Wallet Balance</Text>
@@ -116,89 +115,73 @@ export default function Dashboard() {
             {!!error && <Text style={styles.err}>{error}</Text>}
           </View>
 
-          <Pressable style={styles.openWalletBtn} onPress={() => go(ROUTES.wallet)}>
+          <Pressable style={styles.pillBtn} onPress={() => go(ROUTES.wallet)}>
             <Ionicons name="wallet-outline" size={16} color="#fff" />
-            <Text style={styles.openWalletText}>Wallet</Text>
+            <Text style={styles.pillText}>Wallet</Text>
           </Pressable>
         </View>
 
-        {/* Fund / Send / Withdraw */}
-        <View style={styles.actionRow}>
-          <Pressable style={[styles.actionBtn, styles.actionPrimary]} onPress={() => go(ROUTES.wallet)}>
+        {/* Actions */}
+        <View style={styles.actions}>
+          <Pressable style={[styles.actionBtn, styles.primaryBtn]} onPress={() => goWallet("fund")}>
             <MaterialCommunityIcons name="cash-plus" size={18} color="#fff" />
-            <Text style={styles.actionTextPrimary}>Fund</Text>
+            <Text style={styles.primaryText}>Fund</Text>
           </Pressable>
 
-          <Pressable style={styles.actionBtn} onPress={() => go(ROUTES.wallet)}>
+          <Pressable style={styles.actionBtn} onPress={() => goWallet("send")}>
             <Ionicons name="send-outline" size={18} color="#fff" />
             <Text style={styles.actionText}>Send</Text>
           </Pressable>
 
-          <Pressable style={styles.actionBtn} onPress={() => go(ROUTES.wallet)}>
+          <Pressable style={styles.actionBtn} onPress={() => goWallet("withdraw")}>
             <MaterialCommunityIcons name="bank-transfer-out" size={18} color="#fff" />
             <Text style={styles.actionText}>Withdraw</Text>
           </Pressable>
         </View>
 
-        {/* Explore */}
-        <View style={styles.sectionHeader}>
+        {/* Big Explore (bigger icons) */}
+        <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Explore</Text>
           <Text style={styles.sectionHint}>Crypto & marketplace</Text>
         </View>
 
-        <View style={styles.gridBig}>
-          {exploreTiles.map((t) => (
-            <Pressable key={t.key} onPress={() => go(t.to)} style={({ pressed }) => [styles.bigCard, pressed && styles.pressed]}>
-              <View style={styles.bigIconWrap}>
-                {t.iconLib === "ion" ? (
-                  <Ionicons name={t.iconName} size={22} color="#fff" />
-                ) : (
-                  <MaterialCommunityIcons name={t.iconName} size={22} color="#fff" />
-                )}
-              </View>
-              <Text style={styles.cardTitle}>{t.title}</Text>
-              {!!t.subtitle && <Text style={styles.cardSub}>{t.subtitle}</Text>}
-            </Pressable>
-          ))}
+        <View style={styles.bigRow}>
+          <Pressable style={styles.bigCard} onPress={() => go(ROUTES.crypto)}>
+            <View style={styles.bigIconPurple}>
+              <MaterialCommunityIcons name="bitcoin" size={34} color="#fff" />
+            </View>
+            <Text style={styles.bigTitle}>Crypto</Text>
+            <Text style={styles.bigSub}>Receive • Convert</Text>
+          </Pressable>
+
+          <Pressable style={styles.bigCard} onPress={() => go(ROUTES.market)}>
+            <View style={styles.bigIconPurple}>
+              <MaterialCommunityIcons name="storefront-outline" size={34} color="#fff" />
+            </View>
+            <Text style={styles.bigTitle}>Marketplace</Text>
+            <Text style={styles.bigSub}>Buy • Sell • Escrow</Text>
+          </Pressable>
         </View>
 
-        {/* Utilities */}
-        <View style={styles.sectionHeader}>
+        {/* Utilities (advanced wrap) */}
+        <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Utilities</Text>
-          <Text style={styles.sectionHint}>Airtime, data, electricity, betting</Text>
+          <Text style={styles.sectionHint}>Bills & payments</Text>
         </View>
 
-        <View style={styles.gridUtilities}>
-          {utilityTiles.map((t) => (
-            <Pressable key={t.key} onPress={() => go(t.to)} style={({ pressed }) => [styles.utilityCard, pressed && styles.pressed]}>
-              <View style={styles.utilIconWrap}>
-                {t.iconLib === "ion" ? (
-                  <Ionicons name={t.iconName} size={22} color="#fff" />
-                ) : (
-                  <MaterialCommunityIcons name={t.iconName} size={22} color="#fff" />
-                )}
-              </View>
-              <Text style={styles.utilTitle}>{t.title}</Text>
+        <View style={styles.utilWrap}>
+          {utilities.map((u) => (
+            <Pressable key={u.key} style={styles.utilCard} onPress={() => go(u.to)}>
+              <View style={styles.utilIcon}>{u.icon}</View>
+              <Text style={styles.utilTitle}>{u.title}</Text>
+              <Text style={styles.utilSub}>Fast checkout</Text>
             </Pressable>
           ))}
         </View>
 
-        {/* Quick routes */}
-        <View style={styles.quickRow}>
-          <Pressable style={styles.quickBtn} onPress={() => go(ROUTES.wallet)}>
-            <Ionicons name="wallet-outline" size={18} color="#fff" />
-            <Text style={styles.quickText}>Wallet</Text>
-          </Pressable>
-
-          <Pressable style={styles.quickBtn} onPress={() => go(ROUTES.profile)}>
-            <Ionicons name="person-circle-outline" size={18} color="#fff" />
-            <Text style={styles.quickText}>Profile</Text>
-          </Pressable>
-        </View>
-
-        {/* Recent transactions */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
+        {/* Recent Transactions */}
+        <View style={styles.sectionRowBetween}>
+          <Text style={styles.sectionTitle}>History</Text>
           <Pressable onPress={() => go(ROUTES.wallet)}>
             <Text style={styles.link}>View all</Text>
           </Pressable>
@@ -224,17 +207,16 @@ export default function Dashboard() {
           />
         </View>
       </ScrollView>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#05050B", paddingHorizontal: 16 },
+  screen: { flex: 1, paddingHorizontal: 16 },
 
-  header: { paddingBottom: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  title: { color: "#FFFFFF", fontSize: 24, fontWeight: "900" },
+  header: { paddingBottom: 14, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  title: { color: "#fff", fontSize: 24, fontWeight: "900" },
   subtitle: { color: "rgba(255,255,255,0.65)", marginTop: 6, fontSize: 13 },
-
   iconBtn: {
     width: 44,
     height: 44,
@@ -250,17 +232,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    borderRadius: 20,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(124,58,237,0.35)",
-    backgroundColor: "rgba(124,58,237,0.10)",
+    borderColor: "rgba(124,58,237,0.40)",
+    backgroundColor: "rgba(124,58,237,0.12)",
   },
-  walletLabel: { color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 12 },
-  walletBalance: { color: "#FFFFFF", fontWeight: "900", fontSize: 28, marginTop: 8 },
+  walletLabel: { color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 },
+  walletBalance: { color: "#fff", fontWeight: "900", fontSize: 30, marginTop: 8 },
   err: { color: "#FCA5A5", marginTop: 8, fontSize: 12 },
 
-  openWalletBtn: {
+  pillBtn: {
     height: 46,
     paddingHorizontal: 14,
     borderRadius: 16,
@@ -268,122 +250,93 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: PURPLE,
     flexDirection: "row",
-    alignItems: "center",
     gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  openWalletText: { color: "#FFFFFF", fontWeight: "900" },
+  pillText: { color: "#fff", fontWeight: "900" },
 
-  actionRow: { marginTop: 12, flexDirection: "row", gap: 10 },
+  actions: { marginTop: 12, flexDirection: "row", gap: 10 },
   actionBtn: {
     flex: 1,
-    height: 54,
+    height: 56,
     borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
-    alignItems: "center",
-    justifyContent: "center",
     flexDirection: "row",
     gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  actionPrimary: { backgroundColor: PURPLE, borderColor: PURPLE },
-  actionText: { color: "#FFFFFF", fontWeight: "900" },
-  actionTextPrimary: { color: "#FFFFFF", fontWeight: "900" },
+  primaryBtn: { backgroundColor: PURPLE, borderColor: PURPLE },
+  actionText: { color: "#fff", fontWeight: "900" },
+  primaryText: { color: "#fff", fontWeight: "900" },
 
-  sectionHeader: { marginTop: 18, marginBottom: 10 },
-  sectionHeaderRow: { marginTop: 18, marginBottom: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  sectionTitle: { color: "#FFFFFF", fontWeight: "900", fontSize: 16 },
+  sectionRow: { marginTop: 18, marginBottom: 10 },
+  sectionRowBetween: { marginTop: 18, marginBottom: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  sectionTitle: { color: "#fff", fontWeight: "900", fontSize: 16 },
   sectionHint: { color: "rgba(255,255,255,0.55)", marginTop: 4, fontSize: 12 },
+  link: { color: "#C4B5FD", fontWeight: "900" },
 
-  gridBig: { flexDirection: "row", gap: 12 },
+  bigRow: { flexDirection: "row", gap: 12 },
   bigCard: {
     flex: 1,
-    minHeight: 150,
-    borderRadius: 20,
+    minHeight: 170,
+    borderRadius: 22,
     padding: 16,
+    backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.04)",
   },
-  bigIconWrap: {
+  bigIconPurple: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: "rgba(124,58,237,0.25)",
+    borderWidth: 1,
+    borderColor: "rgba(124,58,237,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bigTitle: { marginTop: 12, color: "#fff", fontWeight: "900", fontSize: 15 },
+  bigSub: { marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 },
+
+  utilWrap: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  utilCard: {
+    width: "48%",
+    minHeight: 128,
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  utilIcon: {
     width: 46,
     height: 46,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(124,58,237,0.18)",
-    borderWidth: 1,
-    borderColor: "rgba(124,58,237,0.28)",
-  },
-  cardTitle: { marginTop: 12, color: "#FFFFFF", fontWeight: "900", fontSize: 14 },
-  cardSub: { marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 },
-
-  gridUtilities: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  utilityCard: {
-    width: "48%",
-    minHeight: 120,
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.04)",
-  },
-  utilIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
+    borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
-  },
-  utilTitle: { marginTop: 12, color: "#FFFFFF", fontWeight: "900", fontSize: 14 },
-
-  quickRow: { marginTop: 14, flexDirection: "row", gap: 12 },
-  quickBtn: {
-    flex: 1,
-    height: 50,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
     alignItems: "center",
     justifyContent: "center",
-    flexDirection: "row",
-    gap: 8,
   },
-  quickText: { color: "#FFFFFF", fontWeight: "900" },
-
-  link: { color: "#C4B5FD", fontWeight: "900" },
+  utilTitle: { marginTop: 12, color: "#fff", fontWeight: "900", fontSize: 14 },
+  utilSub: { marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 },
 
   txCard: {
-    borderRadius: 20,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: "rgba(255,255,255,0.05)",
     overflow: "hidden",
   },
-  txRow: {
-    flexDirection: "row",
-    gap: 12,
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.06)",
-  },
-  txAmount: { color: "#FFFFFF", fontWeight: "900" },
+  txRow: { flexDirection: "row", gap: 12, padding: 14, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)" },
+  txAmount: { color: "#fff", fontWeight: "900" },
   txMeta: { color: "rgba(255,255,255,0.6)", fontSize: 12, marginTop: 4 },
-
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignSelf: "flex-start",
-  },
-  badgeText: { fontWeight: "900", fontSize: 12 },
-
   empty: { color: "rgba(255,255,255,0.65)", padding: 14 },
 
-  pressed: { transform: [{ scale: 0.985 }], opacity: 0.95 },
+  badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, alignSelf: "flex-start" },
+  badgeText: { fontWeight: "900", fontSize: 12 },
 });

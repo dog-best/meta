@@ -1,26 +1,27 @@
 // app/auth/login.tsx
 
+import { Ionicons } from "@expo/vector-icons";
+import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  View,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  StyleSheet,
   Text,
   TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Pressable,
   TouchableOpacity,
-  Image,
+  View,
 } from "react-native";
-import { Link, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import Animated, {
-  FadeInUp,
   FadeInDown,
+  FadeInUp,
   useAnimatedStyle,
   withTiming,
 } from "react-native-reanimated";
 
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
+
 
 /* ---------- Router Wrapper ---------- */
 export default function Login() {

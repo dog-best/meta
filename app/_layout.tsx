@@ -1,3 +1,4 @@
+import { supabase } from "@/services/supabase";
 import { Redirect, Slot, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -11,7 +12,8 @@ import {
 } from "react-native";
 import "../global.css";
 import { useAuth } from "../hooks/authentication/useAuth";
-import { supabase } from "../supabase/client";
+
+
 
 import * as Application from "expo-application";
 import * as Linking from "expo-linking";
