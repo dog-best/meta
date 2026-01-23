@@ -8,7 +8,6 @@
     "scheme": "bestcitypay",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "android": {
       "package": "com.bestcity.pay",
       "edgeToEdgeEnabled": true,
@@ -24,20 +23,16 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       }
     },
-
     "ios": {
       "bundleIdentifier": "com.bestcity.pay",
       "supportsTablet": false
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       "expo-router",
-
       [
         "expo-splash-screen",
         {
@@ -50,18 +45,15 @@
           }
         }
       ],
-
       "expo-font",
       "expo-web-browser",
       "expo-build-properties",
-
-      "./plugins/withAdmobAppId.js"
+      "./plugins/withAdmobAppId.js",
+      "expo-secure-store"
     ],
-
     "experiments": {
       "typedRoutes": true
     },
-
     "extra": {
       "router": {},
       "reactNativeGoogleMobileAdsAppId": "ca-app-pub-4533962949749202~8711232097",
@@ -69,8 +61,6 @@
         "projectId": "46a9395b-aee9-49de-bf0f-c143f762acd0"
       }
     },
-
     "owner": "bcnath"
   }
 }
-
