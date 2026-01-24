@@ -5,8 +5,11 @@
     "source.sortMembers": "explicit"
   },
 
-  "deno.enable": false,
-  "deno.unstable": [],
-  "deno.enablePaths": ["./supabase/functions"],
-  "deno.lint": true
+  "deno.enable": true,
+  "deno.lint": true,
+
+  "deno.enablePaths": ["supabase/functions"],
+  "deno.disablePaths": ["node_modules"],
+
+  "deno.unstable": []
 }

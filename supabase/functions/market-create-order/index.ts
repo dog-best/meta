@@ -1,84 +1,74 @@
-import { serve } from "https://deno.land/std/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
+import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return methodNotAllowed();
 
-serve(async (req) => {
-  if (req.method !== "POST") return json(405, { success: false, message: "Method not allowed" });
+  const supabase = supabaseUserClient(req);
+  const admin = supabaseAdminClient();
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-  );
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  if (ue || !u.user) return unauth();
 
-  const admin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const body = await req.json().catch(() => ({}));
+  const listing_id = String(body.listing_id ?? "");
+  const quantity = body.quantity === undefined ? 1 : Number(body.quantity);
+  const delivery_address = body.delivery_address ?? {};
 
-  try {
-    const { data: auth, error: authError } = await supabase.auth.getUser();
-    const user = auth?.user;
-    if (!user || authError) return json(401, { success: false, message: "Unauthorized" });
+  if (!listing_id) return bad("listing_id required");
+  if (!Number.isInteger(quantity) || quantity < 1) return bad("quantity must be >= 1");
 
-    const { listing_id, payment_method } = await req.json();
-    const listingId = String(listing_id ?? "").trim();
-    const method = (payment_method === "crypto" ? "crypto" : "wallet") as "wallet" | "crypto";
+  const { data: listing, error: le } = await admin
+    .from("market_listings")
+    .select("id,seller_id,price_amount,currency,is_active,stock_qty")
+    .eq("id", listing_id)
+    .maybeSingle();
 
-    if (!listingId) return json(400, { success: false, message: "Listing is required" });
+  if (le || !listing || !listing.is_active) return bad("Listing not found or inactive");
+  if (listing.seller_id === u.user.id) return bad("You cannot buy your own listing");
 
-    // Load listing
-    const { data: listing, error: lErr } = await admin
-      .from("market_listings")
-      .select("id,seller_id,price_ngn,status")
-      .eq("id", listingId)
-      .maybeSingle();
-
-    if (lErr || !listing || listing.status !== "active") {
-      return json(404, { success: false, message: "Listing not found" });
-    }
-    if (listing.seller_id === user.id) {
-      return json(400, { success: false, message: "You cannot buy your own listing" });
-    }
-
-    // NOTE: For production settlement, you should debit buyer wallet here (ledger_entries) or lock funds.
-    // This MVP flow creates an escrow record and marks order as in_escrow.
-
-    const { data: order, error: oErr } = await admin
-      .from("market_orders")
-      .insert({
-        buyer_id: user.id,
-        seller_id: listing.seller_id,
-        listing_id: listing.id,
-        amount_ngn: listing.price_ngn,
-        status: "in_escrow",
-        payment_method: method,
-      })
-      .select("id")
-      .single();
-
-    if (oErr || !order) return json(500, { success: false, message: "Could not create order" });
-
-    const { error: eErr } = await admin
-      .from("market_escrows")
-      .insert({
-        order_id: order.id,
-        buyer_id: user.id,
-        seller_id: listing.seller_id,
-        amount_ngn: listing.price_ngn,
-        status: "held",
-      });
-
-    if (eErr) return json(500, { success: false, message: "Could not start escrow" });
-
-    return json(200, { success: true, order_id: order.id, status: "in_escrow" });
-  } catch {
-    return json(500, { success: false, message: "We couldn’t complete your request right now. Please try again." });
+  if (listing.stock_qty !== null && listing.stock_qty < quantity) {
+    return bad("Not enough stock");
   }
+
+  const unit_price = Number(listing.price_amount);
+  const amount = Number((unit_price * quantity).toFixed(2));
+
+  const { data: order, error } = await admin
+    .from("market_orders")
+    .insert({
+      buyer_id: u.user.id,
+      seller_id: listing.seller_id,
+      listing_id: listing.id,
+      quantity,
+      unit_price,
+      amount,
+      currency: listing.currency,
+      status: "CREATED",
+      delivery_address,
+      note: body.note ? String(body.note) : null,
+    })
+    .select("*")
+    .single();
+
+  if (error) return bad(error.message);
+
+  // Decrement stock (optional v1 behavior)
+  if (listing.stock_qty !== null) {
+    await admin
+      .from("market_listings")
+      .update({ stock_qty: listing.stock_qty - quantity })
+      .eq("id", listing.id);
+  }
+
+  await admin.from("market_audit_logs").insert({
+    actor_id: u.user.id,
+    actor_type: "user",
+    action: "ORDER_CREATED",
+    entity_type: "market_orders",
+    entity_id: order.id,
+    payload: { listing_id, quantity, amount },
+  });
+
+  return ok({ order });
 });

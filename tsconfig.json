@@ -26,6 +26,7 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    "types/deno-globals.d.ts",
     ".expo/types/**/*.ts",
     "expo-env.d.ts",
     "utils/notifications.ts",

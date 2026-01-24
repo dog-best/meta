@@ -1,61 +1,81 @@
-import { serve } from "https://deno.land/std/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { supabaseUserClient, supabaseAdminClient } from "../_shared/market/supabase.ts";
+import { ok, bad, unauth, methodNotAllowed } from "../_shared/market/http.ts";
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+type ListingCategory = "product" | "service";
+type DeliveryType = "physical" | "digital" | "in_person";
+type Currency = "NGN" | "USDC";
+
+function assertCategoryRules(category: ListingCategory, delivery_type: DeliveryType) {
+  if (category === "product" && delivery_type !== "physical") {
+    throw new Error("product listings must have delivery_type=physical");
+  }
+  if (category === "service" && !["digital", "in_person"].includes(delivery_type)) {
+    throw new Error("service listings must have delivery_type=digital or in_person");
+  }
 }
 
-serve(async (req) => {
-  if (req.method !== "POST") return json(405, { success: false, message: "Method not allowed" });
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return methodNotAllowed();
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: req.headers.get("Authorization")! } } }
-  );
+  const supabase = supabaseUserClient(req);
+  const admin = supabaseAdminClient();
 
-  const admin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  if (ue || !u.user) return unauth();
+
+  const body = await req.json().catch(() => ({}));
+
+  const category = String(body.category) as ListingCategory;
+  const delivery_type = String(body.delivery_type) as DeliveryType;
+  const currency = (body.currency ? String(body.currency) : "NGN") as Currency;
+
+  if (!["product", "service"].includes(category)) return bad("Invalid category");
+  if (!["physical", "digital", "in_person"].includes(delivery_type)) return bad("Invalid delivery_type");
+  if (!["NGN", "USDC"].includes(currency)) return bad("Invalid currency");
 
   try {
-    const { data: auth, error: authError } = await supabase.auth.getUser();
-    const user = auth?.user;
-    if (!user || authError) return json(401, { success: false, message: "Unauthorized" });
-
-    const { title, description, price_ngn, image_url } = await req.json();
-
-    const t = String(title ?? "").trim();
-    const d = description ? String(description).trim() : null;
-    const price = Number(price_ngn);
-
-    if (t.length < 3) return json(400, { success: false, message: "Title is required" });
-    if (!Number.isFinite(price) || price <= 0) return json(400, { success: false, message: "Invalid price" });
-
-    const { data, error } = await admin
-      .from("market_listings")
-      .insert({
-        seller_id: user.id,
-        title: t,
-        description: d,
-        price_ngn: price,
-        currency: "NGN",
-        image_url: image_url ? String(image_url) : null,
-        status: "active",
-      })
-      .select("id")
-      .single();
-
-    if (error) {
-      return json(500, { success: false, message: "Could not create listing" });
-    }
-
-    return json(200, { success: true, listing_id: data.id });
-  } catch {
-    return json(500, { success: false, message: "We couldn’t complete your request right now. Please try again." });
+    assertCategoryRules(category, delivery_type);
+  } catch (e) {
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    return bad(errorMessage);
   }
+
+  const price_amount = Number(body.price_amount);
+  if (!Number.isFinite(price_amount) || price_amount <= 0) return bad("price_amount must be > 0");
+
+  const row = {
+    seller_id: u.user.id,
+    category,
+    sub_category: String(body.sub_category ?? "").trim(),
+    title: String(body.title ?? "").trim(),
+    description: body.description ? String(body.description) : null,
+    price_amount,
+    currency,
+    delivery_type,
+    stock_qty: body.stock_qty === null || body.stock_qty === undefined ? null : Number(body.stock_qty),
+    is_active: body.is_active === undefined ? true : !!body.is_active,
+  };
+
+  if (!row.sub_category) return bad("sub_category is required");
+  if (!row.title) return bad("title is required");
+  if (row.stock_qty !== null && (!Number.isInteger(row.stock_qty) || row.stock_qty < 0)) return bad("stock_qty must be null or >= 0");
+
+  const { data: listing, error } = await admin
+    .from("market_listings")
+    .insert(row)
+    .select("*")
+    .single();
+
+  if (error) return bad(error.message);
+
+  await admin.from("market_audit_logs").insert({
+    actor_id: u.user.id,
+    actor_type: "user",
+    action: "LISTING_CREATED",
+    entity_type: "market_listings",
+    entity_id: listing.id,
+    payload: { category, delivery_type, currency },
+  });
+
+  return ok({ listing });
 });
