@@ -7,9 +7,10 @@
 
   "deno.enable": true,
   "deno.lint": true,
+  "deno.unstable": [],
 
   "deno.enablePaths": ["supabase/functions"],
   "deno.disablePaths": ["node_modules"],
 
-  "deno.unstable": []
+  "typescript.tsserver.maxTsServerMemory": 4096
 }
