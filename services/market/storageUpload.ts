@@ -14,7 +14,8 @@ export async function uploadImageToSupabase(params: {
   const { bucket, path, localUri, contentType = "image/jpeg" } = params;
 
   // Read file as base64 then convert to Uint8Array
-  const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: FileSystem.EncodingType.Base64 });
+  const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" as any }
+);
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 
   const { error: uploadErr } = await supabase.storage.from(bucket).upload(path, bytes, {
