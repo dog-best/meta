@@ -1,69 +1,146 @@
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
 
-export type Listing = {
-  id: string;
+export type MarketSellerProfile = {
+  user_id: string;
+  market_username: string | null;
+  display_name: string | null;
+  business_name: string;
+  bio: string | null;
+  phone: string | null;
+  location_text: string | null;
+  logo_path: string | null;
+  banner_path: string | null;
+  offers_remote: boolean;
+  offers_in_person: boolean;
+  is_verified: boolean;
+  payout_tier: "standard" | "fast";
+  active: boolean;
+};
+
+export type CreateListingInput = {
+  seller_id: string;
+  category: "product" | "service";
+  sub_category: string; // you store slug e.g "mens-wear"
+  delivery_type: "physical" | "digital" | "in_person";
   title: string;
   description?: string | null;
-  price_ngn: number;
-  currency: "NGN";
-  image_url?: string | null;
+  price_amount: number;
+  currency: "NGN" | "USDC";
+  stock_qty?: number | null; // products
 };
 
-export type Order = {
-  id: string;
+export type ListingImageInsert = {
   listing_id: string;
-  status: "pending" | "in_escrow" | "delivered" | "released" | "cancelled";
-  amount_ngn: number;
+  storage_path: string;
+  public_url: string | null;
+  sort_order: number;
+  meta?: any;
 };
 
-export async function fetchListings(): Promise<Listing[]> {
+export async function getMySellerProfile() {
+  const { data: auth } = await supabase.auth.getUser();
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const { data, error } = await supabase
+    .from("market_seller_profiles")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data as MarketSellerProfile | null;
+}
+
+export async function upsertSellerProfile(input: Partial<MarketSellerProfile> & { business_name: string }) {
+  const { data: auth } = await supabase.auth.getUser();
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const payload = {
+    user_id: user.id,
+    business_name: input.business_name,
+    market_username: input.market_username ?? null,
+    display_name: input.display_name ?? null,
+    bio: input.bio ?? null,
+    phone: input.phone ?? null,
+    location_text: input.location_text ?? null,
+    address: (input as any).address ?? {},
+    logo_path: input.logo_path ?? null,
+    banner_path: input.banner_path ?? null,
+    offers_remote: input.offers_remote ?? false,
+    offers_in_person: input.offers_in_person ?? false,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("market_seller_profiles")
+    .upsert(payload, { onConflict: "user_id" })
+    .select("*")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as MarketSellerProfile;
+}
+
+export async function createListing(input: CreateListingInput) {
   const { data, error } = await supabase
     .from("market_listings")
-    .select("id,title,description,price_ngn,currency,image_url")
-    .order("created_at", { ascending: false });
+    .insert({
+      seller_id: input.seller_id,
+      category: input.category,
+      sub_category: input.sub_category,
+      title: input.title,
+      description: input.description ?? null,
+      price_amount: input.price_amount,
+      currency: input.currency,
+      delivery_type: input.delivery_type,
+      stock_qty: input.stock_qty ?? null,
+      is_active: true,
+    })
+    .select("*")
+    .single();
 
-  if (error) {
-    // fallback: empty; UI will show placeholder
-    return [];
-  }
-  return (data ?? []) as Listing[];
-}
-
-export async function createListing(payload: {
-  title: string;
-  description?: string;
-  price_ngn: number;
-  image_url?: string;
-}) {
-  const { data, error } = await supabase.functions.invoke("market-create-listing", {
-    body: payload,
-  });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return data;
 }
 
-export async function createOrder(payload: { listing_id: string; payment_method: "wallet" | "crypto" }) {
-  const { data, error } = await supabase.functions.invoke("market-create-order", {
-    body: payload,
-  });
-  if (error) throw error;
-  return data;
+export async function setListingCoverImage(listingId: string, coverImageId: string) {
+  const { error } = await supabase
+    .from("market_listings")
+    .update({ cover_image_id: coverImageId, updated_at: new Date().toISOString() })
+    .eq("id", listingId);
+
+  if (error) throw new Error(error.message);
 }
 
-export async function approveDelivery(order_id: string) {
-  const { data, error } = await supabase.functions.invoke("market-approve-delivery", {
-    body: { order_id },
-  });
-  if (error) throw error;
-  return data;
-}
-
-export async function fetchMyOrders(): Promise<Order[]> {
+export async function insertListingImages(images: ListingImageInsert[]) {
   const { data, error } = await supabase
-    .from("market_orders")
-    .select("id,listing_id,status,amount_ngn")
-    .order("created_at", { ascending: false });
+    .from("market_listing_images")
+    .insert(images)
+    .select("*");
 
-  if (error) return [];
-  return (data ?? []) as Order[];
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function uploadToBucket(params: {
+  bucket: string;
+  path: string;
+  uri: string;
+  contentType: string;
+}) {
+  // fetch file as blob (works in Expo)
+  const res = await fetch(params.uri);
+  const blob = await res.blob();
+
+  const { error } = await supabase.storage.from(params.bucket).upload(params.path, blob, {
+    contentType: params.contentType,
+    upsert: true,
+  });
+
+  if (error) throw new Error(error.message);
+
+  const { data } = supabase.storage.from(params.bucket).getPublicUrl(params.path);
+  return { publicUrl: data.publicUrl, storagePath: params.path };
 }

@@ -1,205 +1,463 @@
-import { uploadImageToSupabase } from "@/services/market/storageUpload";
-import { supabase } from "@/services/supabase";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
+import { supabase } from "@/services/supabase";
+
+const BG0 = "#05040B";
+const BG1 = "#0A0620";
+const PURPLE = "#7C3AED";
+
+const BUCKET_SELLERS = "market-sellers"; // ✅ your bucket name
+
+function cleanUsername(input: string) {
+  // lowercase, trim, replace spaces with underscore, remove invalid chars
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 24);
+}
+
+function isValidUsername(u: string) {
+  // must start with letter/number, allow underscore, 3-24 chars
+  return /^[a-z0-9][a-z0-9_]{2,23}$/.test(u);
+}
+
+async function pickImage() {
+  const res = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    quality: 0.9,
+    allowsEditing: true,
+    aspect: [4, 3],
+  });
+  if (res.canceled) return null;
+  return res.assets[0]; // { uri, width, height, ... }
+}
+
+async function uploadImageToBucket(params: {
+  userId: string;
+  kind: "logo" | "banner";
+  localUri: string;
+}) {
+  const { userId, kind, localUri } = params;
+
+  // fetch file data
+  const fileRes = await fetch(localUri);
+  const blob = await fileRes.blob();
+
+  // infer extension (best effort)
+  const extGuess =
+    (blob.type && blob.type.split("/")[1]) ? blob.type.split("/")[1] : "jpg";
+
+  const fileName = `${kind}_${Date.now()}.${extGuess}`;
+  const path = `${userId}/${kind}/${fileName}`;
+
+  const { error: upErr } = await supabase.storage
+    .from(BUCKET_SELLERS)
+    .upload(path, blob, {
+      contentType: blob.type || "image/jpeg",
+      upsert: true,
+    });
+
+  if (upErr) throw new Error(upErr.message);
+
+  return path;
+}
 
 export default function CreateMarketProfile() {
-  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const [username, setUsername] = useState("");
+  const [marketUsername, setMarketUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [bio, setBio] = useState("");
+  const [phone, setPhone] = useState("");
+  const [locationText, setLocationText] = useState("");
+
+  const [offersRemote, setOffersRemote] = useState(false);
+  const [offersInPerson, setOffersInPerson] = useState(false);
 
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [bannerUri, setBannerUri] = useState<string | null>(null);
 
-  const cleanUsername = useMemo(() => username.trim().toLowerCase().replace(/\s+/g, ""), [username]);
+  const usernameClean = useMemo(() => cleanUsername(marketUsername), [marketUsername]);
+  const usernameOk = useMemo(() => isValidUsername(usernameClean), [usernameClean]);
 
-  async function pickImage(setter: (v: string) => void) {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission needed", "Allow photo access to upload images.");
+  async function submit() {
+    if (loading) return;
+
+    if (!usernameOk) {
+      Alert.alert(
+        "Invalid username",
+        "Use 3–24 chars: lowercase letters, numbers, underscore. No spaces."
+      );
       return;
     }
 
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.85,
-    });
-
-    if (!res.canceled && res.assets?.[0]?.uri) {
-      setter(res.assets[0].uri);
+    if (!businessName.trim()) {
+      Alert.alert("Business name required", "Add your business/store name.");
+      return;
     }
-  }
 
-  async function checkUsernameAvailable(u: string) {
-    const { data, error } = await supabase
-      .from("market_seller_profiles")
-      .select("username")
-      .ilike("username", u)
-      .maybeSingle();
-    if (error) return true; // fail open for MVP
-    return !data;
-  }
+    if (!offersRemote && !offersInPerson) {
+      // For product sellers, both can be false (physical product), but for services you usually want one.
+      // We'll allow it but warn.
+      // You can tighten later.
+    }
 
-  async function onSubmit() {
-    const u = cleanUsername;
-
-    if (!u || u.length < 3) return Alert.alert("Fix username", "Username must be at least 3 characters.");
-    if (!/^[a-z0-9_]+$/.test(u)) return Alert.alert("Fix username", "Only letters, numbers and underscore allowed.");
-    if (!displayName.trim()) return Alert.alert("Missing name", "Display name is required.");
-
-    setSubmitting(true);
+    setLoading(true);
     try {
       const { data: auth } = await supabase.auth.getUser();
       const user = auth?.user;
-      if (!user) throw new Error("Not logged in");
+      if (!user) throw new Error("You are not logged in");
 
-      // Check username availability
-      const ok = await checkUsernameAvailable(u);
-      if (!ok) throw new Error("Username already taken. Try another.");
+      // Check if already exists
+      const { data: existing } = await supabase
+        .from("market_seller_profiles")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (existing?.user_id) {
+        Alert.alert("Profile exists", "You already have a market profile. Redirecting…");
+        router.replace("/market/(tabs)/account" as any);
+        return;
+      }
+
+      // Check username uniqueness
+      const { data: uname } = await supabase
+        .from("market_seller_profiles")
+        .select("user_id")
+        .eq("market_username", usernameClean)
+        .maybeSingle();
+
+      if (uname?.user_id) {
+        throw new Error("That username is already taken. Try another one.");
+      }
 
       // Upload images (optional)
-      let logo_url: string | null = null;
-      let banner_url: string | null = null;
+      let logo_path: string | null = null;
+      let banner_path: string | null = null;
 
       if (logoUri) {
-        logo_url = await uploadImageToSupabase({
-          bucket: "market-sellers",
-          path: `${user.id}/logo-${Date.now()}.jpg`,
+        logo_path = await uploadImageToBucket({
+          userId: user.id,
+          kind: "logo",
           localUri: logoUri,
         });
       }
 
       if (bannerUri) {
-        banner_url = await uploadImageToSupabase({
-          bucket: "market-sellers",
-          path: `${user.id}/banner-${Date.now()}.jpg`,
+        banner_path = await uploadImageToBucket({
+          userId: user.id,
+          kind: "banner",
           localUri: bannerUri,
         });
       }
 
-      // Create profile row
-      const { error } = await supabase.from("market_seller_profiles").insert({
+      // Insert seller profile
+      const { error: insErr } = await supabase.from("market_seller_profiles").insert({
         user_id: user.id,
-        username: u,
-        display_name: displayName.trim(),
-        business_name: businessName.trim() || null,
+        market_username: usernameClean,
+        display_name: displayName.trim() || null,
+        business_name: businessName.trim(),
         bio: bio.trim() || null,
-        logo_url,
-        banner_url,
+        phone: phone.trim() || null,
+        location_text: locationText.trim() || null,
+        logo_path,
+        banner_path,
+        offers_remote: offersRemote,
+        offers_in_person: offersInPerson,
+        is_verified: false,
+        payout_tier: "standard",
+        active: true,
+        // address jsonb default '{}' in DB, so we can omit
       });
 
-      if (error) throw new Error(error.message);
+      if (insErr) throw new Error(insErr.message);
 
-      router.replace("/market/(tabs)/sell");
+      Alert.alert("Done", "Your market profile has been created.");
+      router.replace("/market/(tabs)/account" as any);
     } catch (e: any) {
       Alert.alert("Failed", e?.message || "Could not create profile");
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   }
 
   return (
-    <ScrollView className="flex-1 bg-white" contentContainerStyle={{ padding: 16 }}>
-      <Text className="text-2xl font-bold">Create Market Profile</Text>
-      <Text className="mt-2 text-gray-600">Set up your public store profile for selling.</Text>
-
-      <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Logo</Text>
-        <Text className="text-gray-600 mt-1">Square image works best.</Text>
-
-        <View className="mt-3 flex-row items-center gap-12">
-          <View className="h-16 w-16 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
-            {logoUri ? <Image source={{ uri: logoUri }} className="h-16 w-16" /> : <Text className="text-gray-400">+</Text>}
-          </View>
+    <LinearGradient
+      colors={[BG1, BG0]}
+      start={{ x: 0.15, y: 0 }}
+      end={{ x: 0.9, y: 1 }}
+      style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
+    >
+      <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
+        {/* Header */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
           <Pressable
-            onPress={() => pickImage((u) => setLogoUri(u))}
-            className="rounded-2xl border border-gray-300 px-4 py-3"
+            onPress={() => router.back()}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 16,
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            <Text className="font-semibold">Upload Logo</Text>
+            <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
+
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>
+              Create Market Profile
+            </Text>
+            <Text style={{ color: "rgba(255,255,255,0.6)", marginTop: 4, fontSize: 12 }}>
+              This becomes your public store page.
+            </Text>
+          </View>
         </View>
-      </View>
 
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Banner</Text>
-        <Text className="text-gray-600 mt-1">Wide image recommended.</Text>
+        {/* Banner */}
+        <View
+          style={{
+            borderRadius: 22,
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+            backgroundColor: "rgba(255,255,255,0.05)",
+          }}
+        >
+          <Pressable
+            onPress={async () => {
+              const a = await pickImage();
+              if (a?.uri) setBannerUri(a.uri);
+            }}
+            style={{ height: 140, alignItems: "center", justifyContent: "center" }}
+          >
+            {bannerUri ? (
+              <Image source={{ uri: bannerUri }} style={{ width: "100%", height: "100%" }} />
+            ) : (
+              <View style={{ alignItems: "center" }}>
+                <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.65)" />
+                <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontWeight: "800" }}>
+                  Add banner (optional)
+                </Text>
+              </View>
+            )}
+          </Pressable>
 
-        <View className="mt-3">
-          <View className="h-28 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
-            {bannerUri ? <Image source={{ uri: bannerUri }} className="h-28 w-full" /> : <Text className="text-gray-400">+</Text>}
+          {/* Logo row */}
+          <View style={{ padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable
+              onPress={async () => {
+                const a = await pickImage();
+                if (a?.uri) setLogoUri(a.uri);
+              }}
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 22,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                overflow: "hidden",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {logoUri ? (
+                <Image source={{ uri: logoUri }} style={{ width: 72, height: 72 }} />
+              ) : (
+                <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.65)" />
+              )}
+            </Pressable>
+
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Logo (optional)</Text>
+              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                Helps buyers recognize your store.
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Form */}
+        <View style={{ marginTop: 12, gap: 10 }}>
+          <Field
+            label="Username"
+            hint="Example: bestcity_store (no spaces)"
+            value={marketUsername}
+            onChangeText={setMarketUsername}
+            autoCapitalize="none"
+          />
+          <Text style={{ marginTop: -4, color: usernameOk ? "rgba(255,255,255,0.65)" : "#FCA5A5", fontSize: 12 }}>
+            Your handle will be:{" "}
+            <Text style={{ fontWeight: "900", color: "#C4B5FD" }}>@{usernameClean || "yourstore"}</Text>
+            {!usernameOk && usernameClean.length > 0 ? "  • Invalid username" : ""}
+          </Text>
+
+          <Field label="Business name" hint="Your store / service name" value={businessName} onChangeText={setBusinessName} />
+          <Field label="Display name (optional)" hint="Your personal name" value={displayName} onChangeText={setDisplayName} />
+          <Field label="Phone (optional)" hint="+234..." value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <Field label="Location (optional)" hint="Lagos, Abuja..." value={locationText} onChangeText={setLocationText} />
+          <Field label="Bio (optional)" hint="What you sell / offer" value={bio} onChangeText={setBio} multiline />
+
+          {/* Service toggles (optional) */}
+          <View
+            style={{
+              borderRadius: 22,
+              padding: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+              backgroundColor: "rgba(255,255,255,0.05)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Service options (optional)</Text>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+              If you offer services, choose how you deliver them.
+            </Text>
+
+            <ToggleRow label="Remote service" value={offersRemote} onToggle={() => setOffersRemote((v) => !v)} />
+            <ToggleRow label="In-person service" value={offersInPerson} onToggle={() => setOffersInPerson((v) => !v)} />
           </View>
 
           <Pressable
-            onPress={() => pickImage((u) => setBannerUri(u))}
-            className="mt-3 rounded-2xl border border-gray-300 px-4 py-3 items-center"
+            onPress={submit}
+            disabled={loading}
+            style={{
+              marginTop: 4,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: PURPLE,
+              borderWidth: 1,
+              borderColor: PURPLE,
+              opacity: loading ? 0.7 : 1,
+            }}
           >
-            <Text className="font-semibold">Upload Banner</Text>
+            {loading ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <ActivityIndicator color="#fff" />
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Creating…</Text>
+              </View>
+            ) : (
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>Create Profile</Text>
+            )}
           </Pressable>
+
+          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 18 }}>
+            By creating a profile, you agree to follow marketplace rules. Verified badge comes later via application.
+          </Text>
         </View>
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Username</Text>
-        <Text className="text-gray-600 mt-1">Public handle (e.g. bestcity_store)</Text>
-        <TextInput
-          value={username}
-          onChangeText={setUsername}
-          autoCapitalize="none"
-          placeholder="username"
-          className="mt-2 rounded-2xl border border-gray-300 px-4 py-3"
-        />
-        <Text className="mt-2 text-gray-500">Preview: @{cleanUsername || "username"}</Text>
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Display name</Text>
-        <TextInput
-          value={displayName}
-          onChangeText={setDisplayName}
-          placeholder="Your name or store name"
-          className="mt-2 rounded-2xl border border-gray-300 px-4 py-3"
-        />
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Business name (optional)</Text>
-        <TextInput
-          value={businessName}
-          onChangeText={setBusinessName}
-          placeholder="e.g. Ade’s Fashion House"
-          className="mt-2 rounded-2xl border border-gray-300 px-4 py-3"
-        />
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Bio (optional)</Text>
-        <TextInput
-          value={bio}
-          onChangeText={setBio}
-          placeholder="Tell buyers what you sell or offer"
-          multiline
-          className="mt-2 rounded-2xl border border-gray-300 px-4 py-3"
-          style={{ minHeight: 90, textAlignVertical: "top" }}
-        />
-      </View>
-
-      <Pressable
-        onPress={onSubmit}
-        disabled={submitting}
-        className={`mt-6 rounded-2xl py-4 items-center ${submitting ? "bg-gray-300" : "bg-black"}`}
-      >
-        {submitting ? <ActivityIndicator color="#000" /> : <Text className="text-white font-semibold">Create Profile</Text>}
-      </Pressable>
-
-      <Pressable onPress={() => router.back()} className="mt-3 py-3 items-center">
-        <Text className="text-gray-600">Cancel</Text>
-      </Pressable>
-    </ScrollView>
+      </ScrollView>
+    </LinearGradient>
   );
 }
+
+function Field(props: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  multiline?: boolean;
+  keyboardType?: any;
+  autoCapitalize?: any;
+}) {
+  return (
+    <View
+      style={{
+        borderRadius: 22,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.08)",
+        backgroundColor: "rgba(255,255,255,0.05)",
+      }}
+    >
+      <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
+      {!!props.hint && (
+        <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+          {props.hint}
+        </Text>
+      )}
+      <TextInput
+        value={props.value}
+        onChangeText={props.onChangeText}
+        placeholder=""
+        placeholderTextColor="rgba(255,255,255,0.35)"
+        multiline={props.multiline}
+        keyboardType={props.keyboardType}
+        autoCapitalize={props.autoCapitalize ?? "sentences"}
+        style={{
+          marginTop: 10,
+          color: "#fff",
+          fontWeight: "800",
+          fontSize: 14,
+          paddingVertical: 8,
+        }}
+      />
+    </View>
+  );
+}
+
+function ToggleRow(props: { label: string; value: boolean; onToggle: () => void }) {
+  return (
+    <Pressable
+      onPress={props.onToggle}
+      style={{
+        marginTop: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.10)",
+        backgroundColor: "rgba(255,255,255,0.04)",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}
+    >
+      <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
+      <View
+        style={{
+          width: 46,
+          height: 28,
+          borderRadius: 999,
+          backgroundColor: props.value ? "rgba(124,58,237,0.65)" : "rgba(255,255,255,0.15)",
+          borderWidth: 1,
+          borderColor: props.value ? "rgba(124,58,237,0.85)" : "rgba(255,255,255,0.18)",
+          padding: 3,
+          justifyContent: "center",
+        }}
+      >
+        <View
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 999,
+            backgroundColor: "#fff",
+            alignSelf: props.value ? "flex-end" : "flex-start",
+          }}
+        />
+      </View>
+    </Pressable>
+  );
+}
+

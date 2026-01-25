@@ -5,12 +5,13 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 
 type SellerProfile = {
   user_id: string;
-  username: string;
+  market_username: string | null;
   display_name: string | null;
   business_name: string | null;
-  verified_badge?: boolean | null;
-  logo_url?: string | null;
-  banner_url?: string | null;
+  is_verified: boolean;
+  logo_path: string | null;
+  banner_path: string | null;
+  payout_tier: "standard" | "fast";
 };
 
 export default function MarketAccountTab() {
@@ -19,10 +20,13 @@ export default function MarketAccountTab() {
 
   useEffect(() => {
     let mounted = true;
+
     (async () => {
       setLoading(true);
+
       const { data: auth } = await supabase.auth.getUser();
       const user = auth?.user;
+
       if (!user) {
         if (mounted) {
           setProfile(null);
@@ -33,7 +37,7 @@ export default function MarketAccountTab() {
 
       const { data, error } = await supabase
         .from("market_seller_profiles")
-        .select("user_id,username,display_name,business_name,verified_badge,logo_url,banner_url")
+        .select("user_id,market_username,display_name,business_name,is_verified,logo_path,banner_path,payout_tier")
         .eq("user_id", user.id)
         .maybeSingle();
 
@@ -50,73 +54,117 @@ export default function MarketAccountTab() {
 
   if (loading) {
     return (
-      <View className="flex-1 items-center justify-center">
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator />
-        <Text className="mt-2 text-gray-600">Loading…</Text>
+        <Text style={{ marginTop: 10, color: "rgba(0,0,0,0.6)" }}>Loading…</Text>
       </View>
     );
   }
 
+  const handle = profile?.market_username ? `@${profile.market_username}` : "@yourstore";
+
   return (
-    <ScrollView className="flex-1 bg-white" contentContainerStyle={{ padding: 16 }}>
-      <Text className="text-2xl font-bold">Market Account</Text>
-      <Text className="mt-2 text-gray-600">Manage your market profile and wallet.</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: "#fff" }} contentContainerStyle={{ padding: 16, paddingBottom: 28 }}>
+      <Text style={{ fontSize: 24, fontWeight: "900" }}>Market Account</Text>
+      <Text style={{ marginTop: 6, color: "rgba(0,0,0,0.6)" }}>
+        Manage your store profile and marketplace wallet.
+      </Text>
 
       {!profile ? (
-        <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-          <Text className="text-base font-semibold">No Market Profile</Text>
-          <Text className="mt-1 text-gray-600">Create one to sell and to show a store page.</Text>
+        <View style={{ marginTop: 16, borderRadius: 18, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", padding: 14 }}>
+          <Text style={{ fontSize: 16, fontWeight: "900" }}>No Market Profile</Text>
+          <Text style={{ marginTop: 6, color: "rgba(0,0,0,0.6)" }}>
+            Create one to sell and get a public store page.
+          </Text>
+
           <Pressable
             onPress={() => router.push("/market/profile/create" as any)}
-            className="mt-4 rounded-2xl bg-black py-3 items-center"
+            style={{
+              marginTop: 12,
+              borderRadius: 16,
+              backgroundColor: "#111",
+              paddingVertical: 12,
+              alignItems: "center",
+            }}
           >
-            <Text className="text-white font-semibold">Create Market Profile</Text>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Create Market Profile</Text>
           </Pressable>
         </View>
       ) : (
-        <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-          <Text className="text-lg font-semibold">@{profile.username}</Text>
-          <Text className="mt-1 text-gray-600">
-            {profile.business_name || profile.display_name || "Your store"}
-            {profile.verified_badge ? " • Verified" : ""}
+        <View style={{ marginTop: 16, borderRadius: 18, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", padding: 14 }}>
+          <Text style={{ fontSize: 18, fontWeight: "900" }}>{handle}</Text>
+          <Text style={{ marginTop: 6, color: "rgba(0,0,0,0.6)" }}>
+            {(profile.business_name || profile.display_name || "Your store") +
+              (profile.is_verified ? " • Verified" : "")}
           </Text>
 
-          <View className="mt-4 flex-row gap-3">
+          <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
             <Pressable
               onPress={() => router.push("/market/profile/edit" as any)}
-              className="flex-1 rounded-2xl border border-gray-300 py-3 items-center"
+              style={{
+                flex: 1,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: "rgba(0,0,0,0.15)",
+                paddingVertical: 12,
+                alignItems: "center",
+              }}
             >
-              <Text className="font-semibold">Edit</Text>
+              <Text style={{ fontWeight: "900" }}>Edit</Text>
             </Pressable>
+
             <Pressable
-              onPress={() => router.push(`/market/profile/${profile.username}` as any)}
-              className="flex-1 rounded-2xl bg-black py-3 items-center"
+              onPress={() => router.push(`/market/profile/${profile.market_username}` as any)}
+              style={{
+                flex: 1,
+                borderRadius: 16,
+                backgroundColor: "#111",
+                paddingVertical: 12,
+                alignItems: "center",
+              }}
             >
-              <Text className="text-white font-semibold">View</Text>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>View</Text>
             </Pressable>
           </View>
         </View>
       )}
 
-      <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-        <Text className="text-base font-semibold">Wallet</Text>
-        <Text className="mt-1 text-gray-600">NGN + Crypto activity (escrow).</Text>
+      <View style={{ marginTop: 16, borderRadius: 18, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", padding: 14 }}>
+        <Text style={{ fontSize: 16, fontWeight: "900" }}>Wallet</Text>
+        <Text style={{ marginTop: 6, color: "rgba(0,0,0,0.6)" }}>
+          Marketplace escrow activity (NGN + Crypto).
+        </Text>
         <Pressable
-          onPress={() => router.push("/market/wallet" as any )}
-          className="mt-4 rounded-2xl bg-black py-3 items-center"
+          onPress={() => router.push("/market/wallet" as any)}
+          style={{
+            marginTop: 12,
+            borderRadius: 16,
+            backgroundColor: "#111",
+            paddingVertical: 12,
+            alignItems: "center",
+          }}
         >
-          <Text className="text-white font-semibold">Open Wallet</Text>
+          <Text style={{ color: "#fff", fontWeight: "900" }}>Open Wallet</Text>
         </Pressable>
       </View>
 
-      <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-        <Text className="text-base font-semibold">Verified Seller</Text>
-        <Text className="mt-1 text-gray-600">Get a badge and higher trust ranking.</Text>
+      <View style={{ marginTop: 16, borderRadius: 18, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", padding: 14 }}>
+        <Text style={{ fontSize: 16, fontWeight: "900" }}>Verified Seller</Text>
+        <Text style={{ marginTop: 6, color: "rgba(0,0,0,0.6)" }}>
+          Apply for a badge and higher trust ranking.
+        </Text>
         <Pressable
           onPress={() => router.push("/market/verification/apply" as any)}
-          className="mt-4 rounded-2xl border border-gray-300 py-3 items-center"
+          style={{
+            marginTop: 12,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "rgba(0,0,0,0.15)",
+            paddingVertical: 12,
+            alignItems: "center",
+          }}
         >
-          <Text className="font-semibold">Apply / Check Status</Text>
+          <Text style={{ fontWeight: "900" }}>Apply / Check Status</Text>
         </Pressable>
       </View>
     </ScrollView>
