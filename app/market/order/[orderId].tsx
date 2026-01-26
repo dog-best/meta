@@ -240,12 +240,12 @@ export default function OrderDetails() {
   const canRequestOtp = !!order && isBuyer && order.status === "OUT_FOR_DELIVERY";
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
-  // Buyer releases only after OTP verified
+  // Buyer releases only after OTP verified + delivered
   const canRelease =
     !!order &&
     isBuyer &&
     otpVerified &&
-    (order.status === "OUT_FOR_DELIVERY" || order.status === "DELIVERED" || order.status === "IN_ESCROW");
+    order.status === "DELIVERED";
 
   async function doOutForDelivery() {
     if (!order) return;
@@ -257,15 +257,6 @@ export default function OrderDetails() {
       });
       if (error) throw new Error(error.message);
       if (data?.success === false) throw new Error(data?.message || "Failed");
-      await load();
-
-      // auto-generate OTP after out for delivery (good UX)
-      const { data: otpData, error: otpErr } = await supabase.functions.invoke(FN_OTP_GENERATE, {
-        body: { order_id: order.id },
-      });
-      if (otpErr) throw new Error(otpErr.message);
-      if (otpData?.success === false) throw new Error(otpData?.message || "OTP generate failed");
-
       await load();
     } catch (e: any) {
       setErr(e?.message || "Could not mark out for delivery");

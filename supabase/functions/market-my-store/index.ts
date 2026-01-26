@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
       `
       id, seller_id, category, sub_category, title, description, price_amount, currency, delivery_type,
       stock_qty, is_active, created_at, updated_at, cover_image_id,
-      market_listing_images!market_listings_cover_image_id_fkey ( id, storage_path, public_url )
+      market_listing_images!market_listings_cover_image_fk ( id, storage_path, public_url )
     `,
     )
     .eq("seller_id", u.user.id)

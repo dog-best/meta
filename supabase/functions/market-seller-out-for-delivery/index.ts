@@ -1,6 +1,11 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
+async function sha256Hex(value: string) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed();
 
@@ -33,5 +38,25 @@ Deno.serve(async (req) => {
   });
 
   if (error) return bad(error.message);
-  return ok({ order: updated });
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otp_hash = await sha256Hex(otp);
+  const expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+  const { error: otpErr } = await admin
+    .from("market_order_otps")
+    .upsert({ order_id, otp_hash, expires_at, attempts: 0, verified_at: null }, { onConflict: "order_id" });
+
+  if (otpErr) return bad(otpErr.message);
+
+  await admin.from("market_audit_logs").insert({
+    actor_id: u.user.id,
+    actor_type: "user",
+    action: "OTP_GENERATED",
+    entity_type: "market_orders",
+    entity_id: order_id,
+    payload: { expires_at },
+  });
+
+  return ok({ order: updated, otp_generated: true, expires_at });
 });

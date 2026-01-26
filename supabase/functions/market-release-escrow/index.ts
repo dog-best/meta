@@ -1,29 +1,36 @@
-import { serve } from "https://deno.land/std/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
+import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return methodNotAllowed();
+
+  const supabase = supabaseUserClient(req);
+  const admin = supabaseAdminClient();
+
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  if (ue || !u.user) return unauth();
+
+  const body = await req.json().catch(() => ({}));
+  const order_id = String(body.order_id ?? "").trim();
+  if (!order_id) return bad("order_id required");
+
+  const { data: order, error: oe } = await admin
+    .from("market_orders")
+    .select("id,buyer_id,status,version,currency")
+    .eq("id", order_id)
+    .single();
+
+  if (oe || !order) return bad("Order not found");
+  if (order.buyer_id !== u.user.id) return bad("Not your order");
+  if (order.currency !== "NGN") return bad("Only NGN wallet release supported for now");
+  if (order.status !== "DELIVERED") return bad("Order must be DELIVERED before release");
+
+  const { data: released, error } = await admin.rpc("market_wallet_release_to_seller", {
+    p_order_id: order_id,
+    p_expected_version: order.version,
   });
-}
 
-serve(async (req) => {
-  if (req.method !== "POST") return json(405, { success: false, message: "Method not allowed" });
-
-  const admin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
-
-  try {
-    const { escrow_id } = await req.json();
-    const escId = String(escrow_id ?? "").trim();
-    if (!escId) return json(400, { success: false, message: "Escrow is required" });
-
-    await admin.from("market_escrows").update({ status: "released" }).eq("id", escId);
-    return json(200, { success: true, escrow_id: escId, status: "released" });
-  } catch {
-    return json(500, { success: false, message: "We couldn’t complete your request right now. Please try again." });
-  }
+  if (error) return bad(error.message);
+  return ok({ order: released });
 });
+

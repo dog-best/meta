@@ -2,12 +2,12 @@ import { generateReference } from "@/services/utils";
 import { supabase } from "@/supabase/client";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Modal,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Modal,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 type Props = {
@@ -60,8 +60,7 @@ export default function DataModal({ visible, onClose }: Props) {
           body: {
             phone,
             provider,
-            plan: plan.plan,
-            amount: plan.amount,
+            product_code: plan.plan,
             reference: generateReference("DATA"),
           },
         }

@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
       *,
       market_listings (
         id, seller_id, title, sub_category, category, delivery_type, currency, price_amount, cover_image_id, is_active,
-        market_listing_images!market_listings_cover_image_id_fkey ( id, storage_path, public_url ),
+        market_listing_images!market_listings_cover_image_fk ( id, storage_path, public_url ),
         market_seller_profiles ( user_id, business_name, market_username, display_name, logo_path, banner_path, is_verified, active )
       )
     `,

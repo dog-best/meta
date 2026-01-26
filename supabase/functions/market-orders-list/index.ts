@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
       fee_amount,
       market_listings (
         id, title, sub_category, category, delivery_type, currency, price_amount, cover_image_id, seller_id,
-        market_listing_images!market_listings_cover_image_id_fkey ( id, storage_path, public_url )
+        market_listing_images!market_listings_cover_image_fk ( id, storage_path, public_url )
       )
     `,
       { count: "exact" },

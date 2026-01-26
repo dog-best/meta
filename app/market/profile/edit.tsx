@@ -1,4 +1,4 @@
-import { uploadImageToSupabase } from "@/services/market/storageUpload";
+import { uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -16,8 +16,8 @@ export default function EditMarketProfile() {
 
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [bannerUri, setBannerUri] = useState<string | null>(null);
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
-  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
+  const [logoPath, setLogoPath] = useState<string | null>(null);
+  const [bannerPath, setBannerPath] = useState<string | null>(null);
 
   const cleanUsername = useMemo(() => username.trim().toLowerCase().replace(/\s+/g, ""), [username]);
 
@@ -36,7 +36,7 @@ export default function EditMarketProfile() {
 
       const { data, error } = await supabase
         .from("market_seller_profiles")
-        .select("username,display_name,business_name,bio,logo_url,banner_url")
+        .select("market_username,display_name,business_name,bio,logo_path,banner_path")
         .eq("user_id", user.id)
         .maybeSingle();
 
@@ -48,12 +48,12 @@ export default function EditMarketProfile() {
 
           return;
         }
-        setUsername(data.username || "");
+        setUsername(data.market_username || "");
         setDisplayName(data.display_name || "");
         setBusinessName(data.business_name || "");
         setBio(data.bio || "");
-        setLogoUrl(data.logo_url || null);
-        setBannerUrl(data.banner_url || null);
+        setLogoPath(data.logo_path || null);
+        setBannerPath(data.banner_path || null);
         setLoading(false);
       }
     })();
@@ -85,6 +85,7 @@ export default function EditMarketProfile() {
     if (!u || u.length < 3) return Alert.alert("Fix username", "Username must be at least 3 characters.");
     if (!/^[a-z0-9_]+$/.test(u)) return Alert.alert("Fix username", "Only letters, numbers and underscore allowed.");
     if (!displayName.trim()) return Alert.alert("Missing name", "Display name is required.");
+    if (!businessName.trim()) return Alert.alert("Missing name", "Business name is required.");
 
     setSubmitting(true);
     try {
@@ -92,34 +93,38 @@ export default function EditMarketProfile() {
       const user = auth?.user;
       if (!user) throw new Error("Not logged in");
 
-      let nextLogo = logoUrl;
-      let nextBanner = bannerUrl;
+      let nextLogo = logoPath;
+      let nextBanner = bannerPath;
 
       if (logoUri) {
-        nextLogo = await uploadImageToSupabase({
+        const up = await uploadToBucket({
           bucket: "market-sellers",
           path: `${user.id}/logo-${Date.now()}.jpg`,
-          localUri: logoUri,
+          uri: logoUri,
+          contentType: "image/jpeg",
         });
+        nextLogo = up.storagePath;
       }
 
       if (bannerUri) {
-        nextBanner = await uploadImageToSupabase({
+        const up = await uploadToBucket({
           bucket: "market-sellers",
           path: `${user.id}/banner-${Date.now()}.jpg`,
-          localUri: bannerUri,
+          uri: bannerUri,
+          contentType: "image/jpeg",
         });
+        nextBanner = up.storagePath;
       }
 
       const { error } = await supabase
         .from("market_seller_profiles")
         .update({
-          username: u,
+          market_username: u,
           display_name: displayName.trim(),
-          business_name: businessName.trim() || null,
+          business_name: businessName.trim(),
           bio: bio.trim() || null,
-          logo_url: nextLogo,
-          banner_url: nextBanner,
+          logo_path: nextLogo,
+          banner_path: nextBanner,
         })
         .eq("user_id", user.id);
 
@@ -153,8 +158,8 @@ export default function EditMarketProfile() {
           <View className="h-16 w-16 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
             {logoUri ? (
               <Image source={{ uri: logoUri }} className="h-16 w-16" />
-            ) : logoUrl ? (
-              <Image source={{ uri: logoUrl }} className="h-16 w-16" />
+            ) : logoPath ? (
+              <Image source={{ uri: supabase.storage.from("market-sellers").getPublicUrl(logoPath).data.publicUrl }} className="h-16 w-16" />
             ) : (
               <Text className="text-gray-400">+</Text>
             )}
@@ -171,8 +176,8 @@ export default function EditMarketProfile() {
           <View className="h-28 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
             {bannerUri ? (
               <Image source={{ uri: bannerUri }} className="h-28 w-full" />
-            ) : bannerUrl ? (
-              <Image source={{ uri: bannerUrl }} className="h-28 w-full" />
+            ) : bannerPath ? (
+              <Image source={{ uri: supabase.storage.from("market-sellers").getPublicUrl(bannerPath).data.publicUrl }} className="h-28 w-full" />
             ) : (
               <Text className="text-gray-400">+</Text>
             )}
