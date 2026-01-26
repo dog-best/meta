@@ -4,6 +4,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import * as ExpoCrypto from "expo-crypto";
 
 import { uploadToBucket, upsertSellerProfile } from "@/services/market/marketService";
 
@@ -51,7 +52,8 @@ export default function CreateMarketProfile() {
 
       // Upload logo/banner if chosen
       if (logoUri) {
-        const path = `logos/${crypto.randomUUID()}.jpg`;
+        const path = `logos/${ExpoCrypto.randomUUID()}.jpg`;
+
         const up = await uploadToBucket({
           bucket: "market-sellers",
           path,
