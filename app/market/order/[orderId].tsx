@@ -2,14 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import {
-    ActivityIndicator,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    View,
-} from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { supabase } from "@/services/supabase";
@@ -18,14 +11,15 @@ const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
-// ✅ Rename these to your real Edge Function names
-const FN_MARKET_MARK_OUT_FOR_DELIVERY = "market-order-out-for-delivery"; // seller only
-const FN_MARKET_REQUEST_OTP = "market-order-request-otp"; // system -> creates market_order_otps + sends otp to buyer
-const FN_MARKET_VERIFY_OTP = "market-order-verify-otp"; // seller verifies OTP on delivery
-const FN_MARKET_RELEASE = "market-order-release"; // buyer releases escrow to seller (NGN or USDC)
-const FN_MARKET_REFUND = "market-order-refund"; // buyer/admin refund (rules)
+// ✅ Real function names in your repo
+const FN_SELLER_OUT_FOR_DELIVERY = "market-seller-out-for-delivery";
+const FN_OTP_GENERATE = "market-otp-generate";
+const FN_OTP_VERIFY = "market-otp-verify";
+const FN_RELEASE_ESCROW = "market-release-escrow";
+const FN_DISPUTE_OPEN = "market-dispute-open";
+const FN_BUYER_CANCEL = "market-buyer-cancel-order";
 
-// Tables
+// Tables (direct reads are okay if your RLS allows party select)
 const ORDERS_TABLE = "market_orders";
 const LISTINGS_TABLE = "market_listings";
 const SELLERS_TABLE = "market_seller_profiles";
@@ -42,9 +36,7 @@ type OrderRow = {
   amount: number;
   currency: string;
   status: string;
-
   created_at: string;
-
   in_escrow_at: string | null;
   out_for_delivery_at: string | null;
   delivered_at: string | null;
@@ -78,8 +70,8 @@ type OtpRow = {
 
 type CryptoIntent = {
   id: string;
-  intent_type: string; // DEPOSIT / RELEASE / REFUND depending on your enum
-  status: string; // CREATED / SENT / CONFIRMED etc
+  intent_type: string;
+  status: string;
   chain: string;
   tx_hash: string | null;
   created_at: string;
@@ -105,7 +97,17 @@ function StatusBadge({ status }: { status: string }) {
   const s = map[status] ?? { bg: "rgba(255,255,255,0.08)", fg: "#E5E7EB", label: status };
 
   return (
-    <View style={{ alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: s.bg, borderWidth: 1, borderColor: `${s.fg}55` }}>
+    <View
+      style={{
+        alignSelf: "flex-start",
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        backgroundColor: s.bg,
+        borderWidth: 1,
+        borderColor: `${s.fg}55`,
+      }}
+    >
       <Text style={{ color: s.fg, fontWeight: "900", fontSize: 12 }}>{s.label}</Text>
     </View>
   );
@@ -151,6 +153,8 @@ export default function OrderDetails() {
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
 
+  const otpVerified = !!otp?.verified_at;
+
   async function load() {
     setLoading(true);
     setErr(null);
@@ -171,10 +175,10 @@ export default function OrderDetails() {
         )
         .eq("id", oid)
         .maybeSingle();
+
       if (oErr) throw new Error(oErr.message);
       if (!o) throw new Error("Order not found");
 
-      // only buyer or seller can see (for MVP)
       if ((o as any).buyer_id !== user.id && (o as any).seller_id !== user.id) {
         throw new Error("You are not allowed to view this order.");
       }
@@ -228,25 +232,40 @@ export default function OrderDetails() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oid]);
 
+  // Buttons conditions
+  const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
+  const canCancel = !!order && order.status === "CREATED" && isBuyer;
+
+  const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
+  const canRequestOtp = !!order && isBuyer && order.status === "OUT_FOR_DELIVERY";
+  const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
+
+  // Buyer releases only after OTP verified
+  const canRelease =
+    !!order &&
+    isBuyer &&
+    otpVerified &&
+    (order.status === "OUT_FOR_DELIVERY" || order.status === "DELIVERED" || order.status === "IN_ESCROW");
+
   async function doOutForDelivery() {
     if (!order) return;
     setBusy(true);
     setErr(null);
     try {
-      // seller only: sets status OUT_FOR_DELIVERY and timestamps
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_MARK_OUT_FOR_DELIVERY, {
+      const { data, error } = await supabase.functions.invoke(FN_SELLER_OUT_FOR_DELIVERY, {
         body: { order_id: order.id },
       });
       if (error) throw new Error(error.message);
       if (data?.success === false) throw new Error(data?.message || "Failed");
       await load();
 
-      // request OTP right after (system sends to buyer)
-      const { data: otpData, error: otpErr } = await supabase.functions.invoke(FN_MARKET_REQUEST_OTP, {
+      // auto-generate OTP after out for delivery (good UX)
+      const { data: otpData, error: otpErr } = await supabase.functions.invoke(FN_OTP_GENERATE, {
         body: { order_id: order.id },
       });
       if (otpErr) throw new Error(otpErr.message);
-      if (otpData?.success === false) throw new Error(otpData?.message || "OTP request failed");
+      if (otpData?.success === false) throw new Error(otpData?.message || "OTP generate failed");
+
       await load();
     } catch (e: any) {
       setErr(e?.message || "Could not mark out for delivery");
@@ -260,11 +279,11 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_REQUEST_OTP, {
+      const { data, error } = await supabase.functions.invoke(FN_OTP_GENERATE, {
         body: { order_id: order.id },
       });
       if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "OTP request failed");
+      if (data?.success === false) throw new Error(data?.message || "OTP generate failed");
       await load();
     } catch (e: any) {
       setErr(e?.message || "OTP request failed");
@@ -276,19 +295,17 @@ export default function OrderDetails() {
   async function verifyOTP() {
     if (!order) return;
     const code = otpInput.trim();
-    if (code.length < 4) {
-      setErr("Enter the OTP");
-      return;
-    }
+    if (code.length < 4) return setErr("Enter the OTP");
+
     setBusy(true);
     setErr(null);
     try {
-      // seller verifies OTP (server checks hash in market_order_otps, increments attempts, sets verified_at)
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_VERIFY_OTP, {
+      const { data, error } = await supabase.functions.invoke(FN_OTP_VERIFY, {
         body: { order_id: order.id, otp: code },
       });
       if (error) throw new Error(error.message);
       if (data?.success === false) throw new Error(data?.message || "OTP verification failed");
+
       setOtpInput("");
       await load();
     } catch (e: any) {
@@ -303,8 +320,7 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      // buyer releases escrow (server: checks OTP verified, status, then releases NGN/USDC)
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_RELEASE, {
+      const { data, error } = await supabase.functions.invoke(FN_RELEASE_ESCROW, {
         body: { order_id: order.id },
       });
       if (error) throw new Error(error.message);
@@ -317,32 +333,41 @@ export default function OrderDetails() {
     }
   }
 
-  async function refund() {
+  async function openDispute() {
     if (!order) return;
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_REFUND, {
-        body: { order_id: order.id },
+      const { data, error } = await supabase.functions.invoke(FN_DISPUTE_OPEN, {
+        body: { order_id: order.id, reason: "Buyer requested refund / issue with delivery" },
       });
       if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Refund failed");
+      if (data?.success === false) throw new Error(data?.message || "Dispute open failed");
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Refund failed");
+      setErr(e?.message || "Could not open dispute");
     } finally {
       setBusy(false);
     }
   }
 
-  const canGoCheckout = !!order && order.status === "CREATED";
-  const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
-  const canRequestOtp = !!order && order.status === "OUT_FOR_DELIVERY" && isBuyer;
-  const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
-  const otpVerified = !!otp?.verified_at;
-
-  // Buyer releases only after OTP verified
-  const canRelease = !!order && isBuyer && otpVerified && (order.status === "OUT_FOR_DELIVERY" || order.status === "DELIVERED" || order.status === "IN_ESCROW");
+  async function cancelOrder() {
+    if (!order) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const { data, error } = await supabase.functions.invoke(FN_BUYER_CANCEL, {
+        body: { order_id: order.id },
+      });
+      if (error) throw new Error(error.message);
+      if (data?.success === false) throw new Error(data?.message || "Cancel failed");
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || "Cancel failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <LinearGradient
@@ -373,7 +398,7 @@ export default function OrderDetails() {
           <View style={{ flex: 1 }}>
             <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>Order</Text>
             <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-              OTP delivery + escrow release
+              Escrow + OTP delivery protection
             </Text>
           </View>
         </View>
@@ -384,13 +409,22 @@ export default function OrderDetails() {
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
           </View>
         ) : !order ? (
-          <View style={{ marginTop: 18, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+          <View
+            style={{
+              marginTop: 18,
+              borderRadius: 22,
+              padding: 16,
+              backgroundColor: "rgba(255,255,255,0.05)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+            }}
+          >
             <Text style={{ color: "#fff", fontWeight: "900" }}>Order not found</Text>
             {!!err && <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>}
           </View>
         ) : (
           <>
-            {/* Top summary */}
+            {/* Summary */}
             <View
               style={{
                 marginTop: 6,
@@ -423,14 +457,12 @@ export default function OrderDetails() {
                   <Text style={{ marginTop: 10, color: "#fff", fontWeight: "900", fontSize: 18 }}>
                     {money(order.currency, order.amount)}
                   </Text>
-                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                    Qty: {order.quantity}
-                  </Text>
+                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>Qty: {order.quantity}</Text>
                 </View>
               </View>
             </View>
 
-            {/* Primary CTA for buyer if not paid */}
+            {/* Buyer checkout */}
             {canGoCheckout ? (
               <Pressable
                 onPress={() => router.push(`/market/checkout/${order.id}` as any)}
@@ -444,9 +476,31 @@ export default function OrderDetails() {
                   borderColor: PURPLE,
                 }}
               >
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Continue to checkout</Text>
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+                  Continue to checkout
+                </Text>
                 <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-                  Choose NGN or USDC
+                  Choose NGN wallet or USDC
+                </Text>
+              </Pressable>
+            ) : null}
+
+            {canCancel ? (
+              <Pressable
+                disabled={busy}
+                onPress={cancelOrder}
+                style={{
+                  marginTop: 10,
+                  borderRadius: 18,
+                  paddingVertical: 14,
+                  alignItems: "center",
+                  backgroundColor: "rgba(239,68,68,0.12)",
+                  borderWidth: 1,
+                  borderColor: "rgba(239,68,68,0.25)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>
+                  {busy ? "Working…" : "Cancel order"}
                 </Text>
               </Pressable>
             ) : null}
@@ -462,13 +516,13 @@ export default function OrderDetails() {
               <Text style={{ color: "rgba(255,255,255,0.75)", lineHeight: 20 }}>
                 1) Buyer pays → funds go to escrow{"\n"}
                 2) Seller marks out-for-delivery{"\n"}
-                3) OTP is sent to buyer{"\n"}
+                3) OTP is generated for buyer{"\n"}
                 4) Seller enters OTP after delivery{"\n"}
                 5) Buyer releases funds to seller
               </Text>
             </Card>
 
-            {/* Crypto intents display (if USDC used) */}
+            {/* Crypto intents */}
             <Card title="Crypto activity (USDC)">
               {intents.length === 0 ? (
                 <Text style={{ color: "rgba(255,255,255,0.65)" }}>No crypto intents yet.</Text>
@@ -502,7 +556,7 @@ export default function OrderDetails() {
             {isSeller ? (
               <Card title="Seller actions">
                 <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-                  After escrow is confirmed, mark order as out for delivery. OTP will be sent to buyer.
+                  After escrow is confirmed, mark order as out for delivery. OTP will be generated for buyer.
                 </Text>
 
                 <Pressable
@@ -526,7 +580,7 @@ export default function OrderDetails() {
                 <View style={{ marginTop: 14 }}>
                   <Text style={{ color: "#fff", fontWeight: "900" }}>Enter OTP (after delivery)</Text>
                   <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                    Buyer gives you OTP. Server verifies hash + attempts.
+                    Buyer shares OTP after receiving item. Server checks hash + limits attempts.
                   </Text>
 
                   <View
@@ -562,9 +616,11 @@ export default function OrderDetails() {
                       borderRadius: 18,
                       paddingVertical: 14,
                       alignItems: "center",
-                      backgroundColor: canVerifyOtp && !busy ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.06)",
+                      backgroundColor:
+                        canVerifyOtp && !busy ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.06)",
                       borderWidth: 1,
-                      borderColor: canVerifyOtp && !busy ? "rgba(16,185,129,0.40)" : "rgba(255,255,255,0.10)",
+                      borderColor:
+                        canVerifyOtp && !busy ? "rgba(16,185,129,0.40)" : "rgba(255,255,255,0.10)",
                     }}
                   >
                     <Text style={{ color: "#fff", fontWeight: "900" }}>
@@ -589,7 +645,7 @@ export default function OrderDetails() {
             {isBuyer ? (
               <Card title="Buyer actions">
                 <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-                  When seller marks out-for-delivery, request OTP and share it only after delivery.
+                  When seller is out-for-delivery, generate OTP and only share it after you receive your item.
                 </Text>
 
                 <Pressable
@@ -606,7 +662,7 @@ export default function OrderDetails() {
                   }}
                 >
                   <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Working…" : "Request delivery OTP"}
+                    {busy ? "Working…" : "Generate delivery OTP"}
                   </Text>
                 </Pressable>
 
@@ -634,7 +690,7 @@ export default function OrderDetails() {
 
                 <Pressable
                   disabled={busy}
-                  onPress={refund}
+                  onPress={openDispute}
                   style={{
                     marginTop: 10,
                     borderRadius: 18,
@@ -646,20 +702,18 @@ export default function OrderDetails() {
                   }}
                 >
                   <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Working…" : "Request refund"}
+                    {busy ? "Working…" : "Report issue / request refund"}
                   </Text>
                 </Pressable>
 
                 {otp ? (
                   <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                    OTP status: {otp.verified_at ? "Verified ✅" : "Pending"} • expires:{" "}
-                    {new Date(otp.expires_at).toLocaleString()}
+                    OTP status: {otp.verified_at ? "Verified ✅" : "Pending"} • expires: {new Date(otp.expires_at).toLocaleString()}
                   </Text>
                 ) : null}
               </Card>
             ) : null}
 
-            {/* Footer */}
             <Pressable
               onPress={load}
               disabled={busy}

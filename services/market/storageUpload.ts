@@ -30,3 +30,6 @@ export async function uploadImageToSupabase(params: {
 
   return data.publicUrl;
 }
+
+// Backward-compatible alias (some screens import uploadListingImage)
+export const uploadListingImage = uploadImageToSupabase;

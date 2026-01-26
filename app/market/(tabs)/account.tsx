@@ -155,6 +155,7 @@ export default function MarketAccountTab() {
         </Text>
         <Pressable
           onPress={() => router.push("/market/verification/apply" as any)}
+
           style={{
             marginTop: 12,
             borderRadius: 16,
