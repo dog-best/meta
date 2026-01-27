@@ -68,14 +68,14 @@ async function uploadImageToBucket(params: {
   const fileName = `${kind}_${Date.now()}.${extGuess}`;
   const path = `${userId}/${kind}/${fileName}`;
 
-  const { error: upErr } = await supabase.storage
-    .from(BUCKET_SELLERS)
-    .upload(path, blob, {
-      contentType: blob.type || "image/jpeg",
-      upsert: true,
-    });
 
-  if (upErr) throw new Error(upErr.message);
+    await uploadToSupabaseStorage({
+    bucket: BUCKET_SELLERS,
+    path,
+    localUri,
+    contentType: "image/jpeg",
+  });
+
 
   return path;
 }

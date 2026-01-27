@@ -1,3 +1,4 @@
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
 export type MarketSellerProfile = {
@@ -131,16 +132,14 @@ export async function uploadToBucket(params: {
   contentType: string;
 }) {
   // fetch file as blob (works in Expo)
-  const res = await fetch(params.uri);
-  const blob = await res.blob();
 
-  const { error } = await supabase.storage.from(params.bucket).upload(params.path, blob, {
+  return uploadToSupabaseStorage({
+    bucket: params.bucket,
+    path: params.path,
+    localUri: params.uri,
     contentType: params.contentType,
-    upsert: true,
+
   });
 
-  if (error) throw new Error(error.message);
-
-  const { data } = supabase.storage.from(params.bucket).getPublicUrl(params.path);
-  return { publicUrl: data.publicUrl, storagePath: params.path };
+  
 }
