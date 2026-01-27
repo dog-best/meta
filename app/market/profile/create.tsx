@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -38,6 +39,7 @@ function isValidUsername(u: string) {
 }
 
 async function pickImage() {
+  
   const res = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     quality: 0.9,

@@ -98,6 +98,17 @@ function getFunctionsBaseUrl() {
   return `${sbUrl.replace(/\/$/, "")}/functions/v1`;
 }
 
+
+function getAnonKey() {
+  const key =
+    (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined) ||
+    (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string | undefined);
+  if (!key) {
+    throw new Error("Missing Supabase anon key (set EXPO_PUBLIC_SUPABASE_ANON_KEY)");
+  }
+  return key;
+}
+
 export default function MarketOrdersTab() {
   const insets = useSafeAreaInsets();
 
@@ -135,6 +146,7 @@ export default function MarketOrdersTab() {
         method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
+          apikey: getAnonKey(),
         },
       });
 
