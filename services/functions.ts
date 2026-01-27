@@ -1,11 +1,25 @@
 import { supabase } from "./supabase";
 
-const base = process.env.EXPO_PUBLIC_SUPABASE_URL!.replace(".supabase.co", ".supabase.co/functions/v1");
+function getFunctionsBaseUrl() {
+  const envUrl =
+    (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ||
+    (process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined);
+
+  const clientUrl = (supabase as any)?.supabaseUrl as string | undefined;
+
+  const sbUrl = envUrl || clientUrl;
+  if (!sbUrl) {
+    throw new Error("Missing Supabase URL (set EXPO_PUBLIC_SUPABASE_URL)");
+  }
+
+  return `${sbUrl.replace(/\/$/, "")}/functions/v1`;
+}
 
 export async function callFn<T>(name: string, body?: any): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
 
+  const base = getFunctionsBaseUrl();
   const res = await fetch(`${base}/${name}`, {
     method: "POST",
     headers: {

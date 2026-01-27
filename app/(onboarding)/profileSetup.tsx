@@ -1,4 +1,5 @@
 // app/(onboarding)/profileSetup.tsx
+// app/(onboarding)/profileSetup.tsx
 
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -18,6 +19,7 @@ import {
 
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "../../supabase/client";
 
 /* ---------- Expo Router Wrapper ---------- */
@@ -53,6 +55,12 @@ function ProfileSetupScreen() {
   ------------------------------------------------------------------ */
   const pickAvatar = async () => {
     try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission needed", "Please allow photo access to upload images.");
+        return;
+      }
+
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -78,27 +86,14 @@ function ProfileSetupScreen() {
       const ext = avatar.split(".").pop() || "jpg";
       const filePath = `avatars/${userId}.${ext}`;
 
-      const formData = new FormData();
-      formData.append("file", {
-        uri: avatar,
-        name: `${userId}.${ext}`,
-        type: "image/jpeg",
-      } as any);
+      const upload = await uploadToSupabaseStorage({
+        bucket: "avatars",
+        path: filePath,
+        localUri: avatar,
+        contentType: "image/jpeg",
+      });
 
-      const { error } = await supabase.storage
-        .from("avatars")
-        .upload(filePath, formData, {
-          upsert: true,
-          contentType: "image/jpeg",
-        });
-
-      if (error) throw error;
-
-      const { data: urlData } = supabase.storage
-        .from("avatars")
-        .getPublicUrl(filePath);
-
-      return urlData.publicUrl;
+      return upload.publicUrl;
     } catch (e) {
       console.warn("Avatar upload failed:", e);
       return null;
