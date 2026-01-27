@@ -3,6 +3,13 @@ import { supabase } from "@/services/supabase";
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+type TransferResult = {
+  reference: string;
+  from_user_id: string;
+  to_user_id: string;
+  amount: number;
+};
+
 export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
   const [uid, setUid] = useState("");
   const [amount, setAmount] = useState("100");
@@ -13,18 +20,33 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
 
   async function send() {
     setMsg(null);
-    const { data: u } = await supabase.auth.getUser();
-    const userId = u.user?.id;
-    if (!userId) throw new Error("Not signed in");
 
+    // Ensure user is signed in (function uses auth.uid() server-side)
+    const { data: u, error: userErr } = await supabase.auth.getUser();
+    if (userErr) throw new Error(userErr.message);
+    if (!u.user?.id) throw new Error("Not signed in");
+
+    const toUid = uid.trim();
+    if (!toUid) throw new Error("Recipient UID is required");
+    if (!Number.isFinite(a) || a <= 0) throw new Error("Enter a valid amount");
+
+    // Call the NEW signature: (p_to_public_uid text, p_amount numeric)
     const { data, error } = await supabase.rpc("simple_transfer_by_public_uid", {
-      p_from_user_id: userId,
-      p_to_public_uid: uid.trim(),
+      p_to_public_uid: toUid,
       p_amount: a,
     });
 
     if (error) throw new Error(error.message);
-    return data;
+
+    // For `returns table(...)`, Supabase often returns an array of rows
+    const row = (Array.isArray(data) ? data[0] : data) as TransferResult | null;
+
+    if (!row?.reference) {
+      // Fallback message if PostgREST shape changes
+      return { reference: "ok" };
+    }
+
+    return row;
   }
 
   return (
@@ -71,7 +93,7 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
             setMsg(`Sent successfully. Ref: ${res.reference}`);
             onSuccess();
           } catch (e: any) {
-            setMsg(e.message);
+            setMsg(e?.message ?? "Transfer failed");
           }
         }}
       />
@@ -101,7 +123,13 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.1)",
     color: "white",
   },
-  btn: { marginTop: 12, backgroundColor: "#2563EB", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
+  btn: {
+    marginTop: 12,
+    backgroundColor: "#2563EB",
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+  },
   btnText: { color: "white", fontWeight: "900" },
   msg: { color: "rgba(255,255,255,0.75)", marginTop: 12 },
 });
