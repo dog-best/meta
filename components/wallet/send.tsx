@@ -3,7 +3,7 @@ import { supabase } from "@/services/supabase";
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-type TransferResult = {
+type TransferResponse = {
   reference: string;
   from_user_id: string;
   to_user_id: string;
@@ -15,22 +15,26 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
   const [amount, setAmount] = useState("100");
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const a = useMemo(() => Number(amount || 0), [amount]);
 
   async function send() {
     setMsg(null);
 
-    // Ensure user is signed in (function uses auth.uid() server-side)
+    const toUid = uid.trim();
+    if (!toUid) throw new Error("Recipient UID is required");
+
+    if (!Number.isFinite(a) || a <= 0) {
+      throw new Error("Enter a valid amount");
+    }
+
+    // Ensure signed in (DB function uses auth.uid() server-side)
     const { data: u, error: userErr } = await supabase.auth.getUser();
     if (userErr) throw new Error(userErr.message);
     if (!u.user?.id) throw new Error("Not signed in");
 
-    const toUid = uid.trim();
-    if (!toUid) throw new Error("Recipient UID is required");
-    if (!Number.isFinite(a) || a <= 0) throw new Error("Enter a valid amount");
-
-    // Call the NEW signature: (p_to_public_uid text, p_amount numeric)
+    // Call NEW signature: (p_to_public_uid text, p_amount numeric) returns jsonb
     const { data, error } = await supabase.rpc("simple_transfer_by_public_uid", {
       p_to_public_uid: toUid,
       p_amount: a,
@@ -38,15 +42,14 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
 
     if (error) throw new Error(error.message);
 
-    // For `returns table(...)`, Supabase often returns an array of rows
-    const row = (Array.isArray(data) ? data[0] : data) as TransferResult | null;
+    // returns jsonb, so `data` should be an object
+    const res = data as TransferResponse | null;
 
-    if (!row?.reference) {
-      // Fallback message if PostgREST shape changes
-      return { reference: "ok" };
+    if (!res?.reference) {
+      throw new Error("Transfer completed but no reference returned");
     }
 
-    return row;
+    return res;
   }
 
   return (
@@ -74,8 +77,12 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
         placeholderTextColor="rgba(255,255,255,0.35)"
       />
 
-      <Pressable style={styles.btn} onPress={() => setConfirm(true)}>
-        <Text style={styles.btnText}>Review & Send</Text>
+      <Pressable
+        style={[styles.btn, loading ? styles.btnDisabled : null]}
+        disabled={loading}
+        onPress={() => setConfirm(true)}
+      >
+        <Text style={styles.btnText}>{loading ? "Sending..." : "Review & Send"}</Text>
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}
@@ -84,16 +91,19 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
         visible={confirm}
         title="Confirm transfer"
         message={`Send ₦${(a || 0).toLocaleString()} to UID: ${uid.trim()}?`}
-        confirmText="Send"
+        confirmText={loading ? "Sending..." : "Send"}
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {
           setConfirm(false);
+          setLoading(true);
           try {
             const res = await send();
             setMsg(`Sent successfully. Ref: ${res.reference}`);
             onSuccess();
           } catch (e: any) {
             setMsg(e?.message ?? "Transfer failed");
+          } finally {
+            setLoading(false);
           }
         }}
       />
@@ -129,6 +139,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
     alignItems: "center",
+  },
+  btnDisabled: {
+    opacity: 0.6,
   },
   btnText: { color: "white", fontWeight: "900" },
   msg: { color: "rgba(255,255,255,0.75)", marginTop: 12 },

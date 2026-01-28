@@ -1,5 +1,5 @@
 import { supabase } from "@/services/supabase";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 /**
  * Uploads a local image URI to Supabase Storage and returns a public URL.
