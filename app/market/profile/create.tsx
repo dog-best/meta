@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -20,9 +22,11 @@ import { supabase } from "@/services/supabase";
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
-const CARD = "rgba(255,255,255,0.05)";
-const BORDER = "rgba(255,255,255,0.09)";
+const CARD = "rgba(255,255,255,0.06)";
+const BORDER = "rgba(255,255,255,0.10)";
 const MUTED = "rgba(255,255,255,0.62)";
+const DANGER = "#FCA5A5";
+const SUCCESS = "rgba(187,247,208,0.95)";
 const BUCKET_SELLERS = "market-sellers";
 
 function cleanUsername(input: string) {
@@ -36,6 +40,17 @@ function cleanUsername(input: string) {
 
 function isValidUsername(u: string) {
   return /^[a-z0-9][a-z0-9_]{2,23}$/.test(u);
+}
+
+function prettyErr(e: any) {
+  if (!e) return "Unknown error";
+  if (typeof e === "string") return e;
+
+  const msg = e?.message || "Request failed";
+  const code = e?.code ? ` (code: ${e.code})` : "";
+  const details = e?.details ? `\n${e.details}` : "";
+  const hint = e?.hint ? `\nHint: ${e.hint}` : "";
+  return `${msg}${code}${details}${hint}`;
 }
 
 async function pickImage() {
@@ -56,7 +71,7 @@ async function uploadImageToBucket(params: {
 }) {
   const { userId, kind, localUri } = params;
 
-  // Infer extension (best effort)
+  // infer extension (best effort)
   const fileRes = await fetch(localUri);
   const blob = await fileRes.blob();
   const extGuess = blob.type?.split("/")?.[1] || "jpg";
@@ -64,11 +79,12 @@ async function uploadImageToBucket(params: {
   const fileName = `${kind}_${Date.now()}.${extGuess}`;
   const path = `${userId}/${kind}/${fileName}`;
 
+  // IMPORTANT: uploadToSupabaseStorage must use the authenticated supabase client/session
   await uploadToSupabaseStorage({
     bucket: BUCKET_SELLERS,
     path,
     localUri,
-    contentType: "image/jpeg",
+    contentType: blob.type || "image/jpeg",
   });
 
   return path;
@@ -78,6 +94,7 @@ type NameStatus = "idle" | "invalid" | "checking" | "available" | "taken" | "err
 
 export default function CreateMarketProfile() {
   const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState<string | null>(null);
 
   const [marketUsername, setMarketUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -95,20 +112,18 @@ export default function CreateMarketProfile() {
   const usernameClean = useMemo(() => cleanUsername(marketUsername), [marketUsername]);
   const usernameOk = useMemo(() => isValidUsername(usernameClean), [usernameClean]);
 
-  // Live availability check (debounced)
   const [nameStatus, setNameStatus] = useState<NameStatus>("idle");
-  const [nameHint, setNameHint] = useState<string>("Type a username to check availability");
+  const [nameHint, setNameHint] = useState("Type a username to check availability");
   const lastReq = useRef(0);
 
+  // ✅ Live availability check (OLD WAY - no RPC)
   useEffect(() => {
-    // No input
     if (!marketUsername.trim()) {
       setNameStatus("idle");
       setNameHint("Type a username to check availability");
       return;
     }
 
-    // Invalid format
     if (!usernameOk) {
       setNameStatus("invalid");
       setNameHint("Use 3–24 chars: a–z, 0–9, underscore. Start with letter/number.");
@@ -121,18 +136,24 @@ export default function CreateMarketProfile() {
     const reqId = ++lastReq.current;
     const t = setTimeout(async () => {
       try {
+        const { data: sess } = await supabase.auth.getSession();
+        if (!sess.session) {
+          setNameStatus("error");
+          setNameHint("Session missing. Please sign in again.");
+          return;
+        }
+
         const { data, error } = await supabase
           .from("market_seller_profiles")
           .select("user_id")
           .eq("market_username", usernameClean)
           .maybeSingle();
 
-        // Ignore old responses
         if (reqId !== lastReq.current) return;
 
         if (error) {
           setNameStatus("error");
-          setNameHint("Could not check username. Try again.");
+          setNameHint(error.message || "Could not check username.");
           return;
         }
 
@@ -166,32 +187,36 @@ export default function CreateMarketProfile() {
       Alert.alert("Invalid username", "Use 3–24 chars: lowercase letters, numbers, underscore.");
       return;
     }
-
     if (nameStatus !== "available") {
       Alert.alert("Username not available", "Choose an available username before creating.");
       return;
     }
-
     if (!businessName.trim()) {
       Alert.alert("Business name required", "Add your business/store name.");
       return;
     }
 
     setLoading(true);
+    setStage(null);
+
     try {
       const { data: auth, error: authErr } = await supabase.auth.getUser();
-      if (authErr) throw new Error(authErr.message);
+      if (authErr) throw authErr;
       const user = auth?.user;
       if (!user) throw new Error("You are not logged in");
 
-      // Already exists?
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess.session) throw new Error("Session missing. Please sign in again.");
+
+      // 1) Existing profile?
+      setStage("Checking existing profile…");
       const { data: existing, error: exErr } = await supabase
         .from("market_seller_profiles")
         .select("user_id")
         .eq("user_id", user.id)
         .maybeSingle();
 
-      if (exErr) throw new Error(exErr.message);
+      if (exErr) throw exErr;
 
       if (existing?.user_id) {
         Alert.alert("Profile exists", "You already have a market profile. Redirecting…");
@@ -199,18 +224,8 @@ export default function CreateMarketProfile() {
         return;
       }
 
-      // Upload images (optional)
-      let logo_path: string | null = null;
-      let banner_path: string | null = null;
-
-      if (logoUri) {
-        logo_path = await uploadImageToBucket({ userId: user.id, kind: "logo", localUri: logoUri });
-      }
-      if (bannerUri) {
-        banner_path = await uploadImageToBucket({ userId: user.id, kind: "banner", localUri: bannerUri });
-      }
-
-      // Insert seller profile
+      // 2) Create profile FIRST (so Storage RLS doesn’t block profile creation)
+      setStage("Creating profile…");
       const { error: insErr } = await supabase.from("market_seller_profiles").insert({
         user_id: user.id,
         market_username: usernameClean,
@@ -219,27 +234,77 @@ export default function CreateMarketProfile() {
         bio: bio.trim() || null,
         phone: phone.trim() || null,
         location_text: locationText.trim() || null,
-        logo_path,
-        banner_path,
         offers_remote: offersRemote,
         offers_in_person: offersInPerson,
         is_verified: false,
         payout_tier: "standard",
         active: true,
+        // logo_path/banner_path set later
       });
 
       if (insErr) {
-        // Nice error for duplicates (race condition)
         if ((insErr as any).code === "23505") {
           throw new Error("Username already taken. Please choose another one.");
         }
-        throw new Error(insErr.message);
+        throw insErr;
       }
 
-      Alert.alert("Done", "Your market profile has been created.");
+      // 3) Upload images AFTER profile (optional)
+      let logo_path: string | null = null;
+      let banner_path: string | null = null;
+
+      let uploadFailed: string | null = null;
+
+      if (logoUri) {
+        setStage("Uploading logo…");
+        try {
+          logo_path = await uploadImageToBucket({ userId: user.id, kind: "logo", localUri: logoUri });
+        } catch (e: any) {
+          uploadFailed = "Logo upload failed.\n" + prettyErr(e);
+        }
+      }
+
+      if (bannerUri) {
+        setStage("Uploading banner…");
+        try {
+          banner_path = await uploadImageToBucket({ userId: user.id, kind: "banner", localUri: bannerUri });
+        } catch (e: any) {
+          uploadFailed = (uploadFailed ? uploadFailed + "\n\n" : "") + "Banner upload failed.\n" + prettyErr(e);
+        }
+      }
+
+      // 4) Update profile with uploaded paths (if any)
+      if (logo_path || banner_path) {
+        setStage("Saving images…");
+        const { error: upErr } = await supabase
+          .from("market_seller_profiles")
+          .update({
+            ...(logo_path ? { logo_path } : {}),
+            ...(banner_path ? { banner_path } : {}),
+          })
+          .eq("user_id", user.id);
+
+        if (upErr) {
+          uploadFailed = (uploadFailed ? uploadFailed + "\n\n" : "") + "Saving image paths failed.\n" + prettyErr(upErr);
+        }
+      }
+
+      setStage(null);
+
+      if (uploadFailed) {
+        Alert.alert(
+          "Profile created ✅",
+          "Your profile was created, but image upload failed.\n\nThis is usually Storage RLS or missing auth token in upload.\n\n" +
+            uploadFailed
+        );
+      } else {
+        Alert.alert("Done ✅", "Your market profile has been created.");
+      }
+
       router.replace("/market/(tabs)/account" as any);
     } catch (e: any) {
-      Alert.alert("Failed", e?.message || "Could not create profile");
+      setStage(null);
+      Alert.alert("Failed", prettyErr(e));
     } finally {
       setLoading(false);
     }
@@ -250,138 +315,175 @@ export default function CreateMarketProfile() {
       colors={[BG1, BG0]}
       start={{ x: 0.15, y: 0 }}
       end={{ x: 0.9, y: 1 }}
-      style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
+      style={{ flex: 1 }}
     >
-      <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
-        {/* Header */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <Pressable
-            onPress={() => router.back()}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 16,
-              backgroundColor: CARD,
-              borderWidth: 1,
-              borderColor: BORDER,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
-          </Pressable>
-
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>
-              Create Market Profile
-            </Text>
-            <Text style={{ color: MUTED, marginTop: 4, fontSize: 12 }}>
-              Set up your store page. Username is public.
-            </Text>
-          </View>
-        </View>
-
-        {/* Banner + Logo card */}
-        <View
-          style={{
-            borderRadius: 22,
-            overflow: "hidden",
-            borderWidth: 1,
-            borderColor: BORDER,
-            backgroundColor: CARD,
-          }}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 130 }}
+          keyboardShouldPersistTaps="handled"
         >
-          <Pressable
-            onPress={async () => {
-              const a = await pickImage();
-              if (a?.uri) setBannerUri(a.uri);
-            }}
-            style={{ height: 150, alignItems: "center", justifyContent: "center" }}
-          >
-            {bannerUri ? (
-              <Image source={{ uri: bannerUri }} style={{ width: "100%", height: "100%" }} />
-            ) : (
-              <View style={{ alignItems: "center" }}>
-                <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.70)" />
-                <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.75)", fontWeight: "900" }}>
-                  Tap to add banner (optional)
-                </Text>
-                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
-                  This appears at the top of your store page
-                </Text>
-              </View>
-            )}
-          </Pressable>
-
-          <View style={{ padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+          {/* Header */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <Pressable
-              onPress={async () => {
-                const a = await pickImage();
-                if (a?.uri) setLogoUri(a.uri);
-              }}
+              onPress={() => router.back()}
               style={{
-                width: 76,
-                height: 76,
-                borderRadius: 24,
+                width: 44,
+                height: 44,
+                borderRadius: 16,
+                backgroundColor: CARD,
                 borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.12)",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                overflow: "hidden",
+                borderColor: BORDER,
                 alignItems: "center",
                 justifyContent: "center",
               }}
             >
-              {logoUri ? (
-                <Image source={{ uri: logoUri }} style={{ width: 76, height: 76 }} />
-              ) : (
-                <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.70)" />
-              )}
+              <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
 
             <View style={{ flex: 1 }}>
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Logo (optional)</Text>
-              <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
-                Buyers recognize you faster with a logo.
+              <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>
+                Create Market Profile
+              </Text>
+              <Text style={{ color: MUTED, marginTop: 4, fontSize: 12 }}>
+                Username is public. Your store page becomes searchable.
               </Text>
             </View>
           </View>
-        </View>
 
-        {/* Form */}
-        <View style={{ marginTop: 12, gap: 10 }}>
-          <Field
-            label="Username"
-            hint="Lowercase, no spaces. We'll check availability automatically."
+          {/* Banner */}
+          <View style={{ borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
+            <Pressable
+              onPress={async () => {
+                const a = await pickImage();
+                if (a?.uri) setBannerUri(a.uri);
+              }}
+              style={{
+                height: 160,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {bannerUri ? (
+                <Image source={{ uri: bannerUri }} style={{ width: "100%", height: "100%" }} />
+              ) : (
+                <View style={{ alignItems: "center", paddingHorizontal: 14 }}>
+                  <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.75)" />
+                  <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.9)", fontWeight: "900" }}>
+                    Tap to add banner (optional)
+                  </Text>
+                  <Text style={{ marginTop: 4, color: MUTED, fontSize: 12, textAlign: "center" }}>
+                    Shows at the top of your store page
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+
+            {/* Logo row */}
+            <View style={{ padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <Pressable
+                onPress={async () => {
+                  const a = await pickImage();
+                  if (a?.uri) setLogoUri(a.uri);
+                }}
+                style={{
+                  width: 78,
+                  height: 78,
+                  borderRadius: 24,
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.12)",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  overflow: "hidden",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {logoUri ? (
+                  <Image source={{ uri: logoUri }} style={{ width: 78, height: 78 }} />
+                ) : (
+                  <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.75)" />
+                )}
+              </Pressable>
+
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Logo (optional)</Text>
+                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
+                  Helps buyers recognize your store.
+                </Text>
+
+                {(logoUri || bannerUri) ? (
+                  <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
+                    {logoUri ? (
+                      <Pressable
+                        onPress={() => setLogoUri(null)}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 8,
+                          borderRadius: 999,
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.14)",
+                          backgroundColor: "rgba(255,255,255,0.06)",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.85)" />
+                        <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
+                          Remove logo
+                        </Text>
+                      </Pressable>
+                    ) : null}
+
+                    {bannerUri ? (
+                      <Pressable
+                        onPress={() => setBannerUri(null)}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 8,
+                          borderRadius: 999,
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.14)",
+                          backgroundColor: "rgba(255,255,255,0.06)",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.85)" />
+                        <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
+                          Remove banner
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          </View>
+
+          {/* Section: Identity */}
+          <SectionTitle title="Store identity" />
+
+          <UsernameField
             value={marketUsername}
             onChangeText={setMarketUsername}
-            autoCapitalize="none"
-            icon="at-outline"
-            placeholder="e.g. bestcity_store"
-            right={
-              <UsernameBadge status={nameStatus} />
-            }
+            usernameClean={usernameClean}
+            nameStatus={nameStatus}
+            nameHint={nameHint}
+            invalid={!usernameOk && marketUsername.trim().length > 0}
           />
-
-          <View style={{ marginTop: -6, paddingHorizontal: 2 }}>
-            <Text style={{ color: MUTED, fontSize: 12 }}>
-              Your handle:{" "}
-              <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>
-                @{usernameClean || "yourstore"}
-              </Text>
-              {"  "}•{" "}
-              <Text style={{ color: nameStatus === "taken" || nameStatus === "invalid" ? "#FCA5A5" : MUTED, fontWeight: "800" }}>
-                {nameHint}
-              </Text>
-            </Text>
-          </View>
 
           <Field
             label="Business name"
-            hint="What customers will see as your store name"
+            hint="This is your store name (required)"
             value={businessName}
             onChangeText={setBusinessName}
             icon="storefront-outline"
             placeholder="e.g. Best City Electronics"
+            invalid={businessName.trim().length === 0 && loading}
           />
 
           <Field
@@ -393,9 +495,12 @@ export default function CreateMarketProfile() {
             placeholder="e.g. Ayo"
           />
 
+          {/* Section: Contact */}
+          <SectionTitle title="Contact" />
+
           <Field
             label="Phone (optional)"
-            hint="For customer contact (optional)"
+            hint="For customer contact"
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
@@ -405,16 +510,19 @@ export default function CreateMarketProfile() {
 
           <Field
             label="Location (optional)"
-            hint="Helps buyers understand where you operate"
+            hint="Helps buyers know where you operate"
             value={locationText}
             onChangeText={setLocationText}
             icon="location-outline"
             placeholder="Lagos, Abuja..."
           />
 
+          {/* Section: About */}
+          <SectionTitle title="About your store" />
+
           <Field
             label="Bio (optional)"
-            hint="Briefly describe what you sell / offer"
+            hint="A short description (what you sell / offer)"
             value={bio}
             onChangeText={setBio}
             multiline
@@ -422,16 +530,7 @@ export default function CreateMarketProfile() {
             placeholder="We sell phones, accessories, and repairs…"
           />
 
-          {/* Service toggles */}
-          <View
-            style={{
-              borderRadius: 22,
-              padding: 14,
-              borderWidth: 1,
-              borderColor: BORDER,
-              backgroundColor: CARD,
-            }}
-          >
+          <View style={{ borderRadius: 22, padding: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
             <Text style={{ color: "#fff", fontWeight: "900" }}>Service options (optional)</Text>
             <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
               If you offer services, choose how you deliver them.
@@ -441,11 +540,37 @@ export default function CreateMarketProfile() {
             <ToggleRow label="In-person service" value={offersInPerson} onToggle={() => setOffersInPerson((v) => !v)} />
           </View>
 
+          {stage ? (
+            <View style={{ marginTop: 12, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", backgroundColor: "rgba(255,255,255,0.06)", flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <ActivityIndicator color="#fff" />
+              <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "900" }}>{stage}</Text>
+            </View>
+          ) : null}
+
+          <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 18 }}>
+            By creating a profile, you agree to follow marketplace rules. Verification comes later.
+          </Text>
+        </ScrollView>
+
+        {/* Sticky footer button */}
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: Platform.OS === "ios" ? 24 : 16,
+            backgroundColor: "rgba(5,4,11,0.92)",
+            borderTopWidth: 1,
+            borderTopColor: "rgba(255,255,255,0.08)",
+          }}
+        >
           <Pressable
             onPress={submit}
             disabled={!canSubmit}
             style={{
-              marginTop: 4,
               borderRadius: 18,
               paddingVertical: 14,
               alignItems: "center",
@@ -467,22 +592,101 @@ export default function CreateMarketProfile() {
             )}
           </Pressable>
 
-          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 18 }}>
-            Tip: pick a simple username — buyers will search it. Verification comes later.
-          </Text>
+          {!canSubmit ? (
+            <Text style={{ marginTop: 10, color: MUTED, fontSize: 12, textAlign: "center" }}>
+              Choose an available username and enter your business name to continue.
+            </Text>
+          ) : null}
         </View>
-      </ScrollView>
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
 
+function SectionTitle({ title }: { title: string }) {
+  return (
+    <Text style={{ marginTop: 14, marginBottom: 8, color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 13 }}>
+      {title.toUpperCase()}
+    </Text>
+  );
+}
+
+function UsernameField(props: {
+  value: string;
+  onChangeText: (v: string) => void;
+  usernameClean: string;
+  nameStatus: NameStatus;
+  nameHint: string;
+  invalid: boolean;
+}) {
+  const border =
+    props.invalid || props.nameStatus === "taken"
+      ? "rgba(239,68,68,0.55)"
+      : "rgba(255,255,255,0.10)";
+
+  return (
+    <View style={{ borderRadius: 22, padding: 14, borderWidth: 1, borderColor: border, backgroundColor: CARD }}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+          <View style={{ width: 34, height: 34, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", alignItems: "center", justifyContent: "center" }}>
+            <Ionicons name="at-outline" size={18} color="rgba(255,255,255,0.85)" />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Username</Text>
+            <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+              Lowercase, no spaces. We check availability automatically.
+            </Text>
+          </View>
+        </View>
+
+        <UsernameBadge status={props.nameStatus} />
+      </View>
+
+      <View
+        style={{
+          marginTop: 10,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          paddingHorizontal: 12,
+          borderRadius: 16,
+          backgroundColor: "rgba(255,255,255,0.06)",
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.10)",
+        }}
+      >
+        <Text style={{ color: "rgba(255,255,255,0.65)", fontWeight: "900" }}>@</Text>
+        <TextInput
+          value={props.value}
+          onChangeText={props.onChangeText}
+          placeholder="bestcity_store"
+          placeholderTextColor="rgba(255,255,255,0.35)"
+          autoCapitalize="none"
+          style={{
+            flex: 1,
+            color: "#fff",
+            fontWeight: "900",
+            fontSize: 14,
+            paddingVertical: 12,
+          }}
+        />
+        <Text style={{ color: "rgba(255,255,255,0.45)", fontWeight: "800", fontSize: 12 }}>
+          {props.usernameClean.length}/24
+        </Text>
+      </View>
+
+      <Text style={{ marginTop: 10, color: props.invalid || props.nameStatus === "taken" ? "#FCA5A5" : MUTED, fontSize: 12 }}>
+        Handle: <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>@{props.usernameClean || "yourstore"}</Text>
+        {"  "}•{" "}
+        <Text style={{ fontWeight: "800" }}>{props.nameHint}</Text>
+      </Text>
+    </View>
+  );
+}
+
 function UsernameBadge({ status }: { status: NameStatus }) {
-  const base = {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-  } as const;
+  const base = { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 } as const;
 
   if (status === "checking") {
     return (
@@ -494,7 +698,7 @@ function UsernameBadge({ status }: { status: NameStatus }) {
   }
 
   const map: Record<string, { text: string; icon: any; border: string; bg: string; color: string }> = {
-    available: { text: "Available", icon: "checkmark-circle-outline", border: "rgba(34,197,94,0.55)", bg: "rgba(34,197,94,0.12)", color: "rgba(187,247,208,0.95)" },
+    available: { text: "Available", icon: "checkmark-circle-outline", border: "rgba(34,197,94,0.55)", bg: "rgba(34,197,94,0.12)", color: SUCCESS },
     taken: { text: "Taken", icon: "close-circle-outline", border: "rgba(239,68,68,0.55)", bg: "rgba(239,68,68,0.10)", color: "rgba(254,202,202,0.95)" },
     invalid: { text: "Invalid", icon: "alert-circle-outline", border: "rgba(251,191,36,0.55)", bg: "rgba(251,191,36,0.10)", color: "rgba(254,243,199,0.95)" },
     error: { text: "Error", icon: "warning-outline", border: "rgba(255,255,255,0.22)", bg: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)" },
@@ -521,48 +725,23 @@ function Field(props: {
   autoCapitalize?: any;
   icon?: any;
   placeholder?: string;
-  right?: React.ReactNode;
+  invalid?: boolean;
 }) {
+  const border = props.invalid ? "rgba(239,68,68,0.55)" : BORDER;
+
   return (
-    <View
-      style={{
-        borderRadius: 22,
-        padding: 14,
-        borderWidth: 1,
-        borderColor: BORDER,
-        backgroundColor: CARD,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
-          {props.icon ? (
-            <View
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: 12,
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.10)",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Ionicons name={props.icon} size={18} color="rgba(255,255,255,0.85)" />
-            </View>
-          ) : null}
-
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
-            {!!props.hint && (
-              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                {props.hint}
-              </Text>
-            )}
+    <View style={{ borderRadius: 22, padding: 14, borderWidth: 1, borderColor: border, backgroundColor: CARD }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        {props.icon ? (
+          <View style={{ width: 34, height: 34, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", alignItems: "center", justifyContent: "center" }}>
+            <Ionicons name={props.icon} size={18} color="rgba(255,255,255,0.85)" />
           </View>
-        </View>
+        ) : null}
 
-        {props.right ? props.right : null}
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
+          {!!props.hint && <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>{props.hint}</Text>}
+        </View>
       </View>
 
       <TextInput
@@ -578,7 +757,7 @@ function Field(props: {
           color: "#fff",
           fontWeight: "800",
           fontSize: 14,
-          paddingVertical: 10,
+          paddingVertical: 12,
           paddingHorizontal: 12,
           borderRadius: 16,
           backgroundColor: "rgba(255,255,255,0.06)",
@@ -635,3 +814,4 @@ function ToggleRow(props: { label: string; value: boolean; onToggle: () => void 
     </Pressable>
   );
 }
+
