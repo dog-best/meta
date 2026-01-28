@@ -38,21 +38,16 @@ export default function SellTab() {
   const [images, setImages] = useState<Img[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
-  const categories = useMemo(() => getAllCategories(), []);
+const categories = useMemo(
+  () => getAllCategories().filter((c) => c.main === category),
+  [category]
+);
 
-  useEffect(() => {
-    (async () => {
-      setCheckingSeller(true);
-      try {
-        const prof = await getMySellerProfile();
-        setHasSellerProfile(!!prof?.user_id);
-      } catch {
-        setHasSellerProfile(false);
-      } finally {
-        setCheckingSeller(false);
-      }
-    })();
-  }, []);
+useEffect(() => {
+  const first = categories[0]?.slug ?? "";
+  setSubCategory(first);
+}, [category]);
+
 
   useEffect(() => {
     // default subcategory for category
