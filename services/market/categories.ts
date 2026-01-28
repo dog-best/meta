@@ -13,7 +13,6 @@ export type ProductCategorySlug =
   | "groceries"
   | "sports-outdoors"
   | "automobile"
-  // added (common marketplace categories)
   | "furniture-decor"
   | "baby-maternity"
   | "books-stationery"
@@ -30,7 +29,6 @@ export type ServiceCategorySlug =
   | "beauty-wellness"
   | "events"
   | "education"
-  // added (remote + modern services)
   | "video-audio"
   | "web-mobile-dev"
   | "graphics-branding"
@@ -64,7 +62,6 @@ export const PRODUCT_CATEGORIES: CategoryItem[] = [
   { main: "product", slug: "sports-outdoors", title: "Sports", subtitle: "Fitness & outdoor", icon: "bicycle-outline" },
   { main: "product", slug: "automobile", title: "Automobile", subtitle: "Car parts & tools", icon: "car-outline" },
 
-  // OPTIONAL additions (remove if you don't want them)
   { main: "product", slug: "furniture-decor", title: "Furniture & Decor", subtitle: "Sofas, beds, interior", icon: "bed-outline" },
   { main: "product", slug: "baby-maternity", title: "Baby & Maternity", subtitle: "Baby care & essentials", icon: "flower-outline" },
   { main: "product", slug: "books-stationery", title: "Books & Stationery", subtitle: "Books, office supplies", icon: "book-outline" },
@@ -83,7 +80,6 @@ export const SERVICE_CATEGORIES: CategoryItem[] = [
   { main: "service", slug: "events", title: "Events", subtitle: "Planning & support", icon: "calendar-outline" },
   { main: "service", slug: "education", title: "Education", subtitle: "Tutoring & lessons", icon: "school-outline" },
 
-  // NEW (remote-job focused)
   { main: "service", slug: "web-mobile-dev", title: "Website & App Building", subtitle: "Websites, apps, fixes", icon: "code-slash-outline" },
   { main: "service", slug: "video-audio", title: "Video & Audio Editing", subtitle: "Editing, mixing, ads", icon: "videocam-outline" },
   { main: "service", slug: "graphics-branding", title: "Design & Branding", subtitle: "Logos, flyers, UI/UX", icon: "color-palette-outline" },
@@ -100,4 +96,21 @@ export function getAllCategories() {
 
 export function getCategoryBySlug(slug: string) {
   return getAllCategories().find((c) => c.slug === slug) ?? null;
+}
+
+/** ✅ NEW: One map for both tabs + home dropdowns */
+export const CATEGORIES_BY_MAIN: Record<MarketMainCategory, CategoryItem[]> = {
+  product: PRODUCT_CATEGORIES,
+  service: SERVICE_CATEGORIES,
+};
+
+/** ✅ NEW: Filtered list by main (for dropdown / tab) */
+export function getCategoriesByMain(main: MarketMainCategory) {
+  return CATEGORIES_BY_MAIN[main];
+}
+
+/** ✅ NEW: Quick title lookup */
+export function getCategoryTitle(slug?: string | null) {
+  if (!slug) return null;
+  return getCategoryBySlug(slug)?.title ?? null;
 }

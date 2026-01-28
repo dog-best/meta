@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,11 +20,12 @@ import { supabase } from "@/services/supabase";
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
-
-const BUCKET_SELLERS = "market-sellers"; // ✅ your bucket name
+const CARD = "rgba(255,255,255,0.05)";
+const BORDER = "rgba(255,255,255,0.09)";
+const MUTED = "rgba(255,255,255,0.62)";
+const BUCKET_SELLERS = "market-sellers";
 
 function cleanUsername(input: string) {
-  // lowercase, trim, replace spaces with underscore, remove invalid chars
   return input
     .trim()
     .toLowerCase()
@@ -34,12 +35,10 @@ function cleanUsername(input: string) {
 }
 
 function isValidUsername(u: string) {
-  // must start with letter/number, allow underscore, 3-24 chars
   return /^[a-z0-9][a-z0-9_]{2,23}$/.test(u);
 }
 
 async function pickImage() {
-  
   const res = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     quality: 0.9,
@@ -47,7 +46,7 @@ async function pickImage() {
     aspect: [4, 3],
   });
   if (res.canceled) return null;
-  return res.assets[0]; // { uri, width, height, ... }
+  return res.assets[0];
 }
 
 async function uploadImageToBucket(params: {
@@ -57,28 +56,25 @@ async function uploadImageToBucket(params: {
 }) {
   const { userId, kind, localUri } = params;
 
-  // fetch file data
+  // Infer extension (best effort)
   const fileRes = await fetch(localUri);
   const blob = await fileRes.blob();
-
-  // infer extension (best effort)
-  const extGuess =
-    (blob.type && blob.type.split("/")[1]) ? blob.type.split("/")[1] : "jpg";
+  const extGuess = blob.type?.split("/")?.[1] || "jpg";
 
   const fileName = `${kind}_${Date.now()}.${extGuess}`;
   const path = `${userId}/${kind}/${fileName}`;
 
-
-    await uploadToSupabaseStorage({
+  await uploadToSupabaseStorage({
     bucket: BUCKET_SELLERS,
     path,
     localUri,
     contentType: "image/jpeg",
   });
 
-
   return path;
 }
+
+type NameStatus = "idle" | "invalid" | "checking" | "available" | "taken" | "error";
 
 export default function CreateMarketProfile() {
   const [loading, setLoading] = useState(false);
@@ -99,14 +95,80 @@ export default function CreateMarketProfile() {
   const usernameClean = useMemo(() => cleanUsername(marketUsername), [marketUsername]);
   const usernameOk = useMemo(() => isValidUsername(usernameClean), [usernameClean]);
 
+  // Live availability check (debounced)
+  const [nameStatus, setNameStatus] = useState<NameStatus>("idle");
+  const [nameHint, setNameHint] = useState<string>("Type a username to check availability");
+  const lastReq = useRef(0);
+
+  useEffect(() => {
+    // No input
+    if (!marketUsername.trim()) {
+      setNameStatus("idle");
+      setNameHint("Type a username to check availability");
+      return;
+    }
+
+    // Invalid format
+    if (!usernameOk) {
+      setNameStatus("invalid");
+      setNameHint("Use 3–24 chars: a–z, 0–9, underscore. Start with letter/number.");
+      return;
+    }
+
+    setNameStatus("checking");
+    setNameHint("Checking availability…");
+
+    const reqId = ++lastReq.current;
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase
+          .from("market_seller_profiles")
+          .select("user_id")
+          .eq("market_username", usernameClean)
+          .maybeSingle();
+
+        // Ignore old responses
+        if (reqId !== lastReq.current) return;
+
+        if (error) {
+          setNameStatus("error");
+          setNameHint("Could not check username. Try again.");
+          return;
+        }
+
+        if (data?.user_id) {
+          setNameStatus("taken");
+          setNameHint("Taken — choose another username.");
+        } else {
+          setNameStatus("available");
+          setNameHint("Available ✅");
+        }
+      } catch {
+        if (reqId !== lastReq.current) return;
+        setNameStatus("error");
+        setNameHint("Could not check username. Try again.");
+      }
+    }, 450);
+
+    return () => clearTimeout(t);
+  }, [marketUsername, usernameClean, usernameOk]);
+
+  const canSubmit =
+    !loading &&
+    usernameOk &&
+    nameStatus === "available" &&
+    businessName.trim().length > 0;
+
   async function submit() {
     if (loading) return;
 
     if (!usernameOk) {
-      Alert.alert(
-        "Invalid username",
-        "Use 3–24 chars: lowercase letters, numbers, underscore. No spaces."
-      );
+      Alert.alert("Invalid username", "Use 3–24 chars: lowercase letters, numbers, underscore.");
+      return;
+    }
+
+    if (nameStatus !== "available") {
+      Alert.alert("Username not available", "Choose an available username before creating.");
       return;
     }
 
@@ -115,24 +177,21 @@ export default function CreateMarketProfile() {
       return;
     }
 
-    if (!offersRemote && !offersInPerson) {
-      // For product sellers, both can be false (physical product), but for services you usually want one.
-      // We'll allow it but warn.
-      // You can tighten later.
-    }
-
     setLoading(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw new Error(authErr.message);
       const user = auth?.user;
       if (!user) throw new Error("You are not logged in");
 
-      // Check if already exists
-      const { data: existing } = await supabase
+      // Already exists?
+      const { data: existing, error: exErr } = await supabase
         .from("market_seller_profiles")
         .select("user_id")
         .eq("user_id", user.id)
         .maybeSingle();
+
+      if (exErr) throw new Error(exErr.message);
 
       if (existing?.user_id) {
         Alert.alert("Profile exists", "You already have a market profile. Redirecting…");
@@ -140,35 +199,15 @@ export default function CreateMarketProfile() {
         return;
       }
 
-      // Check username uniqueness
-      const { data: uname } = await supabase
-        .from("market_seller_profiles")
-        .select("user_id")
-        .eq("market_username", usernameClean)
-        .maybeSingle();
-
-      if (uname?.user_id) {
-        throw new Error("That username is already taken. Try another one.");
-      }
-
       // Upload images (optional)
       let logo_path: string | null = null;
       let banner_path: string | null = null;
 
       if (logoUri) {
-        logo_path = await uploadImageToBucket({
-          userId: user.id,
-          kind: "logo",
-          localUri: logoUri,
-        });
+        logo_path = await uploadImageToBucket({ userId: user.id, kind: "logo", localUri: logoUri });
       }
-
       if (bannerUri) {
-        banner_path = await uploadImageToBucket({
-          userId: user.id,
-          kind: "banner",
-          localUri: bannerUri,
-        });
+        banner_path = await uploadImageToBucket({ userId: user.id, kind: "banner", localUri: bannerUri });
       }
 
       // Insert seller profile
@@ -187,10 +226,15 @@ export default function CreateMarketProfile() {
         is_verified: false,
         payout_tier: "standard",
         active: true,
-        // address jsonb default '{}' in DB, so we can omit
       });
 
-      if (insErr) throw new Error(insErr.message);
+      if (insErr) {
+        // Nice error for duplicates (race condition)
+        if ((insErr as any).code === "23505") {
+          throw new Error("Username already taken. Please choose another one.");
+        }
+        throw new Error(insErr.message);
+      }
 
       Alert.alert("Done", "Your market profile has been created.");
       router.replace("/market/(tabs)/account" as any);
@@ -217,9 +261,9 @@ export default function CreateMarketProfile() {
               width: 44,
               height: 44,
               borderRadius: 16,
-              backgroundColor: "rgba(255,255,255,0.06)",
+              backgroundColor: CARD,
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.08)",
+              borderColor: BORDER,
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -231,20 +275,20 @@ export default function CreateMarketProfile() {
             <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>
               Create Market Profile
             </Text>
-            <Text style={{ color: "rgba(255,255,255,0.6)", marginTop: 4, fontSize: 12 }}>
-              This becomes your public store page.
+            <Text style={{ color: MUTED, marginTop: 4, fontSize: 12 }}>
+              Set up your store page. Username is public.
             </Text>
           </View>
         </View>
 
-        {/* Banner */}
+        {/* Banner + Logo card */}
         <View
           style={{
             borderRadius: 22,
             overflow: "hidden",
             borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.08)",
-            backgroundColor: "rgba(255,255,255,0.05)",
+            borderColor: BORDER,
+            backgroundColor: CARD,
           }}
         >
           <Pressable
@@ -252,21 +296,23 @@ export default function CreateMarketProfile() {
               const a = await pickImage();
               if (a?.uri) setBannerUri(a.uri);
             }}
-            style={{ height: 140, alignItems: "center", justifyContent: "center" }}
+            style={{ height: 150, alignItems: "center", justifyContent: "center" }}
           >
             {bannerUri ? (
               <Image source={{ uri: bannerUri }} style={{ width: "100%", height: "100%" }} />
             ) : (
               <View style={{ alignItems: "center" }}>
-                <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.65)" />
-                <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontWeight: "800" }}>
-                  Add banner (optional)
+                <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.70)" />
+                <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.75)", fontWeight: "900" }}>
+                  Tap to add banner (optional)
+                </Text>
+                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
+                  This appears at the top of your store page
                 </Text>
               </View>
             )}
           </Pressable>
 
-          {/* Logo row */}
           <View style={{ padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
             <Pressable
               onPress={async () => {
@@ -274,11 +320,11 @@ export default function CreateMarketProfile() {
                 if (a?.uri) setLogoUri(a.uri);
               }}
               style={{
-                width: 72,
-                height: 72,
-                borderRadius: 22,
+                width: 76,
+                height: 76,
+                borderRadius: 24,
                 borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.10)",
+                borderColor: "rgba(255,255,255,0.12)",
                 backgroundColor: "rgba(255,255,255,0.06)",
                 overflow: "hidden",
                 alignItems: "center",
@@ -286,16 +332,16 @@ export default function CreateMarketProfile() {
               }}
             >
               {logoUri ? (
-                <Image source={{ uri: logoUri }} style={{ width: 72, height: 72 }} />
+                <Image source={{ uri: logoUri }} style={{ width: 76, height: 76 }} />
               ) : (
-                <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.65)" />
+                <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.70)" />
               )}
             </Pressable>
 
             <View style={{ flex: 1 }}>
               <Text style={{ color: "#fff", fontWeight: "900" }}>Logo (optional)</Text>
-              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                Helps buyers recognize your store.
+              <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
+                Buyers recognize you faster with a logo.
               </Text>
             </View>
           </View>
@@ -305,35 +351,89 @@ export default function CreateMarketProfile() {
         <View style={{ marginTop: 12, gap: 10 }}>
           <Field
             label="Username"
-            hint="Example: bestcity_store (no spaces)"
+            hint="Lowercase, no spaces. We'll check availability automatically."
             value={marketUsername}
             onChangeText={setMarketUsername}
             autoCapitalize="none"
+            icon="at-outline"
+            placeholder="e.g. bestcity_store"
+            right={
+              <UsernameBadge status={nameStatus} />
+            }
           />
-          <Text style={{ marginTop: -4, color: usernameOk ? "rgba(255,255,255,0.65)" : "#FCA5A5", fontSize: 12 }}>
-            Your handle will be:{" "}
-            <Text style={{ fontWeight: "900", color: "#C4B5FD" }}>@{usernameClean || "yourstore"}</Text>
-            {!usernameOk && usernameClean.length > 0 ? "  • Invalid username" : ""}
-          </Text>
 
-          <Field label="Business name" hint="Your store / service name" value={businessName} onChangeText={setBusinessName} />
-          <Field label="Display name (optional)" hint="Your personal name" value={displayName} onChangeText={setDisplayName} />
-          <Field label="Phone (optional)" hint="+234..." value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-          <Field label="Location (optional)" hint="Lagos, Abuja..." value={locationText} onChangeText={setLocationText} />
-          <Field label="Bio (optional)" hint="What you sell / offer" value={bio} onChangeText={setBio} multiline />
+          <View style={{ marginTop: -6, paddingHorizontal: 2 }}>
+            <Text style={{ color: MUTED, fontSize: 12 }}>
+              Your handle:{" "}
+              <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>
+                @{usernameClean || "yourstore"}
+              </Text>
+              {"  "}•{" "}
+              <Text style={{ color: nameStatus === "taken" || nameStatus === "invalid" ? "#FCA5A5" : MUTED, fontWeight: "800" }}>
+                {nameHint}
+              </Text>
+            </Text>
+          </View>
 
-          {/* Service toggles (optional) */}
+          <Field
+            label="Business name"
+            hint="What customers will see as your store name"
+            value={businessName}
+            onChangeText={setBusinessName}
+            icon="storefront-outline"
+            placeholder="e.g. Best City Electronics"
+          />
+
+          <Field
+            label="Display name (optional)"
+            hint="Your personal name (optional)"
+            value={displayName}
+            onChangeText={setDisplayName}
+            icon="person-outline"
+            placeholder="e.g. Ayo"
+          />
+
+          <Field
+            label="Phone (optional)"
+            hint="For customer contact (optional)"
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            icon="call-outline"
+            placeholder="+234..."
+          />
+
+          <Field
+            label="Location (optional)"
+            hint="Helps buyers understand where you operate"
+            value={locationText}
+            onChangeText={setLocationText}
+            icon="location-outline"
+            placeholder="Lagos, Abuja..."
+          />
+
+          <Field
+            label="Bio (optional)"
+            hint="Briefly describe what you sell / offer"
+            value={bio}
+            onChangeText={setBio}
+            multiline
+            icon="document-text-outline"
+            placeholder="We sell phones, accessories, and repairs…"
+          />
+
+          {/* Service toggles */}
           <View
             style={{
               borderRadius: 22,
               padding: 14,
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.08)",
-              backgroundColor: "rgba(255,255,255,0.05)",
+              borderColor: BORDER,
+              backgroundColor: CARD,
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>Service options (optional)</Text>
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+            <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
               If you offer services, choose how you deliver them.
             </Text>
 
@@ -343,7 +443,7 @@ export default function CreateMarketProfile() {
 
           <Pressable
             onPress={submit}
-            disabled={loading}
+            disabled={!canSubmit}
             style={{
               marginTop: 4,
               borderRadius: 18,
@@ -352,7 +452,7 @@ export default function CreateMarketProfile() {
               backgroundColor: PURPLE,
               borderWidth: 1,
               borderColor: PURPLE,
-              opacity: loading ? 0.7 : 1,
+              opacity: canSubmit ? 1 : 0.55,
             }}
           >
             {loading ? (
@@ -361,16 +461,53 @@ export default function CreateMarketProfile() {
                 <Text style={{ color: "#fff", fontWeight: "900" }}>Creating…</Text>
               </View>
             ) : (
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>Create Profile</Text>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>
+                Create Profile
+              </Text>
             )}
           </Pressable>
 
           <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 18 }}>
-            By creating a profile, you agree to follow marketplace rules. Verified badge comes later via application.
+            Tip: pick a simple username — buyers will search it. Verification comes later.
           </Text>
         </View>
       </ScrollView>
     </LinearGradient>
+  );
+}
+
+function UsernameBadge({ status }: { status: NameStatus }) {
+  const base = {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  } as const;
+
+  if (status === "checking") {
+    return (
+      <View style={{ ...base, borderColor: "rgba(255,255,255,0.18)", backgroundColor: "rgba(255,255,255,0.06)", flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <ActivityIndicator size="small" color="#fff" />
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Checking</Text>
+      </View>
+    );
+  }
+
+  const map: Record<string, { text: string; icon: any; border: string; bg: string; color: string }> = {
+    available: { text: "Available", icon: "checkmark-circle-outline", border: "rgba(34,197,94,0.55)", bg: "rgba(34,197,94,0.12)", color: "rgba(187,247,208,0.95)" },
+    taken: { text: "Taken", icon: "close-circle-outline", border: "rgba(239,68,68,0.55)", bg: "rgba(239,68,68,0.10)", color: "rgba(254,202,202,0.95)" },
+    invalid: { text: "Invalid", icon: "alert-circle-outline", border: "rgba(251,191,36,0.55)", bg: "rgba(251,191,36,0.10)", color: "rgba(254,243,199,0.95)" },
+    error: { text: "Error", icon: "warning-outline", border: "rgba(255,255,255,0.22)", bg: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)" },
+    idle: { text: "Type", icon: "pencil-outline", border: "rgba(255,255,255,0.18)", bg: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.85)" },
+  };
+
+  const v = map[status] ?? map.idle;
+
+  return (
+    <View style={{ ...base, borderColor: v.border, backgroundColor: v.bg, flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <Ionicons name={v.icon} size={16} color={v.color} />
+      <Text style={{ color: v.color, fontWeight: "900", fontSize: 12 }}>{v.text}</Text>
+    </View>
   );
 }
 
@@ -382,6 +519,9 @@ function Field(props: {
   multiline?: boolean;
   keyboardType?: any;
   autoCapitalize?: any;
+  icon?: any;
+  placeholder?: string;
+  right?: React.ReactNode;
 }) {
   return (
     <View
@@ -389,20 +529,46 @@ function Field(props: {
         borderRadius: 22,
         padding: 14,
         borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.08)",
-        backgroundColor: "rgba(255,255,255,0.05)",
+        borderColor: BORDER,
+        backgroundColor: CARD,
       }}
     >
-      <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
-      {!!props.hint && (
-        <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-          {props.hint}
-        </Text>
-      )}
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+          {props.icon ? (
+            <View
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 12,
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name={props.icon} size={18} color="rgba(255,255,255,0.85)" />
+            </View>
+          ) : null}
+
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
+            {!!props.hint && (
+              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+                {props.hint}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {props.right ? props.right : null}
+      </View>
+
       <TextInput
         value={props.value}
         onChangeText={props.onChangeText}
-        placeholder=""
+        placeholder={props.placeholder ?? ""}
         placeholderTextColor="rgba(255,255,255,0.35)"
         multiline={props.multiline}
         keyboardType={props.keyboardType}
@@ -412,7 +578,14 @@ function Field(props: {
           color: "#fff",
           fontWeight: "800",
           fontSize: 14,
-          paddingVertical: 8,
+          paddingVertical: 10,
+          paddingHorizontal: 12,
+          borderRadius: 16,
+          backgroundColor: "rgba(255,255,255,0.06)",
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.10)",
+          minHeight: props.multiline ? 92 : undefined,
+          textAlignVertical: props.multiline ? "top" : "auto",
         }}
       />
     </View>
@@ -462,4 +635,3 @@ function ToggleRow(props: { label: string; value: boolean; onToggle: () => void 
     </Pressable>
   );
 }
-
