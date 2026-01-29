@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 type SellerProfile = {
@@ -133,6 +134,7 @@ export default function MarketAccountTab() {
   if (loading) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+        <AppHeader title="Market Account" subtitle="Manage your store profile, listings, and marketplace wallet." />
         <View style={{ marginTop: 70, alignItems: "center" }}>
           <ActivityIndicator />
           <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading…</Text>
@@ -143,6 +145,7 @@ export default function MarketAccountTab() {
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+      <AppHeader title="Market Account" subtitle="Manage your store profile, listings, and marketplace wallet." />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text style={{ color: "#fff", fontSize: 24, fontWeight: "900" }}>Market Account</Text>

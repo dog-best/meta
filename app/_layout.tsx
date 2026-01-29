@@ -1,7 +1,9 @@
+// app/_layout.tsx
 import { supabase } from "@/services/supabase";
+import { installFetchTimeout } from "@/services/network/fetchTimeout";
 import { Redirect, Slot, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -13,13 +15,14 @@ import {
 import "../global.css";
 import { useAuth } from "../hooks/authentication/useAuth";
 
-
-
 import * as Application from "expo-application";
 import * as Linking from "expo-linking";
 
 // AdMob
 import mobileAds from "react-native-google-mobile-ads";
+
+/* ✅ GLOBAL NETWORK FIX (prevents infinite loading across the app) */
+installFetchTimeout(15000); // 15s is a good production default
 
 /* ---------------- VERSION COMPARE ---------------- */
 
@@ -35,7 +38,7 @@ const isOutdated = (current: string, min: string) => {
 };
 
 export default function RootLayout() {
-  const { user, loading } = useAuth(); // ✅ ignore onboarded completely
+  const { user, loading } = useAuth();
   const segments = useSegments();
 
   const [systemState, setSystemState] = useState<
@@ -45,6 +48,9 @@ export default function RootLayout() {
   >(null);
 
   const [booting, setBooting] = useState(true);
+  const [bootError, setBootError] = useState<string | null>(null);
+
+  const supabaseUrl = useMemo(() => (supabase as any)?.supabaseUrl as string | undefined, []);
 
   /* ---------------- ADMOB INIT ---------------- */
   useEffect(() => {
@@ -53,8 +59,23 @@ export default function RootLayout() {
     }
   }, []);
 
+  /* ---------------- BOOT WATCHDOG (no infinite loader) ---------------- */
+  useEffect(() => {
+    const id = setTimeout(() => {
+      // If we’re still booting after 20s, show a helpful screen instead of spinner forever
+      setBootError(
+        "Having trouble connecting. Please check your network and Supabase URL."
+      );
+      setBooting(false);
+    }, 20000);
+
+    return () => clearTimeout(id);
+  }, []);
+
   /* ---------------- SYSTEM CONTROL CHECK ---------------- */
   useEffect(() => {
+    let mounted = true;
+
     if (__DEV__) {
       setBooting(false);
       return;
@@ -62,14 +83,22 @@ export default function RootLayout() {
 
     (async () => {
       try {
+        setBootError(null);
+
         const appVersion = Application.nativeApplicationVersion ?? "0.0.0";
 
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("app_system_control")
           .select("*")
           .single();
 
-        if (!data) return;
+        if (!mounted) return;
+
+        // If network fails or table missing, we don’t block the whole app
+        if (error || !data) {
+          setBooting(false);
+          return;
+        }
 
         /* 🔧 MAINTENANCE HAS TOP PRIORITY */
         if (data.maintenance_enabled) {
@@ -92,13 +121,56 @@ export default function RootLayout() {
             url: data.apk_url,
           });
         }
-      } catch (e) {
-        console.log("System control error:", e);
+      } catch (e: any) {
+        if (!mounted) return;
+        setBootError(e?.message ?? "System check failed");
+      } finally {
+        if (!mounted) return;
+        setBooting(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  function retryBoot() {
+    // Simple retry: reload system control check by toggling booting
+    setBootError(null);
+    setBooting(true);
+
+    // Re-run the system check by calling it again (same logic)
+    (async () => {
+      try {
+        const appVersion = Application.nativeApplicationVersion ?? "0.0.0";
+        const { data } = await supabase.from("app_system_control").select("*").single();
+
+        if (!data) return;
+
+        if (data.maintenance_enabled) {
+          setSystemState({
+            type: "maintenance",
+            message: data.maintenance_message ?? "We are currently performing maintenance.",
+            eta: data.maintenance_eta,
+          });
+          return;
+        }
+
+        if (data.force_update && isOutdated(appVersion, data.min_version)) {
+          setSystemState({
+            type: "update",
+            message: data.update_message ?? "A new version is required to continue.",
+            url: data.apk_url,
+          });
+        }
+      } catch (e: any) {
+        setBootError(e?.message ?? "Retry failed");
       } finally {
         setBooting(false);
       }
     })();
-  }, []);
+  }
 
   /* ---------------- GLOBAL BLOCK ---------------- */
 
@@ -106,6 +178,27 @@ export default function RootLayout() {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color="#8B5CF6" />
+        <Text style={styles.loaderText}>
+          Loading…
+        </Text>
+      </View>
+    );
+  }
+
+  if (bootError) {
+    return (
+      <View style={styles.blockContainer}>
+        <Text style={styles.title}>Connection issue</Text>
+        <Text style={styles.message}>{bootError}</Text>
+
+        {/* Helpful in production debugging */}
+        {!!supabaseUrl ? (
+          <Text style={styles.subText}>Supabase: {supabaseUrl}</Text>
+        ) : null}
+
+        <Pressable style={styles.button} onPress={retryBoot}>
+          <Text style={styles.buttonText}>Retry</Text>
+        </Pressable>
       </View>
     );
   }
@@ -140,21 +233,18 @@ export default function RootLayout() {
     );
   }
 
-  /* ---------------- ROUTING (NO ONBOARDING) ---------------- */
+  /* ---------------- ROUTING ---------------- */
 
   const group = segments[0];
 
-  // Not logged in → force auth screens
   if (!user && group !== "(auth)") {
     return <Redirect href="/(auth)/login" />;
   }
 
-  // Logged in → never show auth/onboarding screens
   if (user && (group === "(auth)" || group === "(onboarding)")) {
     return <Redirect href="/(tabs)" />;
   }
 
-  // Logged in but at root/unknown → go home
   if (user && !group) {
     return <Redirect href="/(tabs)" />;
   }
@@ -176,6 +266,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  loaderText: {
+    marginTop: 12,
+    color: "rgba(255,255,255,0.7)",
+    fontWeight: "800",
+  },
   blockContainer: {
     flex: 1,
     backgroundColor: "#050814",
@@ -188,18 +283,21 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: "#fff",
     marginBottom: 12,
+    textAlign: "center",
   },
   message: {
     color: "#9FA8C7",
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   subText: {
     color: "#6B7280",
     fontSize: 13,
+    textAlign: "center",
+    marginBottom: 12,
   },
   button: {
-    marginTop: 24,
+    marginTop: 10,
     backgroundColor: "#8B5CF6",
     paddingVertical: 14,
     paddingHorizontal: 36,

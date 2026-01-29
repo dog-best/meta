@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -145,6 +146,7 @@ export default function PublicSellerProfile() {
   if (loading) {
     return (
       <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <AppHeader title="Store" />
         <ActivityIndicator />
         <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading store…</Text>
       </LinearGradient>
@@ -154,6 +156,7 @@ export default function PublicSellerProfile() {
   if (err) {
     return (
       <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+        <AppHeader title="Store" />
         <View style={{ marginTop: 10, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Could not load store</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)" }}>{err}</Text>
@@ -168,6 +171,7 @@ export default function PublicSellerProfile() {
   if (!seller) {
     return (
       <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+        <AppHeader title="Store" />
         <View style={{ marginTop: 10, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }}>Store not found</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)" }}>@{handle}</Text>
@@ -181,6 +185,7 @@ export default function PublicSellerProfile() {
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
+      <AppHeader title={seller?.business_name || seller?.display_name || "Store"} />
       <ScrollView contentContainerStyle={{ paddingBottom: 26 }}>
         <View style={{ height: 180, backgroundColor: "rgba(255,255,255,0.06)" }}>
           {bannerUrl ? (

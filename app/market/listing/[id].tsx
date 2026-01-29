@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -197,6 +198,7 @@ export default function ListingDetails() {
         end={{ x: 0.9, y: 1 }}
         style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
       >
+        <AppHeader title="Listing" />
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator />
           <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
@@ -213,6 +215,7 @@ export default function ListingDetails() {
         end={{ x: 0.9, y: 1 }}
         style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
       >
+        <AppHeader title="Listing" />
         <View style={{ marginTop: 18, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
           <Text style={{ color: "#fff", fontWeight: "900" }}>Listing not found</Text>
           {!!err && <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>}
@@ -236,6 +239,10 @@ export default function ListingDetails() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
     >
+      <AppHeader
+        title={listing.title ?? "Listing"}
+        subtitle={`${listing.category ?? "—"} • ${listing.delivery_type ?? "—"} • ${listing.sub_category ?? "—"}`}
+      />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>

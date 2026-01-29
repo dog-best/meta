@@ -1,38 +1,29 @@
+// supabase/functions/market-orders-list/index.ts
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
 function extractBearerToken(req: Request): string | null {
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const auth = req.headers.get("Authorization") ?? "";
+  const token = auth.replace(/^Bearer\s+/i, "").trim();
   return token.length ? token : null;
 }
 
 Deno.serve(async (req) => {
   if (req.method !== "GET") return methodNotAllowed();
 
-  // Create clients
+  const token = extractBearerToken(req);
+  if (!token) return unauth();
+
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();
 
-  // Explicitly validate JWT (since verify_jwt may be disabled at gateway)
-  const token = extractBearerToken(req);
-  if (!token) {
-    return unauth();
-  }
-
-  // Pass token explicitly (more reliable than implicit header use)
+  // ✅ verify the user inside the function (because verify_jwt=false at gateway)
   const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
-
-  if (userErr || !userRes?.user) {
-    // TEMP: return message so you can see what's really wrong.
-    // Once fixed, you can revert to `return unauth();`
-    return unauthWithMessage(userErr?.message ?? "Unauthorized");
-  }
+  if (userErr || !userRes?.user) return unauth();
 
   const userId = userRes.user.id;
 
   const url = new URL(req.url);
-
   const role = (url.searchParams.get("role") ?? "buyer").toLowerCase(); // buyer|seller|all
   const status = url.searchParams.get("status"); // optional filter
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 20), 50);
@@ -73,11 +64,3 @@ Deno.serve(async (req) => {
 
   return ok({ items, count, limit, offset });
 });
-
-// Local helper so you don't have to change your shared http.ts just for debugging
-function unauthWithMessage(message: string) {
-  return new Response(JSON.stringify({ error: "Unauthorized", message }), {
-    status: 401,
-    headers: { "Content-Type": "application/json" },
-  });
-}

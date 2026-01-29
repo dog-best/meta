@@ -5,6 +5,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AppHeader from "@/components/common/AppHeader";
 import { PRODUCT_CATEGORIES, SERVICE_CATEGORIES } from "@/services/market/categories";
 
 const BG0 = "#05040B";
@@ -67,6 +68,7 @@ export default function CategoryPicker() {
         paddingHorizontal: 16,
       }}
     >
+      <AppHeader title="Categories" subtitle="Choose what you want to browse" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>

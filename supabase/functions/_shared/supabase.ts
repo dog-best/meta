@@ -1,26 +1,24 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// supabase/functions/_shared/market/supabase.ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.87.1";
+import { getAnonKey, getServiceKey, getSupabaseUrl } from "./env.ts";
 
-/**
- * Admin client (service role) for server-side operations.
- *
- * IMPORTANT:
- * - Never expose SUPABASE_SERVICE_ROLE_KEY in the Expo app.
- * - Use only inside Edge Functions.
- */
-export const supabaseAdmin = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-);
+export function supabaseUserClient(req: Request) {
+  const supabaseUrl = getSupabaseUrl();
+  const anon = getAnonKey();
 
-/**
- * Create a user-scoped Supabase client (RLS enforced) using the caller JWT.
- */
-export function createUserClient(authHeader: string) {
-  return createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    {
-      global: { headers: { Authorization: authHeader } },
-    }
-  );
+  const authHeader = req.headers.get("Authorization") ?? "";
+
+  return createClient(supabaseUrl, anon, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { headers: { Authorization: authHeader } },
+  });
+}
+
+export function supabaseAdminClient() {
+  const supabaseUrl = getSupabaseUrl();
+  const service = getServiceKey();
+
+  return createClient(supabaseUrl, service, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
 }

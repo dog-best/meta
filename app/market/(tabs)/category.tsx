@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { PRODUCT_CATEGORIES, SERVICE_CATEGORIES } from "@/services/market/categories";
 
 const BG0 = "#05040B";
@@ -81,6 +82,7 @@ export default function MarketHome() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
     >
+      <AppHeader title="Categories" subtitle="Buy products • Hire services • Escrow protected" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: 12 }}>

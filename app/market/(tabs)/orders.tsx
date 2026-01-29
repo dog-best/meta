@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -360,6 +361,7 @@ export default function MarketOrdersTab() {
         paddingHorizontal: 16,
       }}
     >
+      <AppHeader title="Orders" subtitle="Buying & selling history" />
       <ScrollView
         contentContainerStyle={{ paddingBottom: 28 }}
         refreshControl={

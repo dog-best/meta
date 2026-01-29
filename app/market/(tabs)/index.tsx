@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AppHeader from "@/components/common/AppHeader";
 import { CategoryItem, getCategoriesByMain, MarketMainCategory } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 
@@ -230,6 +231,7 @@ export default function MarketHome() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
     >
+      <AppHeader title="Marketplace" subtitle="Browse listings • Buy or hire • Escrow protected" />
       <FlatList
         data={rows}
         keyExtractor={(it) => it.id}

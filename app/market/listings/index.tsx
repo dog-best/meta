@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -226,6 +227,7 @@ export default function ListingsFeed() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
     >
+      <AppHeader title="Listings" subtitle="Browse products and services" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>

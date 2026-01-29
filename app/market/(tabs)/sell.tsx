@@ -6,6 +6,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { getAllCategories } from "@/services/market/categories";
 import { createListing, getMySellerProfile, insertListingImages, setListingCoverImage, uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
@@ -435,6 +436,7 @@ export default function SellTab() {
   if (checkingSeller) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+        <AppHeader title="Sell" subtitle="Products are physical. Services can be digital (remote) or in-person." />
         <View style={{ marginTop: 60, alignItems: "center" }}>
           <ActivityIndicator />
           <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Checking seller profile…</Text>
@@ -446,6 +448,7 @@ export default function SellTab() {
   if (!hasSellerProfile) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+        <AppHeader title="Sell" subtitle="Products are physical. Services can be digital (remote) or in-person." />
         <View style={{ marginTop: 40 }}>
           <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>Start selling</Text>
           <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>You need a Market Profile before you can post listings.</Text>
@@ -463,6 +466,7 @@ export default function SellTab() {
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
+      <AppHeader title="Sell" subtitle="Products are physical. Services can be digital (remote) or in-person." />
       <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
         <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>Create Listing</Text>
         <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>

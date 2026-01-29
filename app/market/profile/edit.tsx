@@ -17,6 +17,7 @@ import {
   View,
 } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
@@ -296,6 +297,7 @@ export default function EditMarketProfile() {
   if (loading) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <AppHeader title="Edit Market Profile" subtitle="Update your store details and images." />
         <ActivityIndicator color="#fff" />
         <Text style={{ marginTop: 10, color: MUTED, fontWeight: "800" }}>Loading…</Text>
       </LinearGradient>
@@ -316,6 +318,7 @@ export default function EditMarketProfile() {
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
+      <AppHeader title="Edit Market Profile" subtitle="Update your store details and images." />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 130 }} keyboardShouldPersistTaps="handled">
           {/* Header */}

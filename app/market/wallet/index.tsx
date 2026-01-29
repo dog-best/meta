@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -66,6 +67,7 @@ export default function MarketWallet() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
     >
+      <AppHeader title="Market Wallet" subtitle="Uses your existing wallet balance (no new funding)" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>

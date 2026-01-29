@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
@@ -317,6 +318,7 @@ export default function CreateMarketProfile() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1 }}
     >
+      <AppHeader title="Create Market Profile" subtitle="Username is public. Your store page becomes searchable." />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}

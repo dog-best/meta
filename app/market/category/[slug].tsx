@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 import { getCategoryBySlug } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 
@@ -101,6 +102,7 @@ export default function CategoryFeed() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
     >
+      <AppHeader title={cat?.title ?? "Category"} subtitle={cat?.subtitle ?? "Browse listings"} />
       <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>

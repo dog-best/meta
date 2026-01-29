@@ -5,6 +5,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
+import AppHeader from "@/components/common/AppHeader";
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
@@ -189,6 +190,7 @@ export default function VerificationApply() {
       end={{ x: 0.9, y: 1 }}
       style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
     >
+      <AppHeader title="Apply for Verification" subtitle="Admin approves before badge is granted" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>
