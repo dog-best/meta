@@ -1,15 +1,59 @@
-import { uploadToBucket } from "@/services/market/marketService";
-import { supabase } from "@/services/supabase";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
+import { supabase } from "@/services/supabase";
+
+const BG0 = "#05040B";
+const BG1 = "#0A0620";
+const PURPLE = "#7C3AED";
+const CARD = "rgba(255,255,255,0.06)";
+const BORDER = "rgba(255,255,255,0.10)";
+const MUTED = "rgba(255,255,255,0.62)";
+const BUCKET = "market-sellers";
+
+function cleanUsername(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 24);
+}
+function isValidUsername(u: string) {
+  return /^[a-z0-9][a-z0-9_]{2,23}$/.test(u);
+}
+function prettyErr(e: any) {
+  if (!e) return "Unknown error";
+  if (typeof e === "string") return e;
+  return e?.message || "Request failed";
+}
+
+type NameStatus = "idle" | "invalid" | "checking" | "current" | "available" | "taken" | "error";
 
 export default function EditMarketProfile() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [stage, setStage] = useState<string | null>(null);
 
   const [username, setUsername] = useState("");
+  const [originalUsername, setOriginalUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [bio, setBio] = useState("");
@@ -19,20 +63,37 @@ export default function EditMarketProfile() {
   const [logoPath, setLogoPath] = useState<string | null>(null);
   const [bannerPath, setBannerPath] = useState<string | null>(null);
 
-  const cleanUsername = useMemo(() => username.trim().toLowerCase().replace(/\s+/g, ""), [username]);
+  const [removeLogo, setRemoveLogo] = useState(false);
+  const [removeBanner, setRemoveBanner] = useState(false);
+
+  const usernameClean = useMemo(() => cleanUsername(username), [username]);
+  const usernameOk = useMemo(() => isValidUsername(usernameClean), [usernameClean]);
+
+  // username availability
+  const [nameStatus, setNameStatus] = useState<NameStatus>("idle");
+  const [nameHint, setNameHint] = useState("Type a username to check availability");
+  const lastReq = useRef(0);
+
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       setLoading(true);
-      const { data: auth } = await supabase.auth.getUser();
-      const user = auth?.user;
-      if (!user) {
-        if (mounted) {
-          setLoading(false);
-        }
+
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) {
+        setLoading(false);
+        Alert.alert("Auth error", authErr.message);
         return;
       }
+      const user = auth?.user;
+      if (!user) {
+        setLoading(false);
+        Alert.alert("Not signed in", "Please log in again.");
+        return;
+      }
+      setUserId(user.id);
 
       const { data, error } = await supabase
         .from("market_seller_profiles")
@@ -40,29 +101,91 @@ export default function EditMarketProfile() {
         .eq("user_id", user.id)
         .maybeSingle();
 
-      if (mounted) {
-        if (error || !data) {
-          setLoading(false);
-          Alert.alert("No profile", "Create your market profile first.");
-          router.replace("/market/profile/create" as any);
+      if (!mounted) return;
 
-          return;
-        }
-        setUsername(data.market_username || "");
-        setDisplayName(data.display_name || "");
-        setBusinessName(data.business_name || "");
-        setBio(data.bio || "");
-        setLogoPath(data.logo_path || null);
-        setBannerPath(data.banner_path || null);
+      if (error || !data) {
         setLoading(false);
+        Alert.alert("No profile", "Create your market profile first.");
+        router.replace("/market/profile/create" as any);
+        return;
       }
+
+      setUsername(data.market_username || "");
+      setOriginalUsername(data.market_username || "");
+      setDisplayName(data.display_name || "");
+      setBusinessName(data.business_name || "");
+      setBio(data.bio || "");
+      setLogoPath(data.logo_path || null);
+      setBannerPath(data.banner_path || null);
+
+      setLoading(false);
     })();
+
     return () => {
       mounted = false;
     };
   }, []);
 
-  async function pickImage(setter: (v: string) => void) {
+  // live availability (no RPC)
+  useEffect(() => {
+    if (!userId) return;
+
+    if (!username.trim()) {
+      setNameStatus("idle");
+      setNameHint("Type a username to check availability");
+      return;
+    }
+    if (!usernameOk) {
+      setNameStatus("invalid");
+      setNameHint("Use 3–24 chars: a–z, 0–9, underscore. Start with letter/number.");
+      return;
+    }
+
+    if (usernameClean === originalUsername) {
+      setNameStatus("current");
+      setNameHint("This is your current username.");
+      return;
+    }
+
+    setNameStatus("checking");
+    setNameHint("Checking availability…");
+
+    const reqId = ++lastReq.current;
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase
+          .from("market_seller_profiles")
+          .select("user_id")
+          .eq("market_username", usernameClean)
+          .neq("user_id", userId)
+          .maybeSingle();
+
+        if (reqId !== lastReq.current) return;
+
+        if (error) {
+          setNameStatus("error");
+          setNameHint(error.message || "Could not check username.");
+          return;
+        }
+
+        if (data?.user_id) {
+          setNameStatus("taken");
+          setNameHint("Taken — choose another username.");
+        } else {
+          setNameStatus("available");
+          setNameHint("Available ✅");
+        }
+      } catch {
+        if (reqId !== lastReq.current) return;
+        setNameStatus("error");
+        setNameHint("Could not check username. Try again.");
+      }
+    }, 450);
+
+    return () => clearTimeout(t);
+  }, [username, usernameClean, usernameOk, originalUsername, userId]);
+
+  async function pickImage(setter: (v: string | null) => void) {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       Alert.alert("Permission needed", "Allow photo access to upload images.");
@@ -72,7 +195,8 @@ export default function EditMarketProfile() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.85,
+      quality: 0.88,
+      aspect: [4, 3],
     });
 
     if (!res.canceled && res.assets?.[0]?.uri) {
@@ -80,47 +204,66 @@ export default function EditMarketProfile() {
     }
   }
 
+  const canSave =
+    !submitting &&
+    !!userId &&
+    usernameOk &&
+    (nameStatus === "current" || nameStatus === "available") &&
+    businessName.trim().length > 0;
+
   async function onSave() {
-    const u = cleanUsername;
-    if (!u || u.length < 3) return Alert.alert("Fix username", "Username must be at least 3 characters.");
-    if (!/^[a-z0-9_]+$/.test(u)) return Alert.alert("Fix username", "Only letters, numbers and underscore allowed.");
-    if (!displayName.trim()) return Alert.alert("Missing name", "Display name is required.");
-    if (!businessName.trim()) return Alert.alert("Missing name", "Business name is required.");
+    if (!userId) return;
+
+    if (!usernameOk) return Alert.alert("Fix username", "Use 3–24 chars: letters, numbers, underscore.");
+    if (!(nameStatus === "current" || nameStatus === "available")) {
+      return Alert.alert("Username not available", "Choose an available username first.");
+    }
+    if (!businessName.trim()) return Alert.alert("Missing", "Business name is required.");
 
     setSubmitting(true);
+    setStage(null);
+
     try {
-      const { data: auth } = await supabase.auth.getUser();
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw authErr;
       const user = auth?.user;
       if (!user) throw new Error("Not logged in");
 
-      let nextLogo = logoPath;
-      let nextBanner = bannerPath;
+      let nextLogo = removeLogo ? null : logoPath;
+      let nextBanner = removeBanner ? null : bannerPath;
 
+      // Upload new logo (optional)
       if (logoUri) {
-        const up = await uploadToBucket({
-          bucket: "market-sellers",
-          path: `${user.id}/logo-${Date.now()}.jpg`,
-          uri: logoUri,
+        setStage("Uploading logo…");
+        const up = await uploadToSupabaseStorage({
+          bucket: BUCKET,
+          path: `${user.id}/logo/logo_${Date.now()}.jpg`,
+          localUri: logoUri,
           contentType: "image/jpeg",
+          upsert: false, // ✅ reduces policy requirements
         });
         nextLogo = up.storagePath;
       }
 
+      // Upload new banner (optional)
       if (bannerUri) {
-        const up = await uploadToBucket({
-          bucket: "market-sellers",
-          path: `${user.id}/banner-${Date.now()}.jpg`,
-          uri: bannerUri,
+        setStage("Uploading banner…");
+        const up = await uploadToSupabaseStorage({
+          bucket: BUCKET,
+          path: `${user.id}/banner/banner_${Date.now()}.jpg`,
+          localUri: bannerUri,
           contentType: "image/jpeg",
+          upsert: false, // ✅ reduces policy requirements
         });
         nextBanner = up.storagePath;
       }
 
+      setStage("Saving profile…");
       const { error } = await supabase
         .from("market_seller_profiles")
         .update({
-          market_username: u,
-          display_name: displayName.trim(),
+          market_username: usernameClean,
+          display_name: displayName.trim() || null,
           business_name: businessName.trim(),
           bio: bio.trim() || null,
           logo_path: nextLogo,
@@ -128,99 +271,367 @@ export default function EditMarketProfile() {
         })
         .eq("user_id", user.id);
 
-      if (error) throw new Error(error.message);
+      if (error) throw error;
 
-      Alert.alert("Saved", "Profile updated.");
+      Alert.alert("Saved ✅", "Profile updated.");
       router.back();
     } catch (e: any) {
-      Alert.alert("Failed", e?.message || "Could not save profile");
+      // Make Storage RLS obvious
+      const msg = prettyErr(e);
+      if (msg.toLowerCase().includes("row level security")) {
+        Alert.alert(
+          "Upload blocked by Storage RLS",
+          "Your profile update is allowed, but Storage upload is blocked.\n\nFix storage.objects INSERT policy for bucket 'market-sellers' and ensure it targets role 'authenticated'.\n\nError:\n" +
+            msg
+        );
+      } else {
+        Alert.alert("Failed", msg);
+      }
     } finally {
       setSubmitting(false);
+      setStage(null);
     }
   }
 
   if (loading) {
     return (
-      <View className="flex-1 items-center justify-center">
-        <ActivityIndicator />
-        <Text className="mt-2 text-gray-600">Loading…</Text>
+      <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color="#fff" />
+        <Text style={{ marginTop: 10, color: MUTED, fontWeight: "800" }}>Loading…</Text>
+      </LinearGradient>
+    );
+  }
+
+  const logoPreview = logoUri
+    ? logoUri
+    : logoPath
+      ? supabase.storage.from(BUCKET).getPublicUrl(logoPath).data.publicUrl
+      : null;
+
+  const bannerPreview = bannerUri
+    ? bannerUri
+    : bannerPath
+      ? supabase.storage.from(BUCKET).getPublicUrl(bannerPath).data.publicUrl
+      : null;
+
+  return (
+    <LinearGradient colors={[BG1, BG0]} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 130 }} keyboardShouldPersistTaps="handled">
+          {/* Header */}
+          <View style={styles.header}>
+            <Pressable onPress={() => router.back()} style={styles.backBtn}>
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>Edit Market Profile</Text>
+              <Text style={styles.subtitle}>Update your store details and images.</Text>
+            </View>
+          </View>
+
+          {/* Banner */}
+          <View style={styles.card}>
+            <Pressable onPress={() => pickImage(setBannerUri)} style={styles.bannerBox}>
+              {bannerPreview ? (
+                <Image source={{ uri: bannerPreview }} style={{ width: "100%", height: "100%" }} />
+              ) : (
+                <View style={{ alignItems: "center" }}>
+                  <Ionicons name="images-outline" size={26} color="rgba(255,255,255,0.75)" />
+                  <Text style={styles.imageHintMain}>Tap to change banner</Text>
+                  <Text style={styles.imageHintSub}>Optional • appears at the top</Text>
+                </View>
+              )}
+            </Pressable>
+
+            <View style={styles.logoRow}>
+              <Pressable onPress={() => pickImage(setLogoUri)} style={styles.logoBox}>
+                {logoPreview ? (
+                  <Image source={{ uri: logoPreview }} style={{ width: 78, height: 78 }} />
+                ) : (
+                  <Ionicons name="image-outline" size={22} color="rgba(255,255,255,0.75)" />
+                )}
+              </Pressable>
+
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Logo</Text>
+                <Text style={{ color: MUTED, marginTop: 4, fontSize: 12 }}>
+                  Optional • helps buyers recognize you
+                </Text>
+
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                  <Chip onPress={() => pickImage(setLogoUri)} icon="image-outline" text="Change logo" />
+                  <Chip
+                    onPress={() => {
+                      setLogoUri(null);
+                      setRemoveLogo(true);
+                    }}
+                    icon="trash-outline"
+                    text="Remove logo"
+                  />
+                  <Chip onPress={() => pickImage(setBannerUri)} icon="images-outline" text="Change banner" />
+                  <Chip
+                    onPress={() => {
+                      setBannerUri(null);
+                      setRemoveBanner(true);
+                    }}
+                    icon="trash-outline"
+                    text="Remove banner"
+                  />
+                </View>
+              </View>
+            </View>
+          </View>
+
+          <SectionTitle title="Store identity" />
+
+          <UsernameField
+            value={username}
+            onChangeText={(v) => {
+              setUsername(v);
+              // if user starts typing again, undo "remove"
+              // (optional behavior)
+            }}
+            usernameClean={usernameClean}
+            nameStatus={nameStatus}
+            nameHint={nameHint}
+            invalid={!usernameOk && username.trim().length > 0}
+          />
+
+          <Field
+            label="Business name"
+            hint="Required"
+            value={businessName}
+            onChangeText={setBusinessName}
+            icon="storefront-outline"
+            placeholder="e.g. Best City Electronics"
+          />
+
+          <Field
+            label="Display name (optional)"
+            hint="Shown on your store page"
+            value={displayName}
+            onChangeText={setDisplayName}
+            icon="person-outline"
+            placeholder="e.g. Ayo"
+          />
+
+          <SectionTitle title="About" />
+
+          <Field
+            label="Bio (optional)"
+            hint="What do you sell / offer?"
+            value={bio}
+            onChangeText={setBio}
+            icon="document-text-outline"
+            placeholder="We sell phones, accessories, and repairs…"
+            multiline
+          />
+
+          {stage ? (
+            <View style={styles.stage}>
+              <ActivityIndicator color="#fff" />
+              <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "900" }}>{stage}</Text>
+            </View>
+          ) : null}
+        </ScrollView>
+
+        {/* Sticky Save */}
+        <View style={styles.footer}>
+          <Pressable
+            onPress={onSave}
+            disabled={!canSave}
+            style={[styles.saveBtn, { opacity: canSave ? 1 : 0.55 }]}
+          >
+            {submitting ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <ActivityIndicator color="#fff" />
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Saving…</Text>
+              </View>
+            ) : (
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>Save Changes</Text>
+            )}
+          </Pressable>
+
+          {!canSave ? (
+            <Text style={{ marginTop: 10, color: MUTED, fontSize: 12, textAlign: "center" }}>
+              Ensure username is valid/available and business name is filled.
+            </Text>
+          ) : null}
+        </View>
+      </KeyboardAvoidingView>
+    </LinearGradient>
+  );
+}
+
+function SectionTitle({ title }: { title: string }) {
+  return (
+    <Text style={{ marginTop: 14, marginBottom: 8, color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 13 }}>
+      {title.toUpperCase()}
+    </Text>
+  );
+}
+
+function Chip({ onPress, icon, text }: { onPress: () => void; icon: any; text: string }) {
+  return (
+    <Pressable onPress={onPress} style={styles.chip}>
+      <Ionicons name={icon} size={16} color="rgba(255,255,255,0.85)" />
+      <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "900", fontSize: 12 }}>{text}</Text>
+    </Pressable>
+  );
+}
+
+function UsernameField(props: {
+  value: string;
+  onChangeText: (v: string) => void;
+  usernameClean: string;
+  nameStatus: NameStatus;
+  nameHint: string;
+  invalid: boolean;
+}) {
+  const border =
+    props.invalid || props.nameStatus === "taken"
+      ? "rgba(239,68,68,0.55)"
+      : "rgba(255,255,255,0.10)";
+
+  return (
+    <View style={[styles.fieldCard, { borderColor: border }]}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+          <View style={styles.iconBox}>
+            <Ionicons name="at-outline" size={18} color="rgba(255,255,255,0.85)" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Username</Text>
+            <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+              Lowercase, no spaces. We check availability.
+            </Text>
+          </View>
+        </View>
+        <UsernameBadge status={props.nameStatus} />
+      </View>
+
+      <View style={styles.usernameInputRow}>
+        <Text style={{ color: "rgba(255,255,255,0.65)", fontWeight: "900" }}>@</Text>
+        <TextInput
+          value={props.value}
+          onChangeText={props.onChangeText}
+          placeholder="bestcity_store"
+          placeholderTextColor="rgba(255,255,255,0.35)"
+          autoCapitalize="none"
+          style={styles.usernameInput}
+        />
+        <Text style={{ color: "rgba(255,255,255,0.45)", fontWeight: "800", fontSize: 12 }}>
+          {props.usernameClean.length}/24
+        </Text>
+      </View>
+
+      <Text style={{ marginTop: 10, color: props.invalid || props.nameStatus === "taken" ? "#FCA5A5" : MUTED, fontSize: 12 }}>
+        Handle: <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>@{props.usernameClean || "yourstore"}</Text>
+        {"  "}•{" "}
+        <Text style={{ fontWeight: "800" }}>{props.nameHint}</Text>
+      </Text>
+    </View>
+  );
+}
+
+function UsernameBadge({ status }: { status: NameStatus }) {
+  const base = { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 } as const;
+
+  if (status === "checking") {
+    return (
+      <View style={{ ...base, borderColor: "rgba(255,255,255,0.18)", backgroundColor: "rgba(255,255,255,0.06)", flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <ActivityIndicator size="small" color="#fff" />
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Checking</Text>
       </View>
     );
   }
 
+  const map: Record<string, { text: string; icon: any; border: string; bg: string; color: string }> = {
+    current: { text: "Current", icon: "checkmark-circle-outline", border: "rgba(99,102,241,0.55)", bg: "rgba(99,102,241,0.12)", color: "rgba(199,210,254,0.95)" },
+    available: { text: "Available", icon: "checkmark-circle-outline", border: "rgba(34,197,94,0.55)", bg: "rgba(34,197,94,0.12)", color: "rgba(187,247,208,0.95)" },
+    taken: { text: "Taken", icon: "close-circle-outline", border: "rgba(239,68,68,0.55)", bg: "rgba(239,68,68,0.10)", color: "rgba(254,202,202,0.95)" },
+    invalid: { text: "Invalid", icon: "alert-circle-outline", border: "rgba(251,191,36,0.55)", bg: "rgba(251,191,36,0.10)", color: "rgba(254,243,199,0.95)" },
+    error: { text: "Error", icon: "warning-outline", border: "rgba(255,255,255,0.22)", bg: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)" },
+    idle: { text: "Type", icon: "pencil-outline", border: "rgba(255,255,255,0.18)", bg: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.85)" },
+  };
+
+  const v = map[status] ?? map.idle;
+
   return (
-    <ScrollView className="flex-1 bg-white" contentContainerStyle={{ padding: 16 }}>
-      <Text className="text-2xl font-bold">Edit Market Profile</Text>
-
-      <View className="mt-6 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Logo</Text>
-        <View className="mt-3 flex-row items-center gap-12">
-          <View className="h-16 w-16 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
-            {logoUri ? (
-              <Image source={{ uri: logoUri }} className="h-16 w-16" />
-            ) : logoPath ? (
-              <Image source={{ uri: supabase.storage.from("market-sellers").getPublicUrl(logoPath).data.publicUrl }} className="h-16 w-16" />
-            ) : (
-              <Text className="text-gray-400">+</Text>
-            )}
-          </View>
-          <Pressable onPress={() => pickImage((u) => setLogoUri(u))} className="rounded-2xl border border-gray-300 px-4 py-3">
-            <Text className="font-semibold">Change Logo</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Banner</Text>
-        <View className="mt-3">
-          <View className="h-28 rounded-2xl bg-gray-100 overflow-hidden items-center justify-center">
-            {bannerUri ? (
-              <Image source={{ uri: bannerUri }} className="h-28 w-full" />
-            ) : bannerPath ? (
-              <Image source={{ uri: supabase.storage.from("market-sellers").getPublicUrl(bannerPath).data.publicUrl }} className="h-28 w-full" />
-            ) : (
-              <Text className="text-gray-400">+</Text>
-            )}
-          </View>
-
-          <Pressable onPress={() => pickImage((u) => setBannerUri(u))} className="mt-3 rounded-2xl border border-gray-300 px-4 py-3 items-center">
-            <Text className="font-semibold">Change Banner</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Username</Text>
-        <TextInput value={username} onChangeText={setUsername} autoCapitalize="none" className="mt-2 rounded-2xl border border-gray-300 px-4 py-3" />
-        <Text className="mt-2 text-gray-500">Preview: @{cleanUsername}</Text>
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Display name</Text>
-        <TextInput value={displayName} onChangeText={setDisplayName} className="mt-2 rounded-2xl border border-gray-300 px-4 py-3" />
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Business name (optional)</Text>
-        <TextInput value={businessName} onChangeText={setBusinessName} className="mt-2 rounded-2xl border border-gray-300 px-4 py-3" />
-      </View>
-
-      <View className="mt-4 rounded-2xl border border-gray-200 p-4">
-        <Text className="font-semibold">Bio (optional)</Text>
-        <TextInput value={bio} onChangeText={setBio} multiline className="mt-2 rounded-2xl border border-gray-300 px-4 py-3" style={{ minHeight: 90, textAlignVertical: "top" }} />
-      </View>
-
-      <Pressable
-        onPress={onSave}
-        disabled={submitting}
-        className={`mt-6 rounded-2xl py-4 items-center ${submitting ? "bg-gray-300" : "bg-black"}`}
-      >
-        {submitting ? <ActivityIndicator color="#000" /> : <Text className="text-white font-semibold">Save Changes</Text>}
-      </Pressable>
-
-      <Pressable onPress={() => router.back()} className="mt-3 py-3 items-center">
-        <Text className="text-gray-600">Cancel</Text>
-      </Pressable>
-    </ScrollView>
+    <View style={{ ...base, borderColor: v.border, backgroundColor: v.bg, flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <Ionicons name={v.icon} size={16} color={v.color} />
+      <Text style={{ color: v.color, fontWeight: "900", fontSize: 12 }}>{v.text}</Text>
+    </View>
   );
 }
+
+function Field(props: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  multiline?: boolean;
+  keyboardType?: any;
+  autoCapitalize?: any;
+  icon?: any;
+  placeholder?: string;
+}) {
+  return (
+    <View style={styles.fieldCard}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        {props.icon ? (
+          <View style={styles.iconBox}>
+            <Ionicons name={props.icon} size={18} color="rgba(255,255,255,0.85)" />
+          </View>
+        ) : null}
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: "#fff", fontWeight: "900" }}>{props.label}</Text>
+          {!!props.hint && <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>{props.hint}</Text>}
+        </View>
+      </View>
+
+      <TextInput
+        value={props.value}
+        onChangeText={props.onChangeText}
+        placeholder={props.placeholder ?? ""}
+        placeholderTextColor="rgba(255,255,255,0.35)"
+        multiline={props.multiline}
+        keyboardType={props.keyboardType}
+        autoCapitalize={props.autoCapitalize ?? "sentences"}
+        style={[
+          styles.input,
+          props.multiline ? { minHeight: 110, textAlignVertical: "top" } : null,
+        ]}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
+  backBtn: { width: 44, height: 44, borderRadius: 16, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" },
+  title: { color: "#fff", fontSize: 22, fontWeight: "900" },
+  subtitle: { color: MUTED, marginTop: 4, fontSize: 12 },
+
+  card: { borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
+  bannerBox: { height: 160, alignItems: "center", justifyContent: "center" },
+  imageHintMain: { marginTop: 8, color: "rgba(255,255,255,0.9)", fontWeight: "900" },
+  imageHintSub: { marginTop: 4, color: MUTED, fontSize: 12 },
+
+  logoRow: { padding: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  logoBox: { width: 78, height: 78, borderRadius: 24, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.06)", overflow: "hidden", alignItems: "center", justifyContent: "center" },
+
+  chip: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(255,255,255,0.06)", flexDirection: "row", alignItems: "center", gap: 6 },
+
+  fieldCard: { borderRadius: 22, padding: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, marginTop: 10 },
+  iconBox: { width: 34, height: 34, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", alignItems: "center", justifyContent: "center" },
+  input: { marginTop: 10, color: "#fff", fontWeight: "800", fontSize: 14, paddingVertical: 12, paddingHorizontal: 12, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" },
+
+  usernameInputRow: { marginTop: 10, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" },
+  usernameInput: { flex: 1, color: "#fff", fontWeight: "900", fontSize: 14, paddingVertical: 12 },
+
+  stage: { marginTop: 12, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", backgroundColor: "rgba(255,255,255,0.06)", flexDirection: "row", alignItems: "center", gap: 10 },
+
+  footer: { position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 10, paddingBottom: Platform.OS === "ios" ? 24 : 16, backgroundColor: "rgba(5,4,11,0.92)", borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)" },
+  saveBtn: { borderRadius: 18, paddingVertical: 14, alignItems: "center", backgroundColor: PURPLE, borderWidth: 1, borderColor: PURPLE },
+});
