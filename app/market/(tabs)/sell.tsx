@@ -377,7 +377,8 @@ export default function SellTab() {
               ? (crypto as any).randomUUID()
               : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-          const path = `listings/${listing.id}/${i + 1}-${random}.${ext}`;
+          const path = `${user.id}/listings/${listing.id}/${i + 1}-${random}.${ext}`;
+
 
           const up = await uploadToBucket({
             bucket: "market-listings",
