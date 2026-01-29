@@ -1,9 +1,9 @@
 // app/_layout.tsx
+// app/_layout.tsx
 import { supabase } from "@/services/supabase";
-import { installFetchTimeout } from "@/services/network/fetchTimeout";
 import { Redirect, Slot, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -21,11 +21,39 @@ import * as Linking from "expo-linking";
 // AdMob
 import mobileAds from "react-native-google-mobile-ads";
 
-/* ✅ GLOBAL NETWORK FIX (prevents infinite loading across the app) */
-installFetchTimeout(15000); // 15s is a good production default
+/* ---------------- OPTIONAL: GLOBAL FETCH TIMEOUT ----------------
+   If you already added a global fetch timeout elsewhere, remove this block.
+   This prevents "infinite loading" when network calls hang in RN. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __FETCH_TIMEOUT_INSTALLED__: boolean | undefined;
+}
+function installFetchTimeout(timeoutMs = 15000) {
+  if (globalThis.__FETCH_TIMEOUT_INSTALLED__) return;
+  globalThis.__FETCH_TIMEOUT_INSTALLED__ = true;
+
+  const originalFetch = globalThis.fetch.bind(globalThis);
+
+  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const callerSignal = init.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    try {
+      return await originalFetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+}
+installFetchTimeout(15000);
 
 /* ---------------- VERSION COMPARE ---------------- */
-
 const isOutdated = (current: string, min: string) => {
   const c = current.split(".").map(Number);
   const m = min.split(".").map(Number);
@@ -50,7 +78,12 @@ export default function RootLayout() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
 
-  const supabaseUrl = useMemo(() => (supabase as any)?.supabaseUrl as string | undefined, []);
+  const supabaseUrl = useMemo(
+    () => (supabase as any)?.supabaseUrl as string | undefined,
+    []
+  );
+
+  const retryNonceRef = useRef(0);
 
   /* ---------------- ADMOB INIT ---------------- */
   useEffect(() => {
@@ -59,23 +92,11 @@ export default function RootLayout() {
     }
   }, []);
 
-  /* ---------------- BOOT WATCHDOG (no infinite loader) ---------------- */
-  useEffect(() => {
-    const id = setTimeout(() => {
-      // If we’re still booting after 20s, show a helpful screen instead of spinner forever
-      setBootError(
-        "Having trouble connecting. Please check your network and Supabase URL."
-      );
-      setBooting(false);
-    }, 20000);
-
-    return () => clearTimeout(id);
-  }, []);
-
   /* ---------------- SYSTEM CONTROL CHECK ---------------- */
   useEffect(() => {
     let mounted = true;
 
+    // Only block in production builds
     if (__DEV__) {
       setBooting(false);
       return;
@@ -94,13 +115,12 @@ export default function RootLayout() {
 
         if (!mounted) return;
 
-        // If network fails or table missing, we don’t block the whole app
+        // If this fails, do NOT block the whole app
         if (error || !data) {
           setBooting(false);
           return;
         }
 
-        /* 🔧 MAINTENANCE HAS TOP PRIORITY */
         if (data.maintenance_enabled) {
           setSystemState({
             type: "maintenance",
@@ -112,7 +132,6 @@ export default function RootLayout() {
           return;
         }
 
-        /* 🔁 FORCE UPDATE */
         if (data.force_update && isOutdated(appVersion, data.min_version)) {
           setSystemState({
             type: "update",
@@ -123,7 +142,7 @@ export default function RootLayout() {
         }
       } catch (e: any) {
         if (!mounted) return;
-        setBootError(e?.message ?? "System check failed");
+        setBootError(e?.message ?? "System control check failed");
       } finally {
         if (!mounted) return;
         setBooting(false);
@@ -133,52 +152,34 @@ export default function RootLayout() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [retryNonceRef.current]);
 
-  function retryBoot() {
-    // Simple retry: reload system control check by toggling booting
+  /* ---------------- WATCHDOG (FIXED) ----------------
+     This now only runs while booting/loading is true.
+     It clears automatically when booting/loading ends. */
+  useEffect(() => {
+    if (!(booting || loading)) return;
+
+    const id = setTimeout(() => {
+      setBootError("Having trouble connecting. Please check your network and Supabase URL.");
+      setBooting(false);
+    }, 20000);
+
+    return () => clearTimeout(id);
+  }, [booting, loading]);
+
+  const retryBoot = () => {
     setBootError(null);
     setBooting(true);
-
-    // Re-run the system check by calling it again (same logic)
-    (async () => {
-      try {
-        const appVersion = Application.nativeApplicationVersion ?? "0.0.0";
-        const { data } = await supabase.from("app_system_control").select("*").single();
-
-        if (!data) return;
-
-        if (data.maintenance_enabled) {
-          setSystemState({
-            type: "maintenance",
-            message: data.maintenance_message ?? "We are currently performing maintenance.",
-            eta: data.maintenance_eta,
-          });
-          return;
-        }
-
-        if (data.force_update && isOutdated(appVersion, data.min_version)) {
-          setSystemState({
-            type: "update",
-            message: data.update_message ?? "A new version is required to continue.",
-            url: data.apk_url,
-          });
-        }
-      } catch (e: any) {
-        setBootError(e?.message ?? "Retry failed");
-      } finally {
-        setBooting(false);
-      }
-    })();
-  }
+    retryNonceRef.current += 1;
+  };
 
   /* ---------------- GLOBAL BLOCK ---------------- */
-
   if (booting || loading) {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color="#8B5CF6" />
-        <Text style={styles.loaderText}>
+        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
           Loading…
         </Text>
       </View>
@@ -191,9 +192,8 @@ export default function RootLayout() {
         <Text style={styles.title}>Connection issue</Text>
         <Text style={styles.message}>{bootError}</Text>
 
-        {/* Helpful in production debugging */}
-        {!!supabaseUrl ? (
-          <Text style={styles.subText}>Supabase: {supabaseUrl}</Text>
+        {supabaseUrl ? (
+          <Text style={styles.subText}>Supabase URL: {supabaseUrl}</Text>
         ) : null}
 
         <Pressable style={styles.button} onPress={retryBoot}>
@@ -233,8 +233,7 @@ export default function RootLayout() {
     );
   }
 
-  /* ---------------- ROUTING ---------------- */
-
+  /* ---------------- ROUTING (NO ONBOARDING) ---------------- */
   const group = segments[0];
 
   if (!user && group !== "(auth)") {
@@ -258,18 +257,12 @@ export default function RootLayout() {
 }
 
 /* ---------------- STYLES ---------------- */
-
 const styles = StyleSheet.create({
   loader: {
     flex: 1,
     backgroundColor: "#060B1A",
     justifyContent: "center",
     alignItems: "center",
-  },
-  loaderText: {
-    marginTop: 12,
-    color: "rgba(255,255,255,0.7)",
-    fontWeight: "800",
   },
   blockContainer: {
     flex: 1,
@@ -288,7 +281,7 @@ const styles = StyleSheet.create({
   message: {
     color: "#9FA8C7",
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: 16,
   },
   subText: {
     color: "#6B7280",

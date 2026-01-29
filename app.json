@@ -12,10 +12,7 @@
       "package": "com.bestcity.pay",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "INTERNET",
-        "POST_NOTIFICATIONS"
-      ],
+      "permissions": ["INTERNET", "POST_NOTIFICATIONS"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",

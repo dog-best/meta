@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();
 
-  // ✅ verify the user inside the function (because verify_jwt=false at gateway)
+  // verify user inside function (since config.toml verify_jwt=false)
   const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
   if (userErr || !userRes?.user) return unauth();
 

@@ -9,6 +9,20 @@ type UploadParams = {
   upsert?: boolean; // ✅ optional, won't break existing call sites
 };
 
+// ---------------- TIMEOUT WRAPPER ----------------
+function withTimeout<T>(p: Promise<T>, ms: number, label = "Operation") {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then((v) => {
+      clearTimeout(t);
+      resolve(v);
+    }).catch((e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+  });
+}
+
 // Pure JS base64 decoder (no atob / no extra packages)
 function base64ToUint8Array(base64: string) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -36,33 +50,39 @@ function base64ToUint8Array(base64: string) {
 }
 
 async function readFileAsBytes(localUri: string) {
-  const base64 = await FileSystem.readAsStringAsync(localUri, {
-    encoding: "base64" as any, // ✅ works even when EncodingType is missing
-  });
+  // Reading large files can hang sometimes; give it a timeout too.
+  const base64 = await withTimeout(
+    FileSystem.readAsStringAsync(localUri, {
+      encoding: "base64" as any, // ✅ works even when EncodingType is missing
+    }),
+    30000,
+    "Reading file",
+  );
+
   return base64ToUint8Array(base64);
 }
 
 export async function uploadToSupabaseStorage(params: UploadParams) {
-  const {
-    bucket,
-    path,
-    localUri,
-    contentType = "image/jpeg",
-    upsert = true,
-  } = params;
+  const { bucket, path, localUri, contentType = "image/jpeg", upsert = true } = params;
 
   // Ensure session exists so Storage request includes JWT
-  const { data: sess, error: sessErr } = await supabase.auth.getSession();
+  const { data: sess, error: sessErr } = await withTimeout(
+    supabase.auth.getSession(),
+    15000,
+    "Auth session check",
+  );
   if (sessErr) throw sessErr;
   if (!sess.session) throw new Error("No session. Please sign in again.");
 
   const bytes = await readFileAsBytes(localUri);
 
-  const { error: uploadErr } = await supabase.storage.from(bucket).upload(path, bytes, {
+  // Storage uploads can be slow on mobile networks; allow 2 minutes
+  const uploadPromise = supabase.storage.from(bucket).upload(path, bytes, {
     contentType,
     upsert,
   });
 
+  const { error: uploadErr } = await withTimeout(uploadPromise, 120000, "Storage upload");
   if (uploadErr) throw uploadErr;
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
