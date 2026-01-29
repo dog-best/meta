@@ -1,14 +1,35 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
+function extractBearerToken(req: Request): string | null {
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  return token.length ? token : null;
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "GET") return methodNotAllowed();
 
+  // Create clients
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();
 
-  const { data: u, error: ue } = await supabase.auth.getUser();
-  if (ue || !u.user) return unauth();
+  // Explicitly validate JWT (since verify_jwt may be disabled at gateway)
+  const token = extractBearerToken(req);
+  if (!token) {
+    return unauth();
+  }
+
+  // Pass token explicitly (more reliable than implicit header use)
+  const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+
+  if (userErr || !userRes?.user) {
+    // TEMP: return message so you can see what's really wrong.
+    // Once fixed, you can revert to `return unauth();`
+    return unauthWithMessage(userErr?.message ?? "Unauthorized");
+  }
+
+  const userId = userRes.user.id;
 
   const url = new URL(req.url);
 
@@ -34,9 +55,9 @@ Deno.serve(async (req) => {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  if (role === "buyer") query = query.eq("buyer_id", u.user.id);
-  else if (role === "seller") query = query.eq("seller_id", u.user.id);
-  else query = query.or(`buyer_id.eq.${u.user.id},seller_id.eq.${u.user.id}`);
+  if (role === "buyer") query = query.eq("buyer_id", userId);
+  else if (role === "seller") query = query.eq("seller_id", userId);
+  else query = query.or(`buyer_id.eq.${userId},seller_id.eq.${userId}`);
 
   if (status) query = query.eq("status", status);
 
@@ -52,3 +73,11 @@ Deno.serve(async (req) => {
 
   return ok({ items, count, limit, offset });
 });
+
+// Local helper so you don't have to change your shared http.ts just for debugging
+function unauthWithMessage(message: string) {
+  return new Response(JSON.stringify({ error: "Unauthorized", message }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
+}
