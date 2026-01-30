@@ -4,12 +4,13 @@ import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
 import { getAllCategories } from "@/services/market/categories";
 import { createListing, getMySellerProfile, insertListingImages, setListingCoverImage, uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
+import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -23,6 +24,7 @@ type Img = { uri: string; contentType: string };
 type DeliveryType = "physical" | "digital" | "in_person";
 type Currency = "NGN" | "USDC";
 type MainCategory = "product" | "service";
+type AvailabilityScope = "global" | "continent" | "country" | "state" | "city" | "radius";
 
 function safeNumber(input: string) {
   const n = Number(String(input).replace(/,/g, "").trim());
@@ -156,6 +158,17 @@ export default function SellTab() {
   const [price, setPrice] = useState("");
   const [stockQty, setStockQty] = useState("");
 
+  const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("global");
+  const [availabilityContinents, setAvailabilityContinents] = useState<string[]>([]);
+  const [availabilityCountryName, setAvailabilityCountryName] = useState("");
+  const [availabilityCountryCode, setAvailabilityCountryCode] = useState("");
+  const [availabilityState, setAvailabilityState] = useState("");
+  const [availabilityCity, setAvailabilityCity] = useState("");
+  const [availabilityRadiusKm, setAvailabilityRadiusKm] = useState("");
+  const [availabilityCenter, setAvailabilityCenter] = useState<{ lat: number; lng: number; label: string } | null>(null);
+  const [availabilityNote, setAvailabilityNote] = useState("");
+  const [locatingAvailability, setLocatingAvailability] = useState(false);
+
   const [images, setImages] = useState<Img[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
@@ -197,6 +210,8 @@ export default function SellTab() {
     for (const c of merged) map.set(`${c.main}:${c.slug}`, c);
     return Array.from(map.values());
   }, []);
+
+  const availabilityContinentsList = ["Africa", "Europe", "Asia", "North America", "South America", "Oceania"];
 
   const visibleSubs = useMemo(() => {
     const list = categories.filter((c: any) => c.main === category);
@@ -294,6 +309,41 @@ export default function SellTab() {
     return subCategory;
   }
 
+  async function fillAvailabilityFromLocation() {
+    setLocatingAvailability(true);
+    try {
+      const res = await getCurrentLocationWithGeocode();
+      setAvailabilityCenter({ lat: res.coords.lat, lng: res.coords.lng, label: res.label });
+      setAvailabilityCountryName(res.geo.country || "");
+      setAvailabilityCountryCode(res.geo.countryCode || "");
+      setAvailabilityState(res.geo.region || "");
+      setAvailabilityCity(res.geo.city || "");
+      if (availabilityScope === "radius" && !availabilityRadiusKm.trim()) {
+        setAvailabilityRadiusKm("10");
+      }
+    } catch (e: any) {
+      const msg = e?.message || "Could not access location";
+      Alert.alert("Location error", msg);
+    } finally {
+      setLocatingAvailability(false);
+    }
+  }
+
+  function buildAvailability() {
+    const radius = availabilityScope === "radius" ? safeNumber(availabilityRadiusKm) : NaN;
+    const center = availabilityCenter ?? { lat: 0, lng: 0, label: "" };
+    return {
+      scope: availabilityScope,
+      continents: availabilityContinents,
+      country: { name: availabilityCountryName.trim(), code: availabilityCountryCode.trim() },
+      state: availabilityState.trim(),
+      city: availabilityCity.trim(),
+      radiusKm: Number.isFinite(radius) ? radius : 0,
+      center,
+      note: availabilityNote.trim(),
+    };
+  }
+
   function validate(): string | null {
     const t = title.trim();
     if (!t) return "Title is required";
@@ -320,6 +370,20 @@ export default function SellTab() {
       } else {
         if (images.length === 0) return "Add at least 1 image";
       }
+    }
+
+    if (availabilityScope === "continent" && availabilityContinents.length === 0) return "Pick at least one continent";
+    if (availabilityScope === "country" && !availabilityCountryName.trim() && !availabilityCountryCode.trim()) return "Country is required";
+    if (availabilityScope === "state" && (!availabilityState.trim() || (!availabilityCountryName.trim() && !availabilityCountryCode.trim()))) {
+      return "State and country are required";
+    }
+    if (availabilityScope === "city" && (!availabilityCity.trim() || (!availabilityCountryName.trim() && !availabilityCountryCode.trim()))) {
+      return "City and country are required";
+    }
+    if (availabilityScope === "radius") {
+      const r = safeNumber(availabilityRadiusKm);
+      if (!availabilityCenter) return "Pick a center location for your radius";
+      if (!Number.isFinite(r) || r <= 0) return "Radius must be greater than 0 km";
     }
 
     return null;
@@ -350,6 +414,7 @@ export default function SellTab() {
           ? `\n\n---\nWebsite preview link: ${websiteUrl.trim()}\n(Note: preview/watermark coming soon.)`
           : "";
       const finalDesc = (descBase + extra).trim() || null;
+      const availability = buildAvailability();
 
       console.log("[SellTab] createListing -> start");
       setStage("Creating listing…");
@@ -363,6 +428,7 @@ export default function SellTab() {
         price_amount: unitPrice,
         currency,
         stock_qty: category === "product" ? qty : null,
+        availability,
       } as any);
       console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
 
@@ -426,6 +492,15 @@ export default function SellTab() {
       setImages([]);
       setUseCustomSub(false);
       setCustomSub("");
+      setAvailabilityScope("global");
+      setAvailabilityContinents([]);
+      setAvailabilityCountryName("");
+      setAvailabilityCountryCode("");
+      setAvailabilityState("");
+      setAvailabilityCity("");
+      setAvailabilityRadiusKm("");
+      setAvailabilityCenter(null);
+      setAvailabilityNote("");
       setStage(null);
 
       router.push("/market/(tabs)" as any);
@@ -538,6 +613,129 @@ export default function SellTab() {
               <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>We’ll save it as a searchable sub-category.</Text>
             </>
           ) : null}
+        </CardBox>
+
+        <CardBox>
+          <Text style={{ color: "#fff", fontWeight: "900" }}>Availability</Text>
+          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>Choose where this listing is available.</Text>
+
+          <Label>Scope</Label>
+          <Row style={{ flexWrap: "wrap" }}>
+            {["global", "continent", "country", "state", "city", "radius"].map((s) => (
+              <Chip key={s} active={availabilityScope === s} label={s} onPress={() => setAvailabilityScope(s as AvailabilityScope)} />
+            ))}
+          </Row>
+
+          <Pressable
+            onPress={fillAvailabilityFromLocation}
+            disabled={locatingAvailability}
+            style={{
+              marginTop: 12,
+              borderRadius: 16,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              opacity: locatingAvailability ? 0.7 : 1,
+              flexDirection: "row",
+              gap: 8,
+              justifyContent: "center",
+            }}
+          >
+            {locatingAvailability ? <ActivityIndicator /> : <Ionicons name="locate-outline" size={18} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
+          </Pressable>
+
+          {availabilityScope === "continent" ? (
+            <>
+              <Label>Continents</Label>
+              <Row style={{ flexWrap: "wrap" }}>
+                {availabilityContinentsList.map((c) => {
+                  const active = availabilityContinents.includes(c);
+                  return (
+                    <Chip
+                      key={c}
+                      active={active}
+                      label={c}
+                      onPress={() =>
+                        setAvailabilityContinents((prev) =>
+                          active ? prev.filter((v) => v !== c) : [...prev, c]
+                        )
+                      }
+                    />
+                  );
+                })}
+              </Row>
+            </>
+          ) : null}
+
+          {["country", "state", "city", "radius"].includes(availabilityScope) ? (
+            <>
+              <Label>Country name</Label>
+              <Input value={availabilityCountryName} onChangeText={setAvailabilityCountryName} placeholder="e.g. Nigeria" />
+              <Label>Country code (optional)</Label>
+              <Input value={availabilityCountryCode} onChangeText={setAvailabilityCountryCode} placeholder="e.g. NG" autoCapitalize="characters" />
+            </>
+          ) : null}
+
+          {["state", "city", "radius"].includes(availabilityScope) ? (
+            <>
+              <Label>State / Region</Label>
+              <Input value={availabilityState} onChangeText={setAvailabilityState} placeholder="e.g. Lagos" />
+            </>
+          ) : null}
+
+          {["city", "radius"].includes(availabilityScope) ? (
+            <>
+              <Label>City</Label>
+              <Input value={availabilityCity} onChangeText={setAvailabilityCity} placeholder="e.g. Ikeja" />
+            </>
+          ) : null}
+
+          {availabilityScope === "radius" ? (
+            <>
+              <Label>Radius (km)</Label>
+              <Input value={availabilityRadiusKm} onChangeText={setAvailabilityRadiusKm} placeholder="e.g. 10" keyboardType="numeric" />
+
+              <Label>Center</Label>
+              <View style={{ marginTop: 8, borderRadius: 16, padding: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+                <Text style={{ color: "#fff", fontWeight: "800" }}>
+                  {availabilityCenter?.label || "No center set yet"}
+                </Text>
+                {availabilityCenter ? (
+                  <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
+                    {availabilityCenter.lat.toFixed(5)}, {availabilityCenter.lng.toFixed(5)}
+                  </Text>
+                ) : null}
+              </View>
+
+              {availabilityCenter ? (
+                <Pressable
+                  onPress={() => Linking.openURL(`https://maps.google.com/?q=${availabilityCenter.lat},${availabilityCenter.lng}`)}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.12)",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    alignSelf: "flex-start",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Open in Google Maps</Text>
+                </Pressable>
+              ) : null}
+            </>
+          ) : null}
+
+          <Label>Note (optional)</Label>
+          <Input value={availabilityNote} onChangeText={setAvailabilityNote} placeholder="e.g. Weekdays only" />
+
+          <Text style={{ marginTop: 10, color: MUTED, fontSize: 12 }}>
+            Summary: <Text style={{ color: "#fff", fontWeight: "900" }}>{formatAvailabilitySummary(buildAvailability())}</Text>
+          </Text>
         </CardBox>
 
         <CardBox>

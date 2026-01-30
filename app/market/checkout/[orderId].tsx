@@ -1,13 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
+import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -78,6 +79,11 @@ export default function Checkout() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [order, setOrder] = useState<any>(null);
+  const [listing, setListing] = useState<any>(null);
+  const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
+  const [savingGeo, setSavingGeo] = useState(false);
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();
@@ -87,6 +93,89 @@ export default function Checkout() {
       return null;
     }
     return user;
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!oid) return;
+      setLoading(true);
+      try {
+        const { data: o, error: oErr } = await supabase
+          .from("market_orders")
+          .select("id,listing_id,delivery_address")
+          .eq("id", oid)
+          .maybeSingle();
+        if (oErr) throw oErr;
+
+        const listingId = (o as any)?.listing_id;
+        let l: any = null;
+        if (listingId) {
+          const { data: lRow, error: lErr } = await supabase
+            .from("market_listings")
+            .select("id,title,delivery_type,availability")
+            .eq("id", listingId)
+            .maybeSingle();
+          if (lErr) throw lErr;
+          l = lRow;
+        }
+
+        if (mounted) {
+          setOrder(o);
+          setListing(l);
+          const geo = (o as any)?.delivery_address?.geo ?? null;
+          setDeliveryGeo(geo && Object.keys(geo).length ? geo : null);
+        }
+      } catch (e: any) {
+        if (mounted) setErr(e?.message || "Failed to load order");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [oid]);
+
+  async function saveDeliveryGeo(geo: DeliveryGeo) {
+    if (!oid) return;
+    setSavingGeo(true);
+    try {
+      const next = { ...(order?.delivery_address ?? {}), geo };
+      const { error } = await supabase
+        .from("market_orders")
+        .update({ delivery_address: next })
+        .eq("id", oid);
+      if (error) throw error;
+      setOrder((prev: any) => ({ ...(prev ?? {}), delivery_address: next }));
+      setDeliveryGeo(geo);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to save location");
+    } finally {
+      setSavingGeo(false);
+    }
+  }
+
+  async function useCurrentLocation() {
+    setErr(null);
+    setSavingGeo(true);
+    try {
+      const res = await getCurrentLocationWithGeocode();
+      const geo: DeliveryGeo = {
+        lat: res.coords.lat,
+        lng: res.coords.lng,
+        city: res.geo.city || "",
+        region: res.geo.region || "",
+        country: res.geo.country || "",
+        countryCode: res.geo.countryCode || "",
+        label: res.label,
+      };
+      await saveDeliveryGeo(geo);
+    } catch (e: any) {
+      setErr(e?.message || "Could not access location");
+    } finally {
+      setSavingGeo(false);
+    }
   }
 
   async function payWithWallet() {
@@ -168,6 +257,72 @@ export default function Checkout() {
 
         <View
           style={{
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Availability</Text>
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
+            {formatAvailabilitySummary(listing?.availability)}
+          </Text>
+
+          {deliveryGeo && !availabilityMayMatch(listing?.availability, deliveryGeo) ? (
+            <View
+              style={{
+                marginTop: 10,
+                borderRadius: 14,
+                padding: 10,
+                borderWidth: 1,
+                borderColor: "rgba(251,191,36,0.55)",
+                backgroundColor: "rgba(251,191,36,0.10)",
+              }}
+            >
+              <Text style={{ color: "rgba(254,243,199,0.95)", fontWeight: "900", fontSize: 12 }}>
+                Warning: your delivery location may be outside the seller’s availability. You can still continue.
+              </Text>
+            </View>
+          ) : null}
+
+          <Pressable
+            onPress={useCurrentLocation}
+            disabled={savingGeo}
+            style={{
+              marginTop: 12,
+              borderRadius: 16,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              flexDirection: "row",
+              gap: 8,
+              justifyContent: "center",
+              opacity: savingGeo ? 0.7 : 1,
+            }}
+          >
+            {savingGeo ? <ActivityIndicator /> : <Ionicons name="locate-outline" size={18} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
+          </Pressable>
+
+          {loading ? (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>Loading order detailsâ€¦</Text>
+          ) : deliveryGeo ? (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+              Delivery location: {deliveryGeo.label || "Saved"} • {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
+            </Text>
+          ) : (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+              No delivery location set yet.
+            </Text>
+          )}
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
             borderRadius: 22,
             padding: 16,
             backgroundColor: "rgba(255,255,255,0.05)",

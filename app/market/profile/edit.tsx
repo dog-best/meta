@@ -20,6 +20,7 @@ import {
 import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
+import { getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -58,6 +59,9 @@ export default function EditMarketProfile() {
   const [displayName, setDisplayName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [bio, setBio] = useState("");
+  const [locationText, setLocationText] = useState("");
+  const [address, setAddress] = useState<any>({});
+  const [locatingAddress, setLocatingAddress] = useState(false);
 
   const [logoUri, setLogoUri] = useState<string | null>(null);
   const [bannerUri, setBannerUri] = useState<string | null>(null);
@@ -92,7 +96,7 @@ export default function EditMarketProfile() {
 
         const { data, error } = await supabase
           .from("market_seller_profiles")
-          .select("market_username,display_name,business_name,bio,logo_path,banner_path")
+          .select("market_username,display_name,business_name,bio,logo_path,banner_path,location_text,address")
           .eq("user_id", user.id)
           .maybeSingle();
 
@@ -109,6 +113,8 @@ export default function EditMarketProfile() {
         setDisplayName(data.display_name || "");
         setBusinessName(data.business_name || "");
         setBio(data.bio || "");
+        setLocationText(data.location_text || "");
+        setAddress((data as any).address || {});
         setLogoPath(data.logo_path || null);
         setBannerPath(data.banner_path || null);
       } catch (e: any) {
@@ -211,6 +217,28 @@ export default function EditMarketProfile() {
     (nameStatus === "current" || nameStatus === "available") &&
     businessName.trim().length > 0;
 
+  async function useCurrentLocation() {
+    setLocatingAddress(true);
+    try {
+      const res = await getCurrentLocationWithGeocode();
+      setLocationText(res.label);
+      setAddress({
+        label: res.label,
+        city: res.geo.city || "",
+        region: res.geo.region || "",
+        country: res.geo.country || "",
+        countryCode: res.geo.countryCode || "",
+        postalCode: res.geo.postalCode || "",
+        lat: res.coords.lat,
+        lng: res.coords.lng,
+      });
+    } catch (e: any) {
+      Alert.alert("Location error", e?.message || "Could not access location.");
+    } finally {
+      setLocatingAddress(false);
+    }
+  }
+
   async function onSave() {
     if (!userId) return;
 
@@ -266,6 +294,8 @@ export default function EditMarketProfile() {
           display_name: displayName.trim() || null,
           business_name: businessName.trim(),
           bio: bio.trim() || null,
+          location_text: locationText.trim() || null,
+          address: address || {},
           logo_path: nextLogo,
           banner_path: nextBanner,
         })
@@ -416,6 +446,36 @@ export default function EditMarketProfile() {
             icon="person-outline"
             placeholder="e.g. Ayo"
           />
+
+          <Field
+            label="Location (optional)"
+            hint="Helps buyers know where you operate"
+            value={locationText}
+            onChangeText={setLocationText}
+            icon="location-outline"
+            placeholder="Lagos, Abuja..."
+          />
+
+          <Pressable
+            onPress={useCurrentLocation}
+            disabled={locatingAddress}
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              flexDirection: "row",
+              gap: 8,
+              justifyContent: "center",
+              opacity: locatingAddress ? 0.7 : 1,
+            }}
+          >
+            {locatingAddress ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate-outline" size={18} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
+          </Pressable>
 
           <SectionTitle title="About" />
 

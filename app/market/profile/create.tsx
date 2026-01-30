@@ -20,6 +20,7 @@ import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { fetchWithTimeout } from "@/services/net";
 import { supabase } from "@/services/supabase";
+import { getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -109,6 +110,8 @@ export default function CreateMarketProfile() {
   const [bio, setBio] = useState("");
   const [phone, setPhone] = useState("");
   const [locationText, setLocationText] = useState("");
+  const [address, setAddress] = useState<any>({});
+  const [locatingAddress, setLocatingAddress] = useState(false);
 
   const [offersRemote, setOffersRemote] = useState(false);
   const [offersInPerson, setOffersInPerson] = useState(false);
@@ -187,6 +190,28 @@ export default function CreateMarketProfile() {
     nameStatus === "available" &&
     businessName.trim().length > 0;
 
+  async function useCurrentLocation() {
+    setLocatingAddress(true);
+    try {
+      const res = await getCurrentLocationWithGeocode();
+      setLocationText(res.label);
+      setAddress({
+        label: res.label,
+        city: res.geo.city || "",
+        region: res.geo.region || "",
+        country: res.geo.country || "",
+        countryCode: res.geo.countryCode || "",
+        postalCode: res.geo.postalCode || "",
+        lat: res.coords.lat,
+        lng: res.coords.lng,
+      });
+    } catch (e: any) {
+      Alert.alert("Location error", e?.message || "Could not access location.");
+    } finally {
+      setLocatingAddress(false);
+    }
+  }
+
   async function submit() {
     if (loading) return;
 
@@ -242,6 +267,7 @@ export default function CreateMarketProfile() {
         bio: bio.trim() || null,
         phone: phone.trim() || null,
         location_text: locationText.trim() || null,
+        address: address || {},
         offers_remote: offersRemote,
         offers_in_person: offersInPerson,
         is_verified: false,
@@ -526,6 +552,26 @@ export default function CreateMarketProfile() {
             icon="location-outline"
             placeholder="Lagos, Abuja..."
           />
+          <Pressable
+            onPress={useCurrentLocation}
+            disabled={locatingAddress}
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              flexDirection: "row",
+              gap: 8,
+              justifyContent: "center",
+              opacity: locatingAddress ? 0.7 : 1,
+            }}
+          >
+            {locatingAddress ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate-outline" size={18} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
+          </Pressable>
 
           {/* Section: About */}
           <SectionTitle title="About your store" />

@@ -28,6 +28,7 @@ export type CreateListingInput = {
   price_amount: number;
   currency: "NGN" | "USDC";
   stock_qty?: number | null; // products
+  availability?: any;
 };
 
 export type ListingImageInsert = {
@@ -97,6 +98,7 @@ export async function createListing(input: CreateListingInput) {
       currency: input.currency,
       delivery_type: input.delivery_type,
       stock_qty: input.stock_qty ?? null,
+      availability: input.availability ?? {},
       is_active: true,
     })
     .select("*")

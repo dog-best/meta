@@ -4,16 +4,20 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     Image,
+    Linking,
     Pressable,
     ScrollView,
     Text,
+    TextInput,
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
+import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -44,6 +48,7 @@ type Listing = {
   sub_category: string | null;
   stock_qty: number | null;
   created_at?: string | null;
+  availability?: any;
 };
 
 type Seller = {
@@ -82,6 +87,9 @@ export default function ListingDetails() {
   const [images, setImages] = useState<ListingImage[]>([]);
   const [seller, setSeller] = useState<Seller | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
+  const [deliveryLabel, setDeliveryLabel] = useState("");
+  const [locatingDelivery, setLocatingDelivery] = useState(false);
 
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
@@ -102,7 +110,7 @@ export default function ListingDetails() {
 
         const { data: l, error: lErr } = await supabase
           .from(LISTINGS_TABLE)
-          .select("id,seller_id,title,description,price_amount,currency,delivery_type,category,sub_category,stock_qty,created_at")
+          .select("id,seller_id,title,description,price_amount,currency,delivery_type,category,sub_category,stock_qty,created_at,availability")
           .eq("id", listingId)
           .maybeSingle();
 
@@ -163,6 +171,16 @@ export default function ListingDetails() {
       }
       if (!listing) return;
 
+      const needsLocation = String(listing.delivery_type ?? "").toLowerCase() !== "digital";
+      const finalDeliveryGeo =
+        deliveryGeo
+          ? { ...deliveryGeo, label: deliveryLabel.trim() || deliveryGeo.label }
+          : null;
+      if (needsLocation && !finalDeliveryGeo) {
+        Alert.alert("Add delivery location", "Use your current location to set delivery/service address before buying.");
+        return;
+      }
+
       // ✅ MVP create order (later replace with Edge Function order_create)
       const unit = Number(listing.price_amount ?? 0);
       const qty = 1;
@@ -179,7 +197,7 @@ export default function ListingDetails() {
           amount,
           currency: listing.currency ?? "NGN",
           status: "CREATED",
-          delivery_address: {}, // later you’ll collect this on checkout
+          delivery_address: { geo: finalDeliveryGeo ?? {} },
         })
         .select("id")
         .single();
@@ -189,6 +207,28 @@ export default function ListingDetails() {
       router.push(`/market/checkout/${order.id}` as any); // user chooses NGN or USDC there
     } catch (e: any) {
       setErr(e?.message || "Could not create order");
+    }
+  }
+
+  async function useCurrentLocationForDelivery() {
+    setLocatingDelivery(true);
+    try {
+      const res = await getCurrentLocationWithGeocode();
+      const geo: DeliveryGeo = {
+        lat: res.coords.lat,
+        lng: res.coords.lng,
+        city: res.geo.city || "",
+        region: res.geo.region || "",
+        country: res.geo.country || "",
+        countryCode: res.geo.countryCode || "",
+        label: res.label,
+      };
+      setDeliveryGeo(geo);
+      setDeliveryLabel(res.label);
+    } catch (e: any) {
+      Alert.alert("Location error", e?.message || "Could not access location.");
+    } finally {
+      setLocatingDelivery(false);
     }
   }
 
@@ -233,6 +273,7 @@ export default function ListingDetails() {
   }
 
   const imageUrls = images.map((im) => imgUrl(im, supabaseUrl)).filter(Boolean) as string[];
+  const availabilitySummary = formatAvailabilitySummary((listing as any)?.availability);
 
   return (
     <LinearGradient
@@ -330,6 +371,41 @@ export default function ListingDetails() {
           ) : null}
         </View>
 
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Available in</Text>
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
+            {availabilitySummary}
+          </Text>
+          {listing?.availability?.scope === "radius" && listing?.availability?.center?.lat ? (
+            <Pressable
+              onPress={() =>
+                Linking.openURL(`https://maps.google.com/?q=${listing.availability.center.lat},${listing.availability.center.lng}`)
+              }
+              style={{
+                marginTop: 10,
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                alignSelf: "flex-start",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Open in Google Maps</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
         {/* Description */}
         <View
           style={{
@@ -417,6 +493,66 @@ export default function ListingDetails() {
           {seller?.bio ? (
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
               {seller.bio}
+            </Text>
+          ) : null}
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Delivery / Service location</Text>
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+            Buyers set a delivery/service location when creating the order.
+          </Text>
+
+          <Pressable
+            onPress={useCurrentLocationForDelivery}
+            disabled={locatingDelivery}
+            style={{
+              marginTop: 12,
+              borderRadius: 16,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              flexDirection: "row",
+              gap: 8,
+              justifyContent: "center",
+              opacity: locatingDelivery ? 0.7 : 1,
+            }}
+          >
+            {locatingDelivery ? <ActivityIndicator /> : <Ionicons name="locate-outline" size={18} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
+          </Pressable>
+
+          <TextInput
+            value={deliveryLabel}
+            onChangeText={setDeliveryLabel}
+            placeholder="Location label (optional)"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            style={{
+              marginTop: 10,
+              borderRadius: 16,
+              paddingHorizontal: 12,
+              paddingVertical: 12,
+              color: "#fff",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+            }}
+          />
+
+          {deliveryGeo ? (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+              {deliveryGeo.label || deliveryLabel || "Current location set"} • {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
             </Text>
           ) : null}
         </View>
