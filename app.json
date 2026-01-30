@@ -8,11 +8,15 @@
     "scheme": "bestcitypay",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+
     "android": {
       "package": "com.bestcity.pay",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": ["INTERNET", "POST_NOTIFICATIONS"],
+      "permissions": [
+        "INTERNET",
+        "POST_NOTIFICATIONS"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
@@ -20,14 +24,22 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       }
     },
+
     "ios": {
       "bundleIdentifier": "com.bestcity.pay",
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Allow Best City to access your photos to upload listing images.",
+        "NSCameraUsageDescription": "Allow Best City to use your camera to take listing photos.",
+        "NSMicrophoneUsageDescription": "Allow Best City to use the microphone for audio features (if enabled)."
+      }
     },
+
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+
     "plugins": [
       "expo-router",
       [
@@ -42,15 +54,24 @@
           }
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Best City to access your photos to upload listing images.",
+          "cameraPermission": "Allow Best City to use your camera to take listing photos."
+        }
+      ],
       "expo-font",
       "expo-web-browser",
       "expo-build-properties",
       "./plugins/withAdmobAppId.js",
       "expo-secure-store"
     ],
+
     "experiments": {
       "typedRoutes": true
     },
+
     "extra": {
       "router": {},
       "reactNativeGoogleMobileAdsAppId": "ca-app-pub-4533962949749202~8711232097",
@@ -58,6 +79,7 @@
         "projectId": "46a9395b-aee9-49de-bf0f-c143f762acd0"
       }
     },
+
     "owner": "bcnath"
   }
 }
