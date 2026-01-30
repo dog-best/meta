@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -36,6 +37,8 @@ export default function Login() {
   const [rememberDevice, setRememberDevice] = useState(true);
 
   const [biometricReady, setBiometricReady] = useState(false);
+  const [biometricEnrolled, setBiometricEnrolled] = useState(false);
+  const [biometricHardware, setBiometricHardware] = useState(false);
   const [biometricLabel, setBiometricLabel] = useState("Use Face ID / Passcode");
 
   useEffect(() => {
@@ -51,6 +54,8 @@ export default function Login() {
         else if (hasFinger) setBiometricLabel("Use Fingerprint / Passcode");
         else setBiometricLabel("Use Device Passcode");
 
+        setBiometricHardware(hasHardware);
+        setBiometricEnrolled(enrolled);
         setBiometricReady(hasHardware && enrolled);
       } catch {
         setBiometricReady(false);
@@ -201,6 +206,19 @@ export default function Login() {
             <Ionicons name="finger-print" size={18} color="#fff" />
             <Text style={styles.secondaryText}>{biometricLabel}</Text>
           </Pressable>
+        ) : biometricHardware ? (
+          <Pressable onPress={() => Linking.openSettings()} style={styles.secondaryBtn}>
+            <Ionicons name="lock-closed-outline" size={18} color="#fff" />
+            <Text style={styles.secondaryText}>
+              {biometricEnrolled ? "Enable biometric login" : "Set up Face ID / Fingerprint"}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {!biometricReady && biometricHardware ? (
+          <Text style={styles.helperText}>
+            Biometrics are not enrolled on this device. Set up Face ID / Fingerprint in your phone settings, then try again.
+          </Text>
         ) : null}
 
         <View style={styles.footer}>
@@ -318,4 +336,5 @@ const styles = StyleSheet.create({
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 16, gap: 6 },
   footerText: { color: "rgba(255,255,255,0.6)" },
   footerLink: { color: "#C4B5FD", fontWeight: "800" },
+  helperText: { marginTop: 8, color: "rgba(255,255,255,0.5)", fontSize: 11, textAlign: "center" },
 });

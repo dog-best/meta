@@ -97,16 +97,6 @@ export default function MarketTabsLayout() {
         }}
       />
 
-      {/* BIG centered Category */}
-      <Tabs.Screen
-        name="category"
-        options={{
-          // We draw our own label inside the custom button
-          title: "Category",
-          tabBarLabel: () => null,
-          tabBarButton: (props) => <CenterTabButton {...props} />,
-        }}
-      />
 
       {/* Orders */}
       <Tabs.Screen
@@ -119,6 +109,18 @@ export default function MarketTabsLayout() {
         }}
       />
 
+      {/* BIG centered Category */}
+      <Tabs.Screen
+        name="category"
+        options={{
+          // We draw our own label inside the custom button
+          title: "Category",
+          tabBarLabel: () => null,
+          tabBarButton: (props) => <CenterTabButton {...props} />,
+        }}
+      />
+
+
       {/* Messages */}
       <Tabs.Screen
         name="messages"
@@ -129,6 +131,8 @@ export default function MarketTabsLayout() {
           ),
         }}
       />
+
+
 
       {/* Rewards */}
       <Tabs.Screen
