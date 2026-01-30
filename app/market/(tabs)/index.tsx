@@ -42,7 +42,7 @@ type ListingRow = {
   price_amount: number | string | null;
   currency: string | null;
   delivery_type: string | null;
-  category: string | null;
+  category: string | null; // "product" | "service"
   sub_category: string | null;
   created_at: string | null;
   is_active?: boolean | null;
@@ -283,7 +283,6 @@ export default function MarketHome() {
 
   const [main, setMain] = useState<MarketMainCategory>("product");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-
   const [sortBy, setSortBy] = useState<SortBy>("newest");
 
   const [q, setQ] = useState("");
@@ -295,9 +294,13 @@ export default function MarketHome() {
   const [err, setErr] = useState<string | null>(null);
 
   const pageSize = 20;
-  const [page, setPage] = useState(0);
+  const pageRef = useRef(0);
+  const hasMoreRef = useRef(true);
+  const fetchingRef = useRef(false);
+  const reqIdRef = useRef(0);
+
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMoreUi, setHasMoreUi] = useState(true);
 
   const listRef = useRef<FlatList<ListingRow>>(null);
 
@@ -306,10 +309,10 @@ export default function MarketHome() {
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
 
-  // reset category when switching main
-  useEffect(() => {
-    setSelectedSlug(null);
-  }, [main]);
+  const filterKey = useMemo(
+    () => `${main}|${selectedSlug ?? ""}|${sortBy}|${debouncedQ}`,
+    [main, selectedSlug, sortBy, debouncedQ],
+  );
 
   const buildSort = useCallback(
     (query: any) => {
@@ -320,23 +323,31 @@ export default function MarketHome() {
     [sortBy],
   );
 
-  const fetchPage = useCallback(
-    async (reset: boolean) => {
-      if (reset) {
+  const fetchListings = useCallback(
+    async (mode: "reset" | "more") => {
+      if (fetchingRef.current) return;
+
+      if (mode === "more" && !hasMoreRef.current) return;
+
+      fetchingRef.current = true;
+      const reqId = ++reqIdRef.current;
+
+      if (mode === "reset") {
         setErr(null);
-        setHasMore(true);
-        setPage(0);
+        hasMoreRef.current = true;
+        setHasMoreUi(true);
+        pageRef.current = 0;
 
         if (rows.length === 0) setLoading(true);
         else setRefreshing(true);
+
+        listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
       } else {
-        if (loadingMore || !hasMore) return;
         setLoadingMore(true);
       }
 
       try {
-        const currentPage = reset ? 0 : page;
-        const from = currentPage * pageSize;
+        const from = pageRef.current * pageSize;
         const to = from + pageSize - 1;
 
         let query = supabase
@@ -351,7 +362,6 @@ export default function MarketHome() {
           .eq("category", main);
 
         if (selectedSlug) query = query.eq("sub_category", selectedSlug);
-
         if (debouncedQ) {
           query = query.or([`title.ilike.%${debouncedQ}%`, `description.ilike.%${debouncedQ}%`].join(","));
         }
@@ -361,58 +371,58 @@ export default function MarketHome() {
         const { data, error } = await query;
         if (error) throw new Error(error.message);
 
+        // stale response guard
+        if (reqId !== reqIdRef.current) return;
+
         const batch = ((data as any) ?? []) as ListingRow[];
 
-        if (reset) setRows(batch);
+        if (mode === "reset") setRows(batch);
         else setRows((prev) => [...prev, ...batch]);
 
-        setHasMore(batch.length === pageSize);
-        setPage((prev) => (reset ? 1 : prev + 1));
+        const more = batch.length === pageSize;
+        hasMoreRef.current = more;
+        setHasMoreUi(more);
+
+        if (more) pageRef.current += 1;
       } catch (e: any) {
-        setErr(e?.message || "Failed to load listings");
-        if (reset) setRows([]);
+        if (reqId === reqIdRef.current) {
+          setErr(e?.message || "Failed to load listings");
+          if (mode === "reset") setRows([]);
+        }
       } finally {
-        if (reset) {
+        if (reqId === reqIdRef.current) {
           setLoading(false);
           setRefreshing(false);
-        } else {
           setLoadingMore(false);
         }
+        fetchingRef.current = false;
       }
     },
-    [buildSort, debouncedQ, hasMore, loadingMore, main, page, rows.length, selectedSlug],
+    [buildSort, debouncedQ, main, rows.length, selectedSlug],
   );
 
-  // refetch when filters change
+  // reset fetch on filters change (stable: no page dependency loop)
   useEffect(() => {
-    listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-    fetchPage(true);
-  }, [main, selectedSlug, sortBy, debouncedQ, fetchPage]);
+    fetchListings("reset");
+  }, [filterKey, fetchListings]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetchPage(true);
+      await fetchListings("reset");
     } finally {
       setRefreshing(false);
     }
-  }, [fetchPage]);
+  }, [fetchListings]);
 
   const onEndReached = useCallback(() => {
-    if (!loading && !err) fetchPage(false);
-  }, [fetchPage, loading, err]);
+    if (!loading && !err) fetchListings("more");
+  }, [fetchListings, loading, err]);
 
-  const subtitle = useMemo(() => {
-    return "Discover products and services from businesses around you and beyond.";
-  }, []);
+  const subtitle = "Discover products and services from businesses around the world.";
 
   return (
-    <LinearGradient
-      colors={[BG1, BG0]}
-      start={{ x: 0.15, y: 0 }}
-      end={{ x: 0.9, y: 1 }}
-      style={{ flex: 1 }}
-    >
+    <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
       <FlatList
         ref={listRef}
         data={rows}
@@ -428,13 +438,12 @@ export default function MarketHome() {
           <View style={{ paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
             <AppHeader title="Marketplace" subtitle={subtitle} />
 
-            {/* Top row */}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
               <View>
                 <Text style={{ color: "#fff", fontSize: 28, fontWeight: "900" }}>Marketplace</Text>
                 <Text style={{ marginTop: 6, color: MUTED, fontSize: 13 }}>
                   {main === "product" ? "Shop curated products" : "Book trusted services"}
-                  {rows.length ? ` • ${rows.length}${hasMore ? "+" : ""} available` : ""}
+                  {rows.length ? ` • ${rows.length}${hasMoreUi ? "+" : ""} available` : ""}
                 </Text>
               </View>
 
@@ -505,13 +514,19 @@ export default function MarketHome() {
                 label="Products"
                 icon="cart-outline"
                 active={main === "product"}
-                onPress={() => setMain("product")}
+                onPress={() => {
+                  setSelectedSlug(null);
+                  setMain("product");
+                }}
               />
               <Pill
                 label="Services"
                 icon="briefcase-outline"
                 active={main === "service"}
-                onPress={() => setMain("service")}
+                onPress={() => {
+                  setSelectedSlug(null);
+                  setMain("service");
+                }}
               />
             </View>
 
@@ -550,7 +565,7 @@ export default function MarketHome() {
               <Chip label="Price ↓" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
             </View>
 
-            {/* State */}
+            {/* States */}
             {loading ? (
               <View style={{ paddingVertical: 18, alignItems: "center" }}>
                 <ActivityIndicator />
@@ -573,7 +588,7 @@ export default function MarketHome() {
                 <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>
 
                 <Pressable
-                  onPress={() => fetchPage(true)}
+                  onPress={() => fetchListings("reset")}
                   style={{
                     marginTop: 12,
                     borderRadius: 16,
@@ -635,7 +650,7 @@ export default function MarketHome() {
                 <ActivityIndicator />
                 <Text style={{ color: "#fff", fontWeight: "900" }}>Loading more…</Text>
               </View>
-            ) : !hasMore && rows.length > 0 ? (
+            ) : !hasMoreUi && rows.length > 0 ? (
               <Text style={{ color: "rgba(255,255,255,0.60)", fontWeight: "900", textAlign: "center" }}>
                 You’ve reached the end
               </Text>
