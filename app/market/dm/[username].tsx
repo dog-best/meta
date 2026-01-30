@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Audio, Video } from "expo-av";
+import { Audio, ResizeMode, Video } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
-import { Camera } from "expo-camera";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -149,7 +148,7 @@ export default function DMChat() {
     if (!threadId) return;
     try {
       if (fromCamera) {
-        const camPerm = await Camera.requestCameraPermissionsAsync();
+        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
         if (!camPerm.granted) throw new Error("Camera permission denied");
       } else {
         const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -184,7 +183,7 @@ export default function DMChat() {
     if (!threadId) return;
     try {
       if (fromCamera) {
-        const camPerm = await Camera.requestCameraPermissionsAsync();
+        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
         if (!camPerm.granted) throw new Error("Camera permission denied");
       } else {
         const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -472,7 +471,7 @@ export default function DMChat() {
               source={{ uri: videoViewer }}
               style={{ width: "100%", height: "60%" }}
               useNativeControls
-              resizeMode="contain"
+              resizeMode={ResizeMode.CONTAIN}
             />
           ) : null}
         </View>
