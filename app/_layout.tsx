@@ -241,11 +241,11 @@ export default function RootLayout() {
   }
 
   if (user && (group === "(auth)" || group === "(onboarding)")) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/market/(tabs)" />;
   }
 
   if (user && !group) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/market/(tabs)" />;
   }
 
   return (

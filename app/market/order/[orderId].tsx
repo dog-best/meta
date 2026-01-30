@@ -199,6 +199,7 @@ export default function OrderDetails() {
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
+  const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
 
@@ -769,23 +770,51 @@ async function pickAndUpload(access: "preview" | "final") {
 
             {/* Buyer checkout */}
             {canGoCheckout ? (
-              <Pressable
-                onPress={() => router.push(`/market/checkout/${order.id}` as any)}
-                style={{
-                  marginTop: 12,
-                  borderRadius: 22,
-                  paddingVertical: 16,
-                  alignItems: "center",
-                  backgroundColor: PURPLE,
-                  borderWidth: 1,
-                  borderColor: PURPLE,
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Continue to checkout</Text>
-                <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-                  Choose NGN wallet or USDC
-                </Text>
-              </Pressable>
+              <>
+                {isBuyer && seller?.market_username ? (
+                  <Pressable
+                    onPress={() =>
+                      router.push({
+                        pathname: "/market/dm/[username]" as any,
+                        params: { username: seller.market_username },
+                      })
+                    }
+                    style={{
+                      marginTop: 12,
+                      borderRadius: 18,
+                      paddingVertical: 14,
+                      alignItems: "center",
+                      backgroundColor: "rgba(124,58,237,0.20)",
+                      borderWidth: 1,
+                      borderColor: "rgba(124,58,237,0.45)",
+                      flexDirection: "row",
+                      gap: 8,
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Message seller</Text>
+                    <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>Ask questions before you pay</Text>
+                  </Pressable>
+                ) : null}
+
+                <Pressable
+                  onPress={() => router.push(`/market/checkout/${order.id}` as any)}
+                  style={{
+                    marginTop: 12,
+                    borderRadius: 22,
+                    paddingVertical: 16,
+                    alignItems: "center",
+                    backgroundColor: PURPLE,
+                    borderWidth: 1,
+                    borderColor: PURPLE,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Continue to checkout</Text>
+                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
+                    Choose NGN wallet or USDC
+                  </Text>
+                </Pressable>
+              </>
             ) : null}
 
             {canCancel ? (

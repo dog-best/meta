@@ -242,6 +242,28 @@ export default function MarketAccountTab() {
         )}
 
         <CardBox>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Fintech</Text>
+          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
+            Go back to your main finance tabs.
+          </Text>
+
+          <Pressable
+            onPress={() => router.push("/fintech/(tabs)" as any)}
+            style={{
+              marginTop: 12,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Open Fintech Tabs</Text>
+          </Pressable>
+        </CardBox>
+
+        <CardBox>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Verified Seller</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
             Apply for a badge and higher trust ranking.

@@ -492,7 +492,12 @@ export default function ListingDetails() {
 
           {seller?.market_username ? (
             <Pressable
-              onPress={() => router.push(`/market/dm/${seller.market_username}` as any)}
+              onPress={() =>
+                router.push({
+                  pathname: "/market/dm/[username]" as any,
+                  params: { username: seller.market_username },
+                })
+              }
               style={{
                 marginTop: 10,
                 borderRadius: 16,

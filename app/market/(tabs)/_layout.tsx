@@ -130,6 +130,17 @@ export default function MarketTabsLayout() {
         }}
       />
 
+      {/* Rewards */}
+      <Tabs.Screen
+        name="rewards"
+        options={{
+          title: "Rewards",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="gift-outline" color={color} size={size} />
+          ),
+        }}
+      />
+
       {/* Account */}
       <Tabs.Screen
         name="account"

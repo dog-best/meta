@@ -266,7 +266,12 @@ export default function PublicSellerProfile() {
             </View>
 
             <Pressable
-              onPress={() => router.push(`/market/dm/${seller.market_username}` as any)}
+              onPress={() =>
+                router.push({
+                  pathname: "/market/dm/[username]" as any,
+                  params: { username: seller.market_username },
+                })
+              }
               style={{
                 marginTop: 12,
                 borderRadius: 18,

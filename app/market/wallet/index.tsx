@@ -116,7 +116,7 @@ export default function MarketWallet() {
               </Text>
 
               <Pressable
-                onPress={() => router.push("/(tabs)/wallet" as any)}
+                onPress={() => router.push("/fintech/(tabs)/wallet" as any)}
                 style={{
                   marginTop: 12,
                   borderRadius: 18,

@@ -139,7 +139,7 @@ function ProfileSetupScreen() {
 
       if (error) throw error;
 
-      router.replace("/(tabs)");
+      router.replace("/market/(tabs)");
 
       setTimeout(() => {
         Alert.alert("Success", "Profile completed!");
