@@ -3,6 +3,10 @@
   "compilerOptions": {
     "strict": true,
     "jsx": "react-native",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "baseUrl": ".",
     "types": [
       "expo",
       "react",

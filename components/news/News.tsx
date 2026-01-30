@@ -11,7 +11,7 @@ import {
     Text,
     View,
 } from "react-native";
-import { supabase } from "../../supabase/client";
+import { supabase } from "@/services/supabase";
 
 type Props = {
   visible: boolean;
@@ -39,21 +39,25 @@ export default function News({ visible, onClose }: Props) {
     let channel: any;
 
     const fetchAll = async () => {
+      console.log("[News] load start");
       setLoading(true);
 
-      const [{ data: newsData }, { data: socialData }] = await Promise.all([
-        supabase
-          .from("vad_news")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(20),
-        supabase.from("vad_socials").select("*"),
-      ]);
+      try {
+        const [{ data: newsData }, { data: socialData }] = await Promise.all([
+          supabase
+            .from("vad_news")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(20),
+          supabase.from("vad_socials").select("*"),
+        ]);
 
-      if (newsData) setNews(newsData);
-      if (socialData) setSocials(socialData);
-
-      setLoading(false);
+        if (newsData) setNews(newsData);
+        if (socialData) setSocials(socialData);
+      } finally {
+        setLoading(false);
+        console.log("[News] load end");
+      }
     };
 
     fetchAll();

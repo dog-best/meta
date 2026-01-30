@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
 
 export function useFeatureFlag(key: string) {
   const [enabled, setEnabled] = useState(false);

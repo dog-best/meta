@@ -18,6 +18,7 @@ import {
 
 import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
+import { fetchWithTimeout } from "@/services/net";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -73,7 +74,12 @@ async function uploadImageToBucket(params: {
   const { userId, kind, localUri } = params;
 
   // infer extension (best effort)
-  const fileRes = await fetch(localUri);
+  const fileRes = await fetchWithTimeout(localUri, {}, 20000);
+  if (!fileRes.ok) {
+    const text = await fileRes.text().catch(() => "");
+    console.log("[CreateMarketProfile] local file fetch failed", fileRes.status, text);
+    throw new Error(`Failed to read local file (HTTP ${fileRes.status})`);
+  }
   const blob = await fileRes.blob();
   const extGuess = blob.type?.split("/")?.[1] || "jpg";
 
@@ -199,6 +205,7 @@ export default function CreateMarketProfile() {
 
     setLoading(true);
     setStage(null);
+    console.log("[CreateMarketProfile] submit start");
 
     try {
       const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -308,6 +315,7 @@ export default function CreateMarketProfile() {
       Alert.alert("Failed", prettyErr(e));
     } finally {
       setLoading(false);
+      console.log("[CreateMarketProfile] submit end");
     }
   }
 

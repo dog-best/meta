@@ -1,4 +1,4 @@
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
 
 export type RemotePolicy = {
   title: string;

@@ -60,6 +60,7 @@ export default function PublicSellerProfile() {
     let mounted = true;
 
     (async () => {
+      console.log("[PublicSellerProfile] load start", { handle });
       setLoading(true);
       setErr(null);
 
@@ -81,7 +82,6 @@ export default function PublicSellerProfile() {
           if (mounted) {
             setSeller(null);
             setListings([]);
-            setLoading(false);
           }
           return;
         }
@@ -123,14 +123,17 @@ export default function PublicSellerProfile() {
         if (mounted) {
           setSeller(sp as any);
           setListings(rowsWithCovers);
-          setLoading(false);
         }
       } catch (e: any) {
         if (mounted) {
           setErr(e?.message || "Failed to load seller");
           setSeller(null);
           setListings([]);
+        }
+      } finally {
+        if (mounted) {
           setLoading(false);
+          console.log("[PublicSellerProfile] load end");
         }
       }
     })();

@@ -92,6 +92,7 @@ export default function MarketAccountTab() {
   const [profile, setProfile] = useState<SellerProfile | null>(null);
 
   async function load() {
+    console.log("[MarketAccountTab] load start");
     setLoading(true);
     try {
       const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -99,7 +100,6 @@ export default function MarketAccountTab() {
       const user = auth?.user;
       if (!user) {
         setProfile(null);
-        setLoading(false);
         return;
       }
 
@@ -114,6 +114,7 @@ export default function MarketAccountTab() {
       setProfile(null);
     } finally {
       setLoading(false);
+      console.log("[MarketAccountTab] load end");
     }
   }
 

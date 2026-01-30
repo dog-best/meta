@@ -20,7 +20,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
-import { supabase } from "../../supabase/client";
+import { supabase } from "@/services/supabase";
 
 /* ---------- Expo Router Wrapper ---------- */
 export default function ProfileSetup() {
@@ -112,6 +112,7 @@ function ProfileSetupScreen() {
     }
 
     setLoading(true);
+    console.log("[ProfileSetup] submit start");
 
     try {
       const { data, error: userError } = await supabase.auth.getUser();
@@ -147,6 +148,7 @@ function ProfileSetupScreen() {
       Alert.alert("Error", err?.message ?? "Profile setup failed");
     } finally {
       setLoading(false);
+      console.log("[ProfileSetup] submit end");
     }
   };
 

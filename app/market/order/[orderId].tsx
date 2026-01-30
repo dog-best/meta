@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -156,18 +157,19 @@ export default function OrderDetails() {
   const otpVerified = !!otp?.verified_at;
 
   async function load() {
+    console.log("[OrderDetails] load start", { oid });
     setLoading(true);
     setErr(null);
 
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth?.user;
-    if (!user) {
-      router.replace("/(auth)/login" as any);
-      return;
-    }
-    setMe(user.id);
-
     try {
+      const { data: auth } = await supabase.auth.getUser();
+      const user = auth?.user;
+      if (!user) {
+        router.replace("/(auth)/login" as any);
+        return;
+      }
+      setMe(user.id);
+
       const { data: o, error: oErr } = await supabase
         .from(ORDERS_TABLE)
         .select(
@@ -214,8 +216,6 @@ export default function OrderDetails() {
       setSeller((s as any) ?? null);
       setOtp((otpRow as any) ?? null);
       setIntents(((ints as any) ?? []) as any);
-
-      setLoading(false);
     } catch (e: any) {
       setErr(e?.message || "Failed to load order");
       setOrder(null);
@@ -223,7 +223,9 @@ export default function OrderDetails() {
       setSeller(null);
       setOtp(null);
       setIntents([]);
+    } finally {
       setLoading(false);
+      console.log("[OrderDetails] load end");
     }
   }
 
@@ -249,37 +251,33 @@ export default function OrderDetails() {
 
   async function doOutForDelivery() {
     if (!order) return;
+    console.log("[OrderDetails] outForDelivery start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_SELLER_OUT_FOR_DELIVERY, {
-        body: { order_id: order.id },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Failed");
+      await callFn(FN_SELLER_OUT_FOR_DELIVERY, { order_id: order.id });
       await load();
     } catch (e: any) {
       setErr(e?.message || "Could not mark out for delivery");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] outForDelivery end");
     }
   }
 
   async function requestOTP() {
     if (!order) return;
+    console.log("[OrderDetails] requestOTP start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_OTP_GENERATE, {
-        body: { order_id: order.id },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "OTP generate failed");
+      await callFn(FN_OTP_GENERATE, { order_id: order.id });
       await load();
     } catch (e: any) {
       setErr(e?.message || "OTP request failed");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] requestOTP end");
     }
   }
 
@@ -288,14 +286,11 @@ export default function OrderDetails() {
     const code = otpInput.trim();
     if (code.length < 4) return setErr("Enter the OTP");
 
+    console.log("[OrderDetails] verifyOTP start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_OTP_VERIFY, {
-        body: { order_id: order.id, otp: code },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "OTP verification failed");
+      await callFn(FN_OTP_VERIFY, { order_id: order.id, otp: code });
 
       setOtpInput("");
       await load();
@@ -303,60 +298,55 @@ export default function OrderDetails() {
       setErr(e?.message || "OTP verify failed");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] verifyOTP end");
     }
   }
 
   async function releaseFunds() {
     if (!order) return;
+    console.log("[OrderDetails] releaseFunds start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_RELEASE_ESCROW, {
-        body: { order_id: order.id },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Release failed");
+      await callFn(FN_RELEASE_ESCROW, { order_id: order.id });
       await load();
     } catch (e: any) {
       setErr(e?.message || "Release failed");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] releaseFunds end");
     }
   }
 
   async function openDispute() {
     if (!order) return;
+    console.log("[OrderDetails] openDispute start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_DISPUTE_OPEN, {
-        body: { order_id: order.id, reason: "Buyer requested refund / issue with delivery" },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Dispute open failed");
+      await callFn(FN_DISPUTE_OPEN, { order_id: order.id, reason: "Buyer requested refund / issue with delivery" });
       await load();
     } catch (e: any) {
       setErr(e?.message || "Could not open dispute");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] openDispute end");
     }
   }
 
   async function cancelOrder() {
     if (!order) return;
+    console.log("[OrderDetails] cancelOrder start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_BUYER_CANCEL, {
-        body: { order_id: order.id },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Cancel failed");
+      await callFn(FN_BUYER_CANCEL, { order_id: order.id });
       await load();
     } catch (e: any) {
       setErr(e?.message || "Cancel failed");
     } finally {
       setBusy(false);
+      console.log("[OrderDetails] cancelOrder end");
     }
   }
 

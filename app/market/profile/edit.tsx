@@ -80,46 +80,45 @@ export default function EditMarketProfile() {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      console.log("[EditMarketProfile] load start");
       setLoading(true);
 
-      const { data: auth, error: authErr } = await supabase.auth.getUser();
-      if (authErr) {
+      try {
+        const { data: auth, error: authErr } = await supabase.auth.getUser();
+        if (authErr) throw authErr;
+        const user = auth?.user;
+        if (!user) throw new Error("Not signed in");
+        setUserId(user.id);
+
+        const { data, error } = await supabase
+          .from("market_seller_profiles")
+          .select("market_username,display_name,business_name,bio,logo_path,banner_path")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (!mounted) return;
+
+        if (error || !data) {
+          Alert.alert("No profile", "Create your market profile first.");
+          router.replace("/market/profile/create" as any);
+          return;
+        }
+
+        setUsername(data.market_username || "");
+        setOriginalUsername(data.market_username || "");
+        setDisplayName(data.display_name || "");
+        setBusinessName(data.business_name || "");
+        setBio(data.bio || "");
+        setLogoPath(data.logo_path || null);
+        setBannerPath(data.banner_path || null);
+      } catch (e: any) {
+        if (!mounted) return;
+        Alert.alert("Auth error", e?.message ?? "Please log in again.");
+      } finally {
+        if (!mounted) return;
         setLoading(false);
-        Alert.alert("Auth error", authErr.message);
-        return;
+        console.log("[EditMarketProfile] load end");
       }
-      const user = auth?.user;
-      if (!user) {
-        setLoading(false);
-        Alert.alert("Not signed in", "Please log in again.");
-        return;
-      }
-      setUserId(user.id);
-
-      const { data, error } = await supabase
-        .from("market_seller_profiles")
-        .select("market_username,display_name,business_name,bio,logo_path,banner_path")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (!mounted) return;
-
-      if (error || !data) {
-        setLoading(false);
-        Alert.alert("No profile", "Create your market profile first.");
-        router.replace("/market/profile/create" as any);
-        return;
-      }
-
-      setUsername(data.market_username || "");
-      setOriginalUsername(data.market_username || "");
-      setDisplayName(data.display_name || "");
-      setBusinessName(data.business_name || "");
-      setBio(data.bio || "");
-      setLogoPath(data.logo_path || null);
-      setBannerPath(data.banner_path || null);
-
-      setLoading(false);
     })();
 
     return () => {

@@ -90,13 +90,13 @@ export default function ListingDetails() {
     let mounted = true;
 
     (async () => {
+      console.log("[ListingDetails] load start", { listingId });
       setLoading(true);
       setErr(null);
 
       try {
         if (!listingId) {
           setErr("Missing listing id");
-          setLoading(false);
           return;
         }
 
@@ -109,7 +109,6 @@ export default function ListingDetails() {
         if (lErr) throw new Error(lErr.message);
         if (!l) {
           setErr("Listing not found");
-          setLoading(false);
           return;
         }
 
@@ -133,7 +132,6 @@ export default function ListingDetails() {
           setListing(l as any);
           setImages((imgs as any) ?? []);
           setSeller((s as any) ?? null);
-          setLoading(false);
         }
       } catch (e: any) {
         if (mounted) {
@@ -141,7 +139,11 @@ export default function ListingDetails() {
           setListing(null);
           setImages([]);
           setSeller(null);
+        }
+      } finally {
+        if (mounted) {
           setLoading(false);
+          console.log("[ListingDetails] load end");
         }
       }
     })();

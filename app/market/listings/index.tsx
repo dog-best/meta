@@ -98,12 +98,14 @@ export default function ListingsFeed() {
 
   async function fetchPage(reset: boolean) {
     if (reset) {
+      console.log("[ListingsFeed] load start", { reset: true });
       setLoading(true);
       setErr(null);
       setPage(0);
       setHasMore(true);
     } else {
       if (loadingMore || !hasMore) return;
+      console.log("[ListingsFeed] loadMore start");
       setLoadingMore(true);
     }
 
@@ -147,14 +149,17 @@ export default function ListingsFeed() {
       const gotFull = batch.length === pageSize;
       setHasMore(gotFull);
       setPage((prev) => (reset ? 1 : prev + 1));
-
-      if (reset) setLoading(false);
-      else setLoadingMore(false);
     } catch (e: any) {
       setErr(e?.message || "Failed to load listings");
       if (loading) setRows([]);
-      setLoading(false);
-      setLoadingMore(false);
+    } finally {
+      if (reset) {
+        setLoading(false);
+        console.log("[ListingsFeed] load end");
+      } else {
+        setLoadingMore(false);
+        console.log("[ListingsFeed] loadMore end");
+      }
     }
   }
 

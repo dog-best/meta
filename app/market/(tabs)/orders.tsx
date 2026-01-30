@@ -15,7 +15,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
-import { supabase } from "@/services/supabase";
+import {
+  fetchJsonWithTimeout,
+  getSupabaseAnonKeyOrThrow,
+  getSupabaseFunctionsBaseUrl,
+  getSupabaseJwtOrThrow,
+} from "@/services/net";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -109,30 +114,6 @@ function SegButton({
       <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
     </Pressable>
   );
-}
-
-function getFunctionsBaseUrl() {
-  // Prefer the supabase client URL to avoid env mismatch issues.
-  const clientUrl = (supabase as any)?.supabaseUrl as string | undefined;
-
-  const envUrl =
-    (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ||
-    (process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined);
-
-  const sbUrl = clientUrl || envUrl;
-  if (!sbUrl) throw new Error("Missing Supabase URL (set EXPO_PUBLIC_SUPABASE_URL)");
-
-  return `${sbUrl.replace(/\/$/, "")}/functions/v1`;
-}
-
-function getAnonKey() {
-  const key =
-    (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined) ||
-    (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string | undefined);
-  if (!key) {
-    throw new Error("Missing Supabase anon key (set EXPO_PUBLIC_SUPABASE_ANON_KEY)");
-  }
-  return key;
 }
 
 function ErrorCard({
@@ -266,41 +247,43 @@ export default function MarketOrdersTab() {
       }
 
       try {
-        // ✅ Patch: ensure token is fresh before calling Edge Function
-        await supabase.auth.refreshSession();
+        console.log("[MarketOrdersTab] load start", { role: roleParam, silent });
 
-        const { data: auth } = await supabase.auth.getSession();
-        const token = auth?.session?.access_token;
-
-        if (!token) {
+        let token = "";
+        try {
+          token = await getSupabaseJwtOrThrow();
+        } catch (e) {
           router.replace("/(auth)/login" as any);
-          return;
+          throw e;
         }
 
-        const base = getFunctionsBaseUrl();
+        const base = getSupabaseFunctionsBaseUrl();
         const url = new URL(`${base}/${FN_MARKET_ORDERS_LIST}`);
         url.searchParams.set("role", roleParam);
         url.searchParams.set("limit", "50");
         url.searchParams.set("offset", "0");
 
-        const res = await fetch(url.toString(), {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: getAnonKey(),
-            Accept: "application/json",
+        console.log("[MarketOrdersTab] edge call -> start", url.toString());
+        const { res, text, json } = await fetchJsonWithTimeout(
+          url.toString(),
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              apikey: getSupabaseAnonKeyOrThrow(),
+              Accept: "application/json",
+            },
           },
-        });
-
-        const rawText = await res.text();
-        const json = rawText ? safeJsonParse(rawText) : null;
+          20000,
+        );
 
         if (!res.ok) {
+          console.log("[MarketOrdersTab] edge call -> HTTP", res.status, text);
           const msg =
             (json as any)?.message ||
             (json as any)?.error ||
             (typeof json === "string" ? json : null) ||
-            (rawText && rawText.length < 400 ? rawText : null) ||
+            (text && text.length < 400 ? text : null) ||
             `Failed to load orders (HTTP ${res.status})`;
 
           // If auth failed, bounce to login (keeps UX tight)
@@ -320,13 +303,17 @@ export default function MarketOrdersTab() {
         if (!aliveRef.current) return;
         setItems(nextItems);
         setErr(null);
+        console.log("[MarketOrdersTab] edge call -> ok", res.status);
       } catch (e: any) {
         if (!aliveRef.current) return;
         setErr(e?.message || "Failed to load orders");
         setItems([]);
       } finally {
         if (!aliveRef.current) return;
-        setLoading(false);
+        if (!silent) {
+          setLoading(false);
+          console.log("[MarketOrdersTab] load end");
+        }
       }
     },
     [roleParam],
@@ -338,11 +325,15 @@ export default function MarketOrdersTab() {
   }, [roleParam]);
 
   const onRefresh = useCallback(async () => {
+    console.log("[MarketOrdersTab] refresh start");
     setRefreshing(true);
     try {
       await load({ silent: true });
     } finally {
-      if (aliveRef.current) setRefreshing(false);
+      if (aliveRef.current) {
+        setRefreshing(false);
+        console.log("[MarketOrdersTab] refresh end");
+      }
     }
   }, [load]);
 
@@ -506,13 +497,4 @@ export default function MarketOrdersTab() {
       </ScrollView>
     </LinearGradient>
   );
-}
-
-// Avoid crashing on non-JSON error bodies
-function safeJsonParse(text: string): any {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
 }

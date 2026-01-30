@@ -1,38 +1,50 @@
-import { supabase } from "./supabase";
+import {
+  fetchJsonWithTimeout,
+  getSupabaseAnonKeyOrThrow,
+  getSupabaseFunctionsBaseUrl,
+  getSupabaseJwtOrThrow,
+} from "@/services/net";
 
-function getFunctionsBaseUrl() {
-  const envUrl =
-    (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ||
-    (process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined);
-
-  const clientUrl = (supabase as any)?.supabaseUrl as string | undefined;
-
-  const sbUrl = envUrl || clientUrl;
-  if (!sbUrl) {
-    throw new Error("Missing Supabase URL (set EXPO_PUBLIC_SUPABASE_URL)");
-  }
-
-  return `${sbUrl.replace(/\/$/, "")}/functions/v1`;
+function shortText(text: string | null | undefined, limit = 600) {
+  if (!text) return "";
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
-export async function callFn<T>(name: string, body?: any): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Promise<T> {
+  console.log(`[callFn] ${name} -> start`, body ?? {});
 
-  const base = getFunctionsBaseUrl();
-  const res = await fetch(`${base}/${name}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+  const token = await getSupabaseJwtOrThrow();
+  const base = getSupabaseFunctionsBaseUrl();
+
+  const { res, text, json } = await fetchJsonWithTimeout(
+    `${base}/${name}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        apikey: getSupabaseAnonKeyOrThrow(),
+      },
+      body: JSON.stringify(body ?? {}),
     },
-    body: JSON.stringify(body ?? {}),
-  });
+    timeoutMs,
+  );
 
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.success === false) {
-    throw new Error(json?.message || `Function ${name} failed`);
+  if (!res.ok) {
+    console.log(`[callFn] ${name} -> HTTP ${res.status}`, shortText(text));
   }
+
+  if (!res.ok || (json as any)?.success === false) {
+    const msg =
+      (json as any)?.message ||
+      (json as any)?.error ||
+      (typeof json === "string" ? json : null) ||
+      (text && text.length < 400 ? text : null) ||
+      `Function ${name} failed`;
+    console.log(`[callFn] ${name} -> error`, msg);
+    throw new Error(msg);
+  }
+
+  console.log(`[callFn] ${name} -> ok ${res.status}`);
   return json as T;
 }

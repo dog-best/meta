@@ -84,13 +84,13 @@ export default function MarketSearchScreen() {
 
   async function runSearch(term: string) {
     const t = term.trim();
+    console.log("[MarketSearch] load start", { term: t });
     setLoading(true);
     setErr(null);
 
     try {
       if (!t) {
         setRows([]);
-        setLoading(false);
         return;
       }
 
@@ -118,11 +118,12 @@ export default function MarketSearchScreen() {
       if (error) throw new Error(error.message);
 
       setRows((data as any) ?? []);
-      setLoading(false);
     } catch (e: any) {
       setErr(e?.message || "Search failed");
       setRows([]);
+    } finally {
       setLoading(false);
+      console.log("[MarketSearch] load end");
     }
   }
 

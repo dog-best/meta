@@ -88,43 +88,51 @@ export default function VerificationApply() {
   }, [profile]);
 
   async function load() {
+    console.log("[VerificationApply] load start");
     setLoading(true);
 
-    const { data: auth } = await supabase.auth.getUser();
-    const uid = auth?.user?.id;
-    if (!uid) {
-      router.replace("/(auth)/login" as any);
-      return;
-    }
-    setMe(uid);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth?.user?.id;
+      if (!uid) {
+        router.replace("/(auth)/login" as any);
+        return;
+      }
+      setMe(uid);
 
-    // seller profile must exist
-    const { data: sp, error: spErr } = await supabase
-      .from("market_seller_profiles")
-      .select("user_id,business_name,market_username,is_verified")
-      .eq("user_id", uid)
-      .maybeSingle();
+      // seller profile must exist
+      const { data: sp, error: spErr } = await supabase
+        .from("market_seller_profiles")
+        .select("user_id,business_name,market_username,is_verified")
+        .eq("user_id", uid)
+        .maybeSingle();
 
-    if (spErr) {
+      if (spErr) {
+        setProfile(null);
+      } else {
+        setProfile((sp as any) ?? null);
+      }
+
+      // load existing request (if any)
+      const { data: vr } = await supabase
+        .from("market_verification_requests")
+        .select("id,user_id,status,note,admin_note,submitted_at,reviewed_at,updated_at")
+        .eq("user_id", uid)
+        .maybeSingle();
+
+      setReqRow((vr as any) ?? null);
+
+      // prefill note if they already have one
+      if ((vr as any)?.note) setNote(String((vr as any).note));
+      else setNote("");
+    } catch {
       setProfile(null);
-    } else {
-      setProfile((sp as any) ?? null);
+      setReqRow(null);
+      setNote("");
+    } finally {
+      setLoading(false);
+      console.log("[VerificationApply] load end");
     }
-
-    // load existing request (if any)
-    const { data: vr } = await supabase
-      .from("market_verification_requests")
-      .select("id,user_id,status,note,admin_note,submitted_at,reviewed_at,updated_at")
-      .eq("user_id", uid)
-      .maybeSingle();
-
-    setReqRow((vr as any) ?? null);
-
-    // prefill note if they already have one
-    if ((vr as any)?.note) setNote(String((vr as any).note));
-    else setNote("");
-
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -153,6 +161,7 @@ export default function VerificationApply() {
     }
 
     setBusy(true);
+    console.log("[VerificationApply] submit start");
     try {
       // IMPORTANT:
       // - If row exists: update status to PENDING again (re-apply)
@@ -180,6 +189,7 @@ export default function VerificationApply() {
       Alert.alert("Failed", e?.message || "Could not submit verification.");
     } finally {
       setBusy(false);
+      console.log("[VerificationApply] submit end");
     }
   }
 

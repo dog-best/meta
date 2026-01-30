@@ -1,4 +1,5 @@
-import { supabase } from "@/supabase/client";
+import { callFn } from "@/services/functions";
+import { supabase } from "@/services/supabase";
 
 async function requireAuth() {
   const { data, error } = await supabase.auth.getUser();
@@ -11,20 +12,12 @@ export type CryptoAsset = "USDT" | "USDC" | "ETH";
 
 export async function ensureCryptoWallet() {
   await requireAuth();
-  const { data, error } = await supabase.functions.invoke("create-crypto-wallet", {
-    body: {},
-  });
-  if (error) throw error;
-  return data;
+  return await callFn("create-crypto-wallet", {});
 }
 
 export async function getCryptoPrice(asset: CryptoAsset) {
   await requireAuth();
-  const { data, error } = await supabase.functions.invoke("get-crypto-price", {
-    body: { asset },
-  });
-  if (error) throw error;
-  return data;
+  return await callFn("get-crypto-price", { asset });
 }
 
 export async function convertCryptoToNgn(payload: {
@@ -33,9 +26,5 @@ export async function convertCryptoToNgn(payload: {
   reference: string;
 }) {
   await requireAuth();
-  const { data, error } = await supabase.functions.invoke("convert-crypto-to-ngn", {
-    body: payload,
-  });
-  if (error) throw error;
-  return data;
+  return await callFn("convert-crypto-to-ngn", payload);
 }

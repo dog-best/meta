@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
+import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -94,19 +95,17 @@ export default function Checkout() {
     const user = await requireAuth();
     if (!user) return;
 
+    console.log("[Checkout] payWithWallet start", { orderId: oid });
     setBusy(true);
     try {
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_CHECKOUT_WALLET, {
-        body: { order_id: oid },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "Wallet checkout failed");
+      await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
 
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {
       setErr(e?.message || "Wallet checkout failed");
     } finally {
       setBusy(false);
+      console.log("[Checkout] payWithWallet end");
     }
   }
 
@@ -116,14 +115,11 @@ export default function Checkout() {
     const user = await requireAuth();
     if (!user) return;
 
+    console.log("[Checkout] payWithUsdc start", { orderId: oid });
     setBusy(true);
     try {
       // Creates/updates a deposit intent for this order (USDC/Base)
-      const { data, error } = await supabase.functions.invoke(FN_MARKET_USDC_DEPOSIT_INTENT, {
-        body: { order_id: oid },
-      });
-      if (error) throw new Error(error.message);
-      if (data?.success === false) throw new Error(data?.message || "USDC deposit intent failed");
+      await callFn(FN_MARKET_USDC_DEPOSIT_INTENT, { order_id: oid });
 
       // We route back to order screen where you can show deposit instructions/intents history
       router.replace(`/market/order/${oid}` as any);
@@ -131,6 +127,7 @@ export default function Checkout() {
       setErr(e?.message || "USDC deposit intent failed");
     } finally {
       setBusy(false);
+      console.log("[Checkout] payWithUsdc end");
     }
   }
 

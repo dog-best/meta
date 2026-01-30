@@ -38,6 +38,7 @@ export default function CategoryFeed() {
     let mounted = true;
 
     (async () => {
+      console.log("[CategoryFeed] load start");
       setLoading(true);
       setErr(null);
 
@@ -45,7 +46,6 @@ export default function CategoryFeed() {
         if (!cat) {
           if (mounted) {
             setRows([]);
-            setLoading(false);
           }
           return;
         }
@@ -79,13 +79,16 @@ export default function CategoryFeed() {
 
         if (mounted) {
           setRows((data as any) ?? []);
-          setLoading(false);
         }
       } catch (e: any) {
         if (mounted) {
           setErr(e?.message || "Failed to load listings");
           setRows([]);
+        }
+      } finally {
+        if (mounted) {
           setLoading(false);
+          console.log("[CategoryFeed] load end");
         }
       }
     })();

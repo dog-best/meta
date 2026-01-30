@@ -329,6 +329,7 @@ export default function SellTab() {
     const err = validate();
     if (err) return Alert.alert("Fix this", err);
 
+    console.log("[SellTab] submit start");
     setSubmitting(true);
     setStage(null);
 
@@ -350,6 +351,7 @@ export default function SellTab() {
           : "";
       const finalDesc = (descBase + extra).trim() || null;
 
+      console.log("[SellTab] createListing -> start");
       setStage("Creating listing…");
       const listing = await createListing({
         seller_id: user.id,
@@ -362,11 +364,13 @@ export default function SellTab() {
         currency,
         stock_qty: category === "product" ? qty : null,
       } as any);
+      console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
 
       if (!listing?.id) throw new Error("Listing creation failed (missing id)");
 
       // If no images (allowed for digital service with website URL), skip images flow
       if (images.length > 0) {
+        console.log("[SellTab] upload images -> start", { count: images.length });
         setStage("Uploading images…");
         const inserts: any[] = [];
 
@@ -381,12 +385,14 @@ export default function SellTab() {
           const path = `${user.id}/listings/${listing.id}/${i + 1}-${random}.${ext}`;
 
 
+          console.log("[SellTab] upload image -> start", { index: i, path });
           const up = await uploadToBucket({
             bucket: "market-listings",
             path,
             uri: img.uri,
             contentType: img.contentType,
           });
+          console.log("[SellTab] upload image -> ok", { index: i, storagePath: up.storagePath });
 
           inserts.push({
             listing_id: listing.id,
@@ -397,13 +403,17 @@ export default function SellTab() {
           });
         }
 
+        console.log("[SellTab] insertListingImages -> start", { count: inserts.length });
         setStage("Saving images…");
         const rows = await insertListingImages(inserts);
+        console.log("[SellTab] insertListingImages -> ok", { count: rows?.length ?? 0 });
 
         const coverId = rows?.[0]?.id;
         if (coverId) {
+          console.log("[SellTab] setListingCoverImage -> start", { coverId });
           setStage("Setting cover…");
           await setListingCoverImage(listing.id, coverId);
+          console.log("[SellTab] setListingCoverImage -> ok", { coverId });
         }
       }
 
@@ -430,6 +440,7 @@ export default function SellTab() {
     } finally {
       setSubmitting(false);
       setStage(null);
+      console.log("[SellTab] submit end");
     }
   }
 

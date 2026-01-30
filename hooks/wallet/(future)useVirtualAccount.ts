@@ -1,4 +1,4 @@
-import { supabase } from "@/supabase/client";
+import { callFn } from "@/services/functions";
 import { useCallback, useEffect, useState } from "react";
 
 export type VirtualAccount = {
@@ -15,34 +15,12 @@ export function useVirtualAccount() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    console.log("[useVirtualAccount] load start");
     setLoading(true);
     setErrorText(null);
 
     try {
-      // Force include auth header (removes any ambiguity)
-      const session = (await supabase.auth.getSession()).data.session;
-
-      const { data, error } = await supabase.functions.invoke("paystack-dva", {
-        body: {},
-        headers: session?.access_token
-          ? { Authorization: `Bearer ${session.access_token}` }
-          : undefined,
-      });
-
-      if (error) {
-        // supabase-js Functions errors often include useful context
-        const status = (error as any)?.context?.status;
-        const body = (error as any)?.context?.body;
-
-        console.error("Edge function error:", { error, status, body });
-
-        throw new Error(
-          body?.message ||
-            body?.error ||
-            `${error.message}${status ? ` (HTTP ${status})` : ""}`
-        );
-      }
-
+      const data = await callFn("paystack-dva", {});
       if (!data?.success) throw new Error(data?.message ?? "Failed to load account");
       setAccount(data.account);
     } catch (e: any) {
@@ -50,6 +28,7 @@ export function useVirtualAccount() {
       setErrorText(e?.message ?? "Failed to load account");
     } finally {
       setLoading(false);
+      console.log("[useVirtualAccount] load end");
     }
   }, []);
 

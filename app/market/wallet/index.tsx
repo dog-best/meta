@@ -19,41 +19,49 @@ export default function MarketWallet() {
   const [txs, setTxs] = useState<TxRow[]>([]);
 
   async function load() {
+    console.log("[MarketWallet] load start");
     setLoading(true);
 
-    const { data: auth } = await supabase.auth.getUser();
-    const me = auth?.user?.id;
-    if (!me) {
-      router.replace("/(auth)/login" as any);
-      return;
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const me = auth?.user?.id;
+      if (!me) {
+        router.replace("/(auth)/login" as any);
+        return;
+      }
+
+      // 1) balance
+      const { data: w } = await supabase
+        .from("app_wallets_simple")
+        .select("user_id,balance")
+        .eq("user_id", me)
+        .maybeSingle();
+
+      setBalance(Number((w as WalletRow | null)?.balance ?? 0));
+
+      // 2) market-related tx
+      // (filters by reference/meta pattern; adjust if your wallet tx schema differs)
+      const { data: rows } = await supabase
+        .from("app_wallet_tx_simple")
+        .select("id,type,amount,reference,created_at,meta")
+        .eq("user_id", me)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      const filtered = (rows ?? []).filter((r: any) => {
+        const ref = String(r.reference || "");
+        const kind = String(r?.meta?.kind || "");
+        return ref.startsWith("mkt_") || ref.startsWith("market_") || kind.startsWith("market_") || kind.includes("escrow");
+      });
+
+      setTxs(filtered as any);
+    } catch {
+      setBalance(0);
+      setTxs([]);
+    } finally {
+      setLoading(false);
+      console.log("[MarketWallet] load end");
     }
-
-    // 1) balance
-    const { data: w } = await supabase
-      .from("app_wallets_simple")
-      .select("user_id,balance")
-      .eq("user_id", me)
-      .maybeSingle();
-
-    setBalance(Number((w as WalletRow | null)?.balance ?? 0));
-
-    // 2) market-related tx
-    // (filters by reference/meta pattern; adjust if your wallet tx schema differs)
-    const { data: rows } = await supabase
-      .from("app_wallet_tx_simple")
-      .select("id,type,amount,reference,created_at,meta")
-      .eq("user_id", me)
-      .order("created_at", { ascending: false })
-      .limit(30);
-
-    const filtered = (rows ?? []).filter((r: any) => {
-      const ref = String(r.reference || "");
-      const kind = String(r?.meta?.kind || "");
-      return ref.startsWith("mkt_") || ref.startsWith("market_") || kind.startsWith("market_") || kind.includes("escrow");
-    });
-
-    setTxs(filtered as any);
-    setLoading(false);
   }
 
   useEffect(() => {

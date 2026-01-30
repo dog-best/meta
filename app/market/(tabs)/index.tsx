@@ -179,6 +179,7 @@ export default function MarketHome() {
     let alive = true;
 
     (async () => {
+      console.log("[MarketHome] load start");
       setLoading(true);
       setErr(null);
 
@@ -206,15 +207,16 @@ export default function MarketHome() {
         const { data, error } = await query;
         if (error) throw new Error(error.message);
 
-        if (alive) {
-          setRows((data as any) ?? []);
-          setLoading(false);
-        }
+        if (alive) setRows((data as any) ?? []);
       } catch (e: any) {
         if (alive) {
           setErr(e?.message || "Failed to load listings");
           setRows([]);
+        }
+      } finally {
+        if (alive) {
           setLoading(false);
+          console.log("[MarketHome] load end");
         }
       }
     })();

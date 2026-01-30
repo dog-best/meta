@@ -71,30 +71,38 @@ export default function VerificationStatus() {
   }, [profile, verified, reqRow]);
 
   async function load() {
+    console.log("[VerificationStatus] load start");
     setLoading(true);
-    const { data: auth } = await supabase.auth.getUser();
-    const me = auth?.user?.id;
-    if (!me) {
-      router.replace("/(auth)/login" as any);
-      return;
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const me = auth?.user?.id;
+      if (!me) {
+        router.replace("/(auth)/login" as any);
+        return;
+      }
+
+      const { data: sp } = await supabase
+        .from("market_seller_profiles")
+        .select("user_id,business_name,is_verified,payout_tier")
+        .eq("user_id", me)
+        .maybeSingle();
+
+      setProfile((sp as any) ?? null);
+
+      const { data: vr } = await supabase
+        .from("market_verification_requests")
+        .select("id,user_id,status,note,admin_note,submitted_at,reviewed_at,updated_at")
+        .eq("user_id", me)
+        .maybeSingle();
+
+      setReqRow((vr as any) ?? null);
+    } catch {
+      setProfile(null);
+      setReqRow(null);
+    } finally {
+      setLoading(false);
+      console.log("[VerificationStatus] load end");
     }
-
-    const { data: sp } = await supabase
-      .from("market_seller_profiles")
-      .select("user_id,business_name,is_verified,payout_tier")
-      .eq("user_id", me)
-      .maybeSingle();
-
-    setProfile((sp as any) ?? null);
-
-    const { data: vr } = await supabase
-      .from("market_verification_requests")
-      .select("id,user_id,status,note,admin_note,submitted_at,reviewed_at,updated_at")
-      .eq("user_id", me)
-      .maybeSingle();
-
-    setReqRow((vr as any) ?? null);
-    setLoading(false);
   }
 
   useEffect(() => {

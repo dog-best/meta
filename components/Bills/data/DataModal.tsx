@@ -1,5 +1,5 @@
+import { callFn } from "@/services/functions";
 import { generateReference } from "@/services/utils";
-import { supabase } from "@/supabase/client";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -51,30 +51,23 @@ export default function DataModal({ visible, onClose }: Props) {
       return;
     }
 
+    console.log("[DataModal] purchase start");
     setLoading(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke(
-        "paystack-data",
-        {
-          body: {
-            phone,
-            provider,
-            product_code: plan.plan,
-            reference: generateReference("DATA"),
-          },
-        }
-      );
-
-      if (error || !data?.success) {
-        throw new Error("Data purchase failed");
-      }
+      await callFn("paystack-data", {
+        phone,
+        provider,
+        product_code: plan.plan,
+        reference: generateReference("DATA"),
+      });
 
       onClose();
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {
       setLoading(false);
+      console.log("[DataModal] purchase end");
     }
   };
 

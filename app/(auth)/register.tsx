@@ -20,7 +20,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
 
 /* ---------- Router Wrapper ---------- */
 export default function Register() {

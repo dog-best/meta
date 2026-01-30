@@ -17,7 +17,7 @@ import {
 } from "react-native";
 
 import { Link } from "expo-router";
-import { supabase } from "@/supabase/client";
+import { supabase } from "@/services/supabase";
 
 export default function ForgotPassword() {
   return <ForgotPasswordScreen />;
