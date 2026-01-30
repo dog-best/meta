@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
 
@@ -9,9 +9,7 @@ function normalizeUrl(input: string) {
   const s = input.trim();
   if (!s) return "";
   if (/^https?:\/\//i.test(s)) return s;
-  // domain-like -> https
   if (/^[a-z0-9.-]+\.[a-z]{2,}/i.test(s)) return `https://${s}`;
-  // otherwise search terms
   return `https://www.google.com/search?q=${encodeURIComponent(s)}`;
 }
 
@@ -26,12 +24,12 @@ function hostOf(u: string) {
 export function WatermarkedBrowser({
   initialUrl,
   allowGoogleSearch = true,
-  lockToInitialHost = false,
+  lockToInitialHost = true,
   title = "Website preview",
 }: {
   initialUrl: string;
   allowGoogleSearch?: boolean;
-  lockToInitialHost?: boolean; // if true: only allow initial host + google
+  lockToInitialHost?: boolean;
   title?: string;
 }) {
   const webRef = useRef<WebView>(null);
@@ -125,6 +123,7 @@ export function WatermarkedBrowser({
               returnKeyType="search"
               onSubmitEditing={onSubmitSearch}
               autoCapitalize="none"
+              autoCorrect={false}
             />
             <Pressable
               onPress={onSubmitSearch}
@@ -215,23 +214,38 @@ export function WatermarkedBrowser({
         {loading ? (
           <View style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading preview…</Text>
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
+              Loading preview…
+            </Text>
           </View>
         ) : null}
 
-        {/* Watermark overlay */}
+        {/* Center watermark */}
         <View pointerEvents="none" style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
-          <View style={{ alignItems: "center" }}>
-            <View style={{ width: 90, height: 90, opacity: 0.18 }}>
-              {/* Use RN Image without importing to keep file simple */}
-            </View>
-            {/* Use native Image */}
-          </View>
+          <Image source={WatermarkIcon} style={{ width: 92, height: 92, opacity: 0.18 }} />
+          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontWeight: "900" }}>
+            BestCity Preview
+          </Text>
         </View>
 
-        {/* Corner watermark (visible even while scrolling) */}
-        <View pointerEvents="none" style={{ position: "absolute", right: 12, bottom: 12, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: "rgba(0,0,0,0.35)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
-          <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>BestCity • Preview</Text>
+        {/* Corner watermark */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            right: 12,
+            bottom: 12,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            borderRadius: 14,
+            backgroundColor: "rgba(0,0,0,0.35)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.10)",
+          }}
+        >
+          <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
+            BestCity • Preview
+          </Text>
         </View>
       </View>
     </View>

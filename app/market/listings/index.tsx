@@ -25,11 +25,7 @@ const BORDER = "rgba(255,255,255,0.10)";
 
 const LISTINGS_TABLE = "market_listings";
 const IMAGES_TABLE = "market_listing_images";
-const LISTING_IMAGES_BUCKET = "market-listings"; // change if your bucket differs
-
-// ✅ YOUR REAL FK NAMES (from your schema)
-const FK_IMAGES_BY_LISTING = "market_listing_images_listing_id_fkey";
-const FK_COVER_IMAGE = "market_listings_cover_image_fk";
+const LISTING_IMAGES_BUCKET = "market-listings";
 
 type ListingImage = {
   id: string;
@@ -58,8 +54,8 @@ type Listing = {
   cover_image_id: string | null;
   website_url: string | null;
 
-  cover_image?: ListingImage | null; // via cover_image_id
-  images?: ListingImage[] | null;     // via listing_id
+  cover_image?: ListingImage | null;
+  images?: ListingImage[] | null;
 };
 
 type FilterTab = "all" | "product" | "service";
@@ -76,25 +72,6 @@ function sortImages(imgs: ListingImage[] | null | undefined) {
   return [...imgs].sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 }
 
-function pickImageUrl(img: ListingImage | null | undefined, supabaseUrl: string) {
-  if (!img) return null;
-  if (img.public_url) return img.public_url;
-  if (img.storage_path) {
-    return `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${img.storage_path}`;
-  }
-  return null;
-}
-
-function pickCoverUrl(listing: Listing, supabaseUrl: string) {
-  // prefer cover image
-  const cover = pickImageUrl(listing.cover_image ?? null, supabaseUrl);
-  if (cover) return cover;
-
-  // fallback to first gallery image
-  const first = sortImages(listing.images)[0];
-  return pickImageUrl(first ?? null, supabaseUrl);
-}
-
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -105,8 +82,23 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
 }
 
 function sanitizeForOr(term: string) {
-  // Prevent breaking the PostgREST "or(...)" string with commas
   return term.replace(/,/g, " ").trim();
+}
+
+function pickUrl(img: ListingImage | null | undefined, supabaseUrl: string) {
+  if (!img) return null;
+  if (img.public_url) return img.public_url;
+  if (img.storage_path) {
+    return `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${img.storage_path}`;
+  }
+  return null;
+}
+
+function pickCoverUrl(listing: Listing, supabaseUrl: string) {
+  const cover = pickUrl(listing.cover_image ?? null, supabaseUrl);
+  if (cover) return cover;
+  const first = sortImages(listing.images)[0];
+  return pickUrl(first ?? null, supabaseUrl);
 }
 
 export default function ListingsFeed() {
@@ -170,12 +162,8 @@ export default function ListingsFeed() {
           .select(
             `
             id,seller_id,category,sub_category,title,description,price_amount,currency,delivery_type,stock_qty,is_active,created_at,updated_at,cover_image_id,website_url,
-
-            -- ✅ FIX: pick cover relationship explicitly
-            cover_image:${IMAGES_TABLE}!${FK_COVER_IMAGE}(*),
-
-            -- ✅ FIX: pick images relationship explicitly
-            images:${IMAGES_TABLE}!${FK_IMAGES_BY_LISTING}(*)
+            cover_image:${IMAGES_TABLE}!market_listings_cover_image_fk(*),
+            images:${IMAGES_TABLE}!market_listing_images_listing_id_fkey(*)
           `,
           )
           .eq("is_active", true);
@@ -239,19 +227,10 @@ export default function ListingsFeed() {
 
   const onSearchSubmit = useCallback(() => {
     router.setParams({ q: q.trim() } as any);
-    // debouncedQ triggers load
   }, [q]);
 
   const Header = useMemo(() => {
-    const Chip = ({
-      active,
-      label,
-      onPress,
-    }: {
-      active: boolean;
-      label: string;
-      onPress: () => void;
-    }) => (
+    const Chip = ({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) => (
       <Pressable
         onPress={onPress}
         style={{
@@ -267,15 +246,7 @@ export default function ListingsFeed() {
       </Pressable>
     );
 
-    const SortPill = ({
-      active,
-      label,
-      onPress,
-    }: {
-      active: boolean;
-      label: string;
-      onPress: () => void;
-    }) => (
+    const SortPill = ({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) => (
       <Pressable
         onPress={onPress}
         style={{
@@ -320,7 +291,6 @@ export default function ListingsFeed() {
           </Pressable>
         </View>
 
-        {/* Search */}
         <View
           style={{
             marginTop: 12,
@@ -365,21 +335,18 @@ export default function ListingsFeed() {
           )}
         </View>
 
-        {/* Filters */}
         <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
           <Chip active={tab === "all"} label="All" onPress={() => setTab("all")} />
           <Chip active={tab === "product"} label="Products" onPress={() => setTab("product")} />
           <Chip active={tab === "service"} label="Services" onPress={() => setTab("service")} />
         </View>
 
-        {/* Sort */}
         <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
           <SortPill active={sortBy === "newest"} label="Newest" onPress={() => setSortBy("newest")} />
           <SortPill active={sortBy === "price_low"} label="Price ↑" onPress={() => setSortBy("price_low")} />
           <SortPill active={sortBy === "price_high"} label="Price ↓" onPress={() => setSortBy("price_high")} />
         </View>
 
-        {/* Error */}
         {err ? (
           <View
             style={{
@@ -417,7 +384,6 @@ export default function ListingsFeed() {
   const renderItem = useCallback(
     ({ item }: { item: Listing }) => {
       const cover = pickCoverUrl(item, supabaseUrl);
-
       return (
         <Pressable
           onPress={() => router.push(`/market/listing/${item.id}` as any)}
@@ -492,40 +458,6 @@ export default function ListingsFeed() {
             </Text>
           </View>
         </View>
-      ) : rows.length === 0 && !err ? (
-        <View style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
-          {Header}
-          <View
-            style={{
-              marginTop: 16,
-              borderRadius: 22,
-              padding: 16,
-              backgroundColor: "rgba(255,255,255,0.05)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.08)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>No listings yet</Text>
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-              Try another search or be the first to sell.
-            </Text>
-
-            <Pressable
-              onPress={() => router.push("/market/(tabs)/sell" as any)}
-              style={{
-                marginTop: 12,
-                borderRadius: 18,
-                paddingVertical: 12,
-                alignItems: "center",
-                backgroundColor: PURPLE,
-                borderWidth: 1,
-                borderColor: PURPLE,
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Create Listing</Text>
-            </Pressable>
-          </View>
-        </View>
       ) : (
         <FlatList
           ref={listRef}
@@ -558,3 +490,4 @@ export default function ListingsFeed() {
     </LinearGradient>
   );
 }
+

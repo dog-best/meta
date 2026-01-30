@@ -17,6 +17,9 @@ import {
   guessKindFromMime,
 } from "@/services/market/orderDeliverables";
 
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
+
+
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
@@ -427,64 +430,77 @@ export default function OrderDetails() {
     }
   }
 
-  // Seller upload preview/final
-  async function pickAndUpload(access: "preview" | "final") {
-    if (!order) return;
-    setUploadBusy(true);
-    setUploadErr(null);
+  // Seller upload preview/final (safe + production)
+async function pickAndUpload(access: "preview" | "final") {
+  if (!order) return;
 
-    try {
-      const DocumentPicker = await import("expo-document-picker");
-      const FileSystem = await import("expo-file-system");
-
-      const res = await DocumentPicker.getDocumentAsync({ multiple: false, copyToCacheDirectory: true });
-      if (res.canceled) return;
-
-      const asset = res.assets?.[0];
-      if (!asset?.uri) throw new Error("No file selected");
-
-      const name = asset.name ?? `file-${Date.now()}`;
-      const mime = asset.mimeType ?? null;
-      const kind = guessKindFromMime(mime, name);
-
-      // Read file -> base64 -> bytes
-      const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
-      const bin = globalThis.atob ? atob(base64) : "";
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-
-      const bucket = "market-deliverables";
-      const safeName = name.replace(/[^\w.\-]+/g, "_");
-      const path = `orders/${order.id}/${access}/${Date.now()}-${safeName}`;
-
-      const up = await supabase.storage.from(bucket).upload(path, bytes, {
-        contentType: mime ?? undefined,
-        upsert: false,
-      });
-
-      if (up.error) throw new Error(up.error.message);
-
-      await insertFileDeliverable({
-        orderId: order.id,
-        access,
-        kind,
-        title: access === "preview" ? `Preview: ${name}` : `Full: ${name}`,
-        sortOrder: access === "preview" ? previewItems.length : finalItems.length,
-        bucket,
-        storagePath: path,
-        mimeType: mime,
-        meta: {
-          note: access === "preview" ? "Low quality / watermarked recommended" : "Full quality",
-        },
-      });
-
-      await load();
-    } catch (e: any) {
-      setUploadErr(e?.message || "Upload failed (ensure expo-document-picker + expo-file-system installed)");
-    } finally {
-      setUploadBusy(false);
-    }
+  // extra safety: only seller should upload
+  if (!isSeller) {
+    setUploadErr("Only the seller can upload deliverables for this order.");
+    return;
   }
+
+  setUploadBusy(true);
+  setUploadErr(null);
+
+  try {
+    const DocumentPicker = await import("expo-document-picker");
+
+    const res = await DocumentPicker.getDocumentAsync({
+      multiple: false,
+      copyToCacheDirectory: true,
+      type: "*/*",
+    });
+
+    if (res.canceled) return;
+
+    const asset = res.assets?.[0];
+    if (!asset?.uri) throw new Error("No file selected");
+
+    const name = asset.name ?? `file-${Date.now()}`;
+    const mime = asset.mimeType ?? null;
+
+    // keep your existing kind guessing logic
+    const kind = guessKindFromMime(mime, name);
+
+    const bucket = "market-deliverables";
+    const safeName = name.replace(/[^\w.\-]+/g, "_");
+    const path = `orders/${order.id}/${access}/${Date.now()}-${safeName}`;
+
+    // ✅ Upload (no expo-file-system EncodingType / bytes here)
+    const uploaded = await uploadToSupabaseStorage({
+      bucket,
+      path,
+      localUri: asset.uri,
+      contentType: mime ?? "application/octet-stream",
+      upsert: false,
+    });
+
+    // ✅ Save DB row
+    await insertFileDeliverable({
+      orderId: order.id,
+      access, // "preview" | "final" (matches your current UI & filters)
+      kind,
+      title: access === "preview" ? `Preview: ${name}` : `Full: ${name}`,
+      sortOrder: access === "preview" ? previewItems.length : finalItems.length,
+      bucket,
+      storagePath: uploaded.storagePath,
+      mimeType: mime,
+      meta: {
+        note: access === "preview" ? "Low quality / watermarked recommended" : "Full quality",
+        originalName: name,
+        size: asset.size ?? null,
+      },
+    });
+
+    await load();
+  } catch (e: any) {
+    setUploadErr(e?.message || "Upload failed");
+  } finally {
+    setUploadBusy(false);
+  }
+}
+
 
   return (
     <LinearGradient
