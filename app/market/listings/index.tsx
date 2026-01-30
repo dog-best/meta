@@ -120,7 +120,8 @@ export default function ListingsFeed() {
   }, []);
 
   const sellerIdParam = (params?.seller_id ?? "").trim() || null;
-  const mineParam = params?.mine === "1";
+  const mineParam = ["1", "true", "yes"].includes(String(params?.mine ?? "").toLowerCase());
+
 
   const isSellerView = !!sellerIdParam || mineParam;
   const resolvedSellerId = mineParam ? viewerUid : sellerIdParam; // if mine=1, use auth uid

@@ -229,11 +229,11 @@ export default function MarketAccountTab() {
 
               <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
                 <ActionBtn
-  label="My listings"
-  icon="albums-outline"
-  onPress={() => router.push("/market/(tabs)/listings?scope=mine" as any)}
-  variant="outline"
-/>
+                  label="My listings"
+                  icon="albums-outline"
+                  onPress={() => router.push("/market/listings?mine=1" as any)}
+                  variant="outline"
+                />
 
                 <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/market/wallet" as any)} variant="outline" />
               </View>

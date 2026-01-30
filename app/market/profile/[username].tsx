@@ -181,6 +181,7 @@ export default function PublicSellerProfile() {
           <Pressable onPress={() => router.push("/market/(tabs)" as any)} style={{ marginTop: 12, borderRadius: 18, paddingVertical: 12, alignItems: "center", backgroundColor: PURPLE, borderWidth: 1, borderColor: PURPLE }}>
             <Text style={{ color: "#fff", fontWeight: "900" }}>Back to Market</Text>
           </Pressable>
+          
         </View>
       </LinearGradient>
     );
@@ -273,11 +274,19 @@ export default function PublicSellerProfile() {
 
           <View style={{ marginTop: 14 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Listings</Text>
-              <Pressable onPress={() => router.push("/market/(tabs)" as any)}>
-                <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>Back to Market</Text>
-              </Pressable>
-            </View>
+  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Listings</Text>
+
+  <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
+    <Pressable onPress={() => router.push(`/market/listings?seller_id=${seller.user_id}` as any)}>
+      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>See all</Text>
+    </Pressable>
+
+    <Pressable onPress={() => router.push("/market/(tabs)" as any)}>
+      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>Back to Market</Text>
+    </Pressable>
+  </View>
+</View> 
+
 
             {listings.length === 0 ? (
               <View style={{ marginTop: 10, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
