@@ -119,6 +119,17 @@ export default function MarketTabsLayout() {
         }}
       />
 
+      {/* Messages */}
+      <Tabs.Screen
+        name="messages"
+        options={{
+          title: "Messages",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubble-ellipses-outline" color={color} size={size} />
+          ),
+        }}
+      />
+
       {/* Account */}
       <Tabs.Screen
         name="account"

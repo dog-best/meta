@@ -17,7 +17,9 @@
         "INTERNET",
         "POST_NOTIFICATIONS",
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -62,6 +64,12 @@
         {
           "photosPermission": "Allow Best City to access your photos to upload listing images.",
           "cameraPermission": "Allow Best City to use your camera to take listing photos."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Best City to use your camera to send images and videos in chat."
         }
       ],
       [

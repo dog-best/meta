@@ -265,6 +265,25 @@ export default function PublicSellerProfile() {
               </Text>
             </View>
 
+            <Pressable
+              onPress={() => router.push(`/market/dm/${seller.market_username}` as any)}
+              style={{
+                marginTop: 12,
+                borderRadius: 18,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(124,58,237,0.20)",
+                borderWidth: 1,
+                borderColor: "rgba(124,58,237,0.45)",
+                flexDirection: "row",
+                gap: 8,
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Message</Text>
+            </Pressable>
+
             <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               {seller.offers_remote ? <Pill icon="laptop-outline" label="Remote service" /> : null}
               {seller.offers_in_person ? <Pill icon="walk-outline" label="In-person service" /> : null}

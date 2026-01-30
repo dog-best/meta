@@ -490,6 +490,27 @@ export default function ListingDetails() {
             </Pressable>
           </View>
 
+          {seller?.market_username ? (
+            <Pressable
+              onPress={() => router.push(`/market/dm/${seller.market_username}` as any)}
+              style={{
+                marginTop: 10,
+                borderRadius: 16,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(124,58,237,0.20)",
+                borderWidth: 1,
+                borderColor: "rgba(124,58,237,0.45)",
+                flexDirection: "row",
+                gap: 8,
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Message seller</Text>
+            </Pressable>
+          ) : null}
+
           {seller?.bio ? (
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
               {seller.bio}
