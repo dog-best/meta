@@ -1,19 +1,28 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, Text, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Image, Linking, Modal, Pressable, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-
 import { usePreventScreenCapture } from "@/hooks/usePreventScreenCapture";
 import { WatermarkedBrowser } from "@/components/market/WatermarkedBrowser";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
-
 const WatermarkIcon = require("../../assets/images/icon.png");
 
 export type PreviewPayload =
-  | { kind: "image"; title?: string | null; urlPromise: () => Promise<string | null> }
-  | { kind: "audio"; title?: string | null; previewSeconds?: number | null; urlPromise: () => Promise<string | null> }
-  | { kind: "link"; title?: string | null; url: string; lockToInitialHost?: boolean; allowGoogleSearch?: boolean };
+  | {
+      kind: "image" | "audio" | "video" | "file";
+      title?: string | null;
+      access: "preview" | "final";
+      previewSeconds?: number | null;
+      urlPromise: () => Promise<string | null>;
+      mimeType?: string | null;
+    }
+  | {
+      kind: "link";
+      title?: string | null;
+      access: "preview" | "final";
+      url: string;
+    };
 
 export function OrderPreviewModal({
   open,
@@ -31,6 +40,7 @@ export function OrderPreviewModal({
   const [err, setErr] = useState<string | null>(null);
 
   const title = useMemo(() => payload?.title ?? "Preview", [payload]);
+  const isPreview = payload?.access === "preview";
 
   useEffect(() => {
     let alive = true;
@@ -38,8 +48,7 @@ export function OrderPreviewModal({
     setResolvedUrl(null);
 
     (async () => {
-      if (!open) return;
-      if (!payload) return;
+      if (!open || !payload) return;
 
       if (payload.kind === "link") {
         setResolvedUrl(payload.url);
@@ -87,7 +96,7 @@ export function OrderPreviewModal({
           <View style={{ alignItems: "flex-end" }}>
             <Text style={{ color: "#fff", fontWeight: "900" }}>{title}</Text>
             <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-              BestCity watermark • preview only
+              {isPreview ? "Low quality • Watermarked" : "Full quality"}
             </Text>
           </View>
         </View>
@@ -104,58 +113,91 @@ export function OrderPreviewModal({
           </View>
         ) : !payload ? null : payload.kind === "image" ? (
           resolvedUrl ? (
-            <View style={{ marginTop: 14, borderRadius: 18, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
-              <View style={{ height: 360, backgroundColor: "rgba(255,255,255,0.05)" }}>
-                <Image source={{ uri: resolvedUrl }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
-                <View pointerEvents="none" style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
-                  <Image source={WatermarkIcon} style={{ width: 92, height: 92, opacity: 0.20 }} />
-                  <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontWeight: "900" }}>BestCity Preview</Text>
-                </View>
-              </View>
-              <View style={{ padding: 12, backgroundColor: "rgba(0,0,0,0.35)" }}>
-                <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
-                  Preview Only • Release funds to unlock final delivery
-                </Text>
-              </View>
-            </View>
+            <MediaFrame watermark={isPreview}>
+              <Image source={{ uri: resolvedUrl }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+            </MediaFrame>
           ) : null
+        ) : payload.kind === "video" ? (
+          <VideoBlock uri={resolvedUrl} watermark={isPreview} previewSeconds={payload.previewSeconds ?? 20} />
+        ) : payload.kind === "audio" ? (
+          <AudioBlock uri={resolvedUrl} watermark={isPreview} previewSeconds={payload.previewSeconds ?? 20} />
+        ) : payload.kind === "file" ? (
+          <FileBlock uri={resolvedUrl} watermark={isPreview} />
         ) : payload.kind === "link" ? (
           resolvedUrl ? (
             <View style={{ marginTop: 12 }}>
-              <WatermarkedBrowser
-                initialUrl={resolvedUrl}
-                allowGoogleSearch={payload.allowGoogleSearch ?? true}
-                lockToInitialHost={payload.lockToInitialHost ?? false}
-                title="Website preview (URL hidden)"
-              />
-              <View style={{ marginTop: 10, borderRadius: 16, padding: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
-                <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 18, fontSize: 12 }}>
-                  Note: URL is hidden in-app, but full URL hiding cannot be guaranteed on the internet. This is best-effort protection.
-                </Text>
-              </View>
+              <WatermarkedBrowser initialUrl={resolvedUrl} allowGoogleSearch lockToInitialHost />
             </View>
           ) : null
-        ) : payload.kind === "audio" ? (
-          <AudioPreviewBlock uri={resolvedUrl} previewSeconds={payload.previewSeconds ?? 20} />
         ) : null}
       </LinearGradient>
     </Modal>
   );
 }
 
-function AudioPreviewBlock({ uri, previewSeconds }: { uri: string | null; previewSeconds: number }) {
-  const [available, setAvailable] = useState<boolean | null>(null);
+function MediaFrame({ watermark, children }: { watermark: boolean; children: React.ReactNode }) {
+  return (
+    <View style={{ marginTop: 14, borderRadius: 18, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+      <View style={{ height: 380, backgroundColor: "rgba(255,255,255,0.05)" }}>
+        {children}
+        {watermark ? (
+          <View pointerEvents="none" style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
+            <Image source={WatermarkIcon} style={{ width: 92, height: 92, opacity: 0.20 }} />
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontWeight: "900" }}>BestCity Preview</Text>
+          </View>
+        ) : null}
+      </View>
+      <View style={{ padding: 12, backgroundColor: "rgba(0,0,0,0.35)" }}>
+        <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
+          {watermark ? "Preview Only • Low quality / Watermarked" : "Full quality deliverable"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function FileBlock({ uri, watermark }: { uri: string | null; watermark: boolean }) {
+  return (
+    <View style={{ marginTop: 18, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+      <Text style={{ color: "#fff", fontWeight: "900" }}>{watermark ? "File preview" : "File download"}</Text>
+      <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
+        {watermark ? "This is a preview file. It may be watermarked or reduced quality." : "This is the full-quality file."}
+      </Text>
+
+      <Pressable
+        disabled={!uri}
+        onPress={() => uri && Linking.openURL(uri)}
+        style={{
+          marginTop: 12,
+          borderRadius: 14,
+          paddingVertical: 12,
+          alignItems: "center",
+          backgroundColor: uri ? "rgba(124,58,237,0.85)" : "rgba(255,255,255,0.08)",
+          borderWidth: 1,
+          borderColor: uri ? "rgba(124,58,237,0.95)" : "rgba(255,255,255,0.12)",
+          opacity: uri ? 1 : 0.7,
+        }}
+      >
+        <Text style={{ color: "#fff", fontWeight: "900" }}>{uri ? "Open / Download" : "Loading…"}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function VideoBlock({ uri, watermark, previewSeconds }: { uri: string | null; watermark: boolean; previewSeconds: number }) {
+  const [av, setAv] = useState<any | null | false>(null);
+  const videoRef = useRef<any>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        await import("expo-av");
+        const mod = await import("expo-av");
         if (!alive) return;
-        setAvailable(true);
+        setAv(mod);
       } catch {
         if (!alive) return;
-        setAvailable(false);
+        setAv(false);
       }
     })();
     return () => {
@@ -167,30 +209,168 @@ function AudioPreviewBlock({ uri, previewSeconds }: { uri: string | null; previe
     return (
       <View style={{ marginTop: 18, alignItems: "center" }}>
         <ActivityIndicator />
+        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading video…</Text>
+      </View>
+    );
+  }
+
+  if (av === false) {
+    return (
+      <View style={{ marginTop: 18, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+        <Text style={{ color: "#fff", fontWeight: "900" }}>Video preview not installed</Text>
+        <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>Install expo-av to play videos in-app.</Text>
+        <Pressable
+          onPress={() => Linking.openURL(uri)}
+          style={{ marginTop: 12, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(124,58,237,0.85)" }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900" }}>Open in browser</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const Video = av?.Video;
+
+  return (
+    <MediaFrame watermark={watermark}>
+      <Video
+        ref={videoRef}
+        source={{ uri }}
+        style={{ width: "100%", height: "100%" }}
+        resizeMode="contain"
+        useNativeControls
+        shouldPlay={false}
+        onPlaybackStatusUpdate={(st: any) => {
+          if (!watermark) return;
+          if (!st?.isLoaded) return;
+          const limitMs = previewSeconds * 1000;
+          if (st.positionMillis >= limitMs && st.isPlaying) {
+            videoRef.current?.pauseAsync?.();
+          }
+        }}
+      />
+    </MediaFrame>
+  );
+}
+
+function AudioBlock({ uri, watermark, previewSeconds }: { uri: string | null; watermark: boolean; previewSeconds: number }) {
+  const [av, setAv] = useState<any | null | false>(null);
+  const [sound, setSound] = useState<any>(null);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const mod = await import("expo-av");
+        if (!alive) return;
+        setAv(mod);
+      } catch {
+        if (!alive) return;
+        setAv(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!av || av === false) return;
+      if (!uri) return;
+
+      try {
+        if (sound) {
+          await sound.unloadAsync();
+          setSound(null);
+          setPlaying(false);
+        }
+
+        const { sound: s } = await av.Audio.Sound.createAsync(
+          { uri },
+          { shouldPlay: false },
+          (st: any) => {
+            if (!st?.isLoaded) return;
+            setPlaying(!!st.isPlaying);
+            if (watermark) {
+              const limitMs = previewSeconds * 1000;
+              if (st.positionMillis >= limitMs && st.isPlaying) {
+                s.pauseAsync();
+              }
+            }
+          },
+        );
+
+        if (!mounted) return;
+        setSound(s);
+      } catch {}
+    })();
+
+    return () => {
+      mounted = false;
+      (async () => {
+        try {
+          if (sound) await sound.unloadAsync();
+        } catch {}
+      })();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [av, uri]);
+
+  if (!uri) {
+    return (
+      <View style={{ marginTop: 18, alignItems: "center" }}>
+        <ActivityIndicator />
         <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading audio…</Text>
       </View>
     );
   }
 
-  if (available === false) {
+  if (av === false) {
     return (
       <View style={{ marginTop: 18, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
         <Text style={{ color: "#fff", fontWeight: "900" }}>Audio preview not installed</Text>
-        <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-          Install expo-av to enable audio previews.
-        </Text>
+        <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>Install expo-av to play audio in-app.</Text>
+        <Pressable
+          onPress={() => Linking.openURL(uri)}
+          style={{ marginTop: 12, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(124,58,237,0.85)" }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900" }}>Open in browser</Text>
+        </Pressable>
       </View>
     );
   }
 
-  // We keep this simple in this modal. If you want full play/pause + timer,
-  // we can swap this for a dedicated AudioPreview component.
   return (
-    <View style={{ marginTop: 18, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
-      <Text style={{ color: "#fff", fontWeight: "900" }}>Audio preview</Text>
+    <View style={{ marginTop: 14, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+      <Text style={{ color: "#fff", fontWeight: "900" }}>{watermark ? "Audio preview" : "Full audio"}</Text>
       <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-        Audio preview is enabled, but play controls aren’t wired here yet. Tell me and I’ll add the full player (play/pause, stop at {previewSeconds}s).
+        {watermark ? `Preview stops at ${previewSeconds}s.` : "Full-quality audio."}
       </Text>
+
+      <Pressable
+        disabled={!sound}
+        onPress={async () => {
+          if (!sound) return;
+          if (playing) await sound.pauseAsync();
+          else await sound.playAsync();
+        }}
+        style={{
+          marginTop: 12,
+          borderRadius: 14,
+          paddingVertical: 12,
+          alignItems: "center",
+          backgroundColor: sound ? "rgba(124,58,237,0.85)" : "rgba(255,255,255,0.08)",
+          borderWidth: 1,
+          borderColor: sound ? "rgba(124,58,237,0.95)" : "rgba(255,255,255,0.12)",
+          opacity: sound ? 1 : 0.7,
+        }}
+      >
+        <Text style={{ color: "#fff", fontWeight: "900" }}>{sound ? (playing ? "Pause" : "Play") : "Loading…"}</Text>
+      </Pressable>
     </View>
   );
 }
+

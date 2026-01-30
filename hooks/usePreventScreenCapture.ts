@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
-// Best-effort: only works on native when expo-screen-capture is installed
 export function usePreventScreenCapture(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
@@ -14,9 +13,7 @@ export function usePreventScreenCapture(enabled: boolean) {
         const ScreenCapture = await import("expo-screen-capture");
         if (!mounted) return;
         await ScreenCapture.preventScreenCaptureAsync();
-      } catch {
-        // best-effort
-      }
+      } catch {}
     })();
 
     return () => {

@@ -2,14 +2,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
-import { listOrderDeliverables, signedUrlForDeliverable, OrderDeliverable } from "@/services/market/orderDeliverables";
+import {
+  listOrderDeliverables,
+  signedUrlForDeliverable,
+  OrderDeliverable,
+  insertFileDeliverable,
+  guessKindFromMime,
+} from "@/services/market/orderDeliverables";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -55,7 +61,7 @@ type ListingRow = {
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
-  website_url?: string | null; // ✅ new
+  website_url?: string | null;
 };
 
 type SellerRow = {
@@ -136,6 +142,29 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+async function safeLoadListing(listingId: string) {
+  const attempt1 = await supabase
+    .from(LISTINGS_TABLE)
+    .select("id,title,delivery_type,category,sub_category,website_url")
+    .eq("id", listingId)
+    .maybeSingle();
+
+  if (!attempt1.error) return attempt1.data as any;
+
+  const msg = String(attempt1.error.message || "").toLowerCase();
+  if (msg.includes("website_url") && msg.includes("does not exist")) {
+    const attempt2 = await supabase
+      .from(LISTINGS_TABLE)
+      .select("id,title,delivery_type,category,sub_category")
+      .eq("id", listingId)
+      .maybeSingle();
+    if (attempt2.error) throw new Error(attempt2.error.message);
+    return attempt2.data as any;
+  }
+
+  throw new Error(attempt1.error.message);
+}
+
 export default function OrderDetails() {
   const insets = useSafeAreaInsets();
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
@@ -161,35 +190,27 @@ export default function OrderDetails() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<PreviewPayload | null>(null);
 
+  // Upload (seller)
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
+
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
 
-  async function safeLoadListing(listingId: string) {
-    // ✅ Try select with website_url; fallback if column not exists
-    const attempt1 = await supabase
-      .from(LISTINGS_TABLE)
-      .select("id,title,delivery_type,category,sub_category,website_url")
-      .eq("id", listingId)
-      .maybeSingle();
+  const previewItems = useMemo(() => deliverables.filter((d) => d.access === "preview"), [deliverables]);
+  const finalItems = useMemo(() => deliverables.filter((d) => d.access === "final"), [deliverables]);
 
-    if (!attempt1.error) return attempt1.data as any;
+  const isDigital = useMemo(() => String(listing?.delivery_type ?? "").toLowerCase() === "digital", [listing?.delivery_type]);
+  const hasWebsite = useMemo(() => !!listing?.website_url, [listing?.website_url]);
 
-    const msg = String(attempt1.error.message || "");
-    if (msg.toLowerCase().includes("website_url") && msg.toLowerCase().includes("does not exist")) {
-      const attempt2 = await supabase
-        .from(LISTINGS_TABLE)
-        .select("id,title,delivery_type,category,sub_category")
-        .eq("id", listingId)
-        .maybeSingle();
-
-      if (attempt2.error) throw new Error(attempt2.error.message);
-      return attempt2.data as any;
-    }
-
-    throw new Error(attempt1.error.message);
-  }
+  // Buyer can download full-quality after OTP verified + delivered/released
+  const canDownloadFinal =
+    !!order &&
+    isBuyer &&
+    otpVerified &&
+    (order.status === "DELIVERED" || order.status === "RELEASED");
 
   async function load() {
     console.log("[OrderDetails] load start", { oid });
@@ -241,12 +262,12 @@ export default function OrderDetails() {
         .eq("order_id", oid)
         .order("created_at", { ascending: false });
 
-      // ✅ Deliverables (safe: won't break if table missing)
+      // deliverables (safe)
       try {
-        const dels = await listOrderDeliverables(oid);
-        setDeliverables(dels);
+        const ds = await listOrderDeliverables(oid);
+        setDeliverables(ds);
       } catch (e: any) {
-        console.log("[OrderDetails] deliverables load skipped:", e?.message ?? e);
+        console.log("[OrderDetails] deliverables skipped:", e?.message ?? e);
         setDeliverables([]);
       }
 
@@ -274,7 +295,7 @@ export default function OrderDetails() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oid]);
 
-  // Buttons conditions
+  // Buttons conditions (your existing logic)
   const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
   const canCancel = !!order && order.status === "CREATED" && isBuyer;
 
@@ -283,15 +304,10 @@ export default function OrderDetails() {
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
   // Buyer releases only after OTP verified + delivered
-  const canRelease =
-    !!order &&
-    isBuyer &&
-    otpVerified &&
-    order.status === "DELIVERED";
+  const canRelease = !!order && isBuyer && otpVerified && order.status === "DELIVERED";
 
   async function doOutForDelivery() {
     if (!order) return;
-    console.log("[OrderDetails] outForDelivery start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
@@ -301,13 +317,11 @@ export default function OrderDetails() {
       setErr(e?.message || "Could not mark out for delivery");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] outForDelivery end");
     }
   }
 
   async function requestOTP() {
     if (!order) return;
-    console.log("[OrderDetails] requestOTP start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
@@ -317,7 +331,6 @@ export default function OrderDetails() {
       setErr(e?.message || "OTP request failed");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] requestOTP end");
     }
   }
 
@@ -326,25 +339,21 @@ export default function OrderDetails() {
     const code = otpInput.trim();
     if (code.length < 4) return setErr("Enter the OTP");
 
-    console.log("[OrderDetails] verifyOTP start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
       await callFn(FN_OTP_VERIFY, { order_id: order.id, otp: code });
-
       setOtpInput("");
       await load();
     } catch (e: any) {
       setErr(e?.message || "OTP verify failed");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] verifyOTP end");
     }
   }
 
   async function releaseFunds() {
     if (!order) return;
-    console.log("[OrderDetails] releaseFunds start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
@@ -354,13 +363,11 @@ export default function OrderDetails() {
       setErr(e?.message || "Release failed");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] releaseFunds end");
     }
   }
 
   async function openDispute() {
     if (!order) return;
-    console.log("[OrderDetails] openDispute start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
@@ -370,13 +377,11 @@ export default function OrderDetails() {
       setErr(e?.message || "Could not open dispute");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] openDispute end");
     }
   }
 
   async function cancelOrder() {
     if (!order) return;
-    console.log("[OrderDetails] cancelOrder start", { orderId: order.id });
     setBusy(true);
     setErr(null);
     try {
@@ -386,53 +391,100 @@ export default function OrderDetails() {
       setErr(e?.message || "Cancel failed");
     } finally {
       setBusy(false);
-      console.log("[OrderDetails] cancelOrder end");
     }
   }
 
-  async function openDeliverablePreview(d: OrderDeliverable) {
-    // Buyer sees preview before release.
-    setErr(null);
-
-    if (d.kind === "link") {
-      const url = d.link_url ?? listing?.website_url ?? "";
-      if (!url) return setErr("No website link available for preview.");
-
-      setPreviewPayload({
-        kind: "link",
-        title: d.title ?? "Website preview",
-        url,
-        // seller-controlled: lock to initial host reduces browsing around (best-effort)
-        lockToInitialHost: true,
-        // if you REALLY want Google search inside, set to true (but it reduces “hiding”)
-        allowGoogleSearch: true,
-      });
-
-      setPreviewOpen(true);
-      return;
-    }
-
-    setPreviewPayload({
-      kind: d.kind as any,
-      title: d.title ?? `${d.kind.toUpperCase()} preview`,
-      previewSeconds: d.preview_seconds ?? 20,
-      urlPromise: async () => {
-        const u = await signedUrlForDeliverable(d, 600);
-        return u;
-      },
-    } as any);
-
+  function openPreview(payload: PreviewPayload) {
+    setPreviewPayload(payload);
     setPreviewOpen(true);
   }
 
-  const previewItemsForBuyer = useMemo(() => {
-    // buyer can preview "preview" deliverables anytime (before release), and "final" only after release (RLS enforces too)
-    return deliverables.filter((d) => d.access === "preview");
-  }, [deliverables]);
+  async function previewDeliverable(d: OrderDeliverable) {
+    if (d.kind === "link") {
+      const url = d.link_url ?? listing?.website_url ?? "";
+      if (!url) return setErr("No website link available.");
+      openPreview({ kind: "link", access: d.access, title: d.title ?? "Website preview", url });
+      return;
+    }
 
-  const canShowWebsiteFromListing = useMemo(() => {
-    return !!listing?.website_url && String(listing?.delivery_type ?? "").toLowerCase() === "digital";
-  }, [listing?.website_url, listing?.delivery_type]);
+    openPreview({
+      kind: d.kind as any,
+      access: d.access,
+      title: d.title ?? `${d.kind.toUpperCase()} ${d.access === "preview" ? "preview" : "full"}`,
+      previewSeconds: d.preview_seconds ?? 20,
+      mimeType: d.mime_type,
+      urlPromise: async () => signedUrlForDeliverable(d, 900),
+    });
+  }
+
+  async function downloadDeliverable(d: OrderDeliverable) {
+    try {
+      const url = await signedUrlForDeliverable(d, 900);
+      if (!url) throw new Error("No download URL");
+      await Linking.openURL(url);
+    } catch (e: any) {
+      setErr(e?.message || "Download failed");
+    }
+  }
+
+  // Seller upload preview/final
+  async function pickAndUpload(access: "preview" | "final") {
+    if (!order) return;
+    setUploadBusy(true);
+    setUploadErr(null);
+
+    try {
+      const DocumentPicker = await import("expo-document-picker");
+      const FileSystem = await import("expo-file-system");
+
+      const res = await DocumentPicker.getDocumentAsync({ multiple: false, copyToCacheDirectory: true });
+      if (res.canceled) return;
+
+      const asset = res.assets?.[0];
+      if (!asset?.uri) throw new Error("No file selected");
+
+      const name = asset.name ?? `file-${Date.now()}`;
+      const mime = asset.mimeType ?? null;
+      const kind = guessKindFromMime(mime, name);
+
+      // Read file -> base64 -> bytes
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+      const bin = globalThis.atob ? atob(base64) : "";
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+      const bucket = "market-deliverables";
+      const safeName = name.replace(/[^\w.\-]+/g, "_");
+      const path = `orders/${order.id}/${access}/${Date.now()}-${safeName}`;
+
+      const up = await supabase.storage.from(bucket).upload(path, bytes, {
+        contentType: mime ?? undefined,
+        upsert: false,
+      });
+
+      if (up.error) throw new Error(up.error.message);
+
+      await insertFileDeliverable({
+        orderId: order.id,
+        access,
+        kind,
+        title: access === "preview" ? `Preview: ${name}` : `Full: ${name}`,
+        sortOrder: access === "preview" ? previewItems.length : finalItems.length,
+        bucket,
+        storagePath: path,
+        mimeType: mime,
+        meta: {
+          note: access === "preview" ? "Low quality / watermarked recommended" : "Full quality",
+        },
+      });
+
+      await load();
+    } catch (e: any) {
+      setUploadErr(e?.message || "Upload failed (ensure expo-document-picker + expo-file-system installed)");
+    } finally {
+      setUploadBusy(false);
+    }
+  }
 
   return (
     <LinearGradient
@@ -474,43 +526,23 @@ export default function OrderDetails() {
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
           </View>
         ) : !order ? (
-          <View
-            style={{
-              marginTop: 18,
-              borderRadius: 22,
-              padding: 16,
-              backgroundColor: "rgba(255,255,255,0.05)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.08)",
-            }}
-          >
+          <View style={{ marginTop: 18, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
             <Text style={{ color: "#fff", fontWeight: "900" }}>Order not found</Text>
             {!!err && <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>}
           </View>
         ) : (
           <>
             {/* Summary */}
-            <View
-              style={{
-                marginTop: 6,
-                borderRadius: 22,
-                padding: 16,
-                backgroundColor: "rgba(255,255,255,0.05)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.08)",
-              }}
-            >
+            <View style={{ marginTop: 6, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
                   <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>Item</Text>
                   <Text style={{ marginTop: 4, color: "#fff", fontWeight: "900" }}>
                     {listing?.title ?? "Listing"}
                   </Text>
-
                   <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                     {listing?.category ?? "—"} • {listing?.delivery_type ?? "—"} • {listing?.sub_category ?? "—"}
                   </Text>
-
                   <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                     Seller: {seller?.business_name || seller?.display_name || "Seller"}
                     {seller?.is_verified ? " ✅" : ""} @{seller?.market_username || "seller"}
@@ -522,79 +554,202 @@ export default function OrderDetails() {
                   <Text style={{ marginTop: 10, color: "#fff", fontWeight: "900", fontSize: 18 }}>
                     {money(order.currency, order.amount)}
                   </Text>
-                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>Qty: {order.quantity}</Text>
+                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+                    Qty: {order.quantity}
+                  </Text>
                 </View>
               </View>
             </View>
 
-            {/* ✅ Buyer Preview Section */}
-            {isBuyer ? (
-              <Card title="Preview (before release)">
-                <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-                  Preview the seller’s work with BestCity watermark before you release funds.
-                </Text>
-
-                {/* Website preview from listing (digital services) */}
-                {canShowWebsiteFromListing ? (
-                  <Pressable
-                    onPress={() => {
-                      setPreviewPayload({
-                        kind: "link",
-                        title: "Website preview",
-                        url: String(listing?.website_url ?? ""),
-                        lockToInitialHost: true,
-                        allowGoogleSearch: true,
-                      });
-                      setPreviewOpen(true);
-                    }}
-                    style={{
-                      marginTop: 12,
-                      borderRadius: 18,
-                      paddingVertical: 14,
-                      alignItems: "center",
-                      backgroundColor: "rgba(124,58,237,0.20)",
-                      borderWidth: 1,
-                      borderColor: "rgba(124,58,237,0.35)",
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "900" }}>Open website preview</Text>
-                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                      Embedded browser • URL hidden in-app
+            {/* Deliverables & Previews (works for digital + physical; message adapts) */}
+            <Card title="Deliverables & previews">
+              {isBuyer ? (
+                <>
+                  {!isDigital && previewItems.length === 0 && !hasWebsite ? (
+                    <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
+                      This looks like a physical / non-digital delivery. No previews required. Track delivery using the timeline below.
                     </Text>
-                  </Pressable>
-                ) : null}
+                  ) : (
+                    <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
+                      Preview the work (low quality / watermarked). After OTP is verified and marked delivered, full-quality downloads unlock.
+                    </Text>
+                  )}
 
-                {/* Deliverables (seller uploaded for this order) */}
-                {previewItemsForBuyer.length === 0 ? (
-                  <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.60)" }}>
-                    No deliverables uploaded yet.
+                  {hasWebsite ? (
+                    <Pressable
+                      onPress={() =>
+                        openPreview({
+                          kind: "link",
+                          access: "preview",
+                          title: "Website preview",
+                          url: String(listing?.website_url ?? ""),
+                        })
+                      }
+                      style={{
+                        marginTop: 12,
+                        borderRadius: 18,
+                        paddingVertical: 14,
+                        alignItems: "center",
+                        backgroundColor: "rgba(124,58,237,0.20)",
+                        borderWidth: 1,
+                        borderColor: "rgba(124,58,237,0.35)",
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "900" }}>Open website preview</Text>
+                      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                        Embedded preview • Watermarked
+                      </Text>
+                    </Pressable>
+                  ) : null}
+
+                  {previewItems.length === 0 ? (
+                    <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.60)" }}>No preview files uploaded yet.</Text>
+                  ) : (
+                    <View style={{ marginTop: 12, gap: 10 }}>
+                      {previewItems.map((d) => (
+                        <Pressable
+                          key={d.id}
+                          onPress={() => previewDeliverable(d)}
+                          style={{
+                            padding: 12,
+                            borderRadius: 16,
+                            backgroundColor: "rgba(255,255,255,0.06)",
+                            borderWidth: 1,
+                            borderColor: "rgba(255,255,255,0.10)",
+                          }}
+                        >
+                          <Text style={{ color: "#fff", fontWeight: "900" }}>
+                            {d.title ?? `${String(d.kind).toUpperCase()} preview`}
+                          </Text>
+                          <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                            Tap to open • Watermarked / low quality recommended
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+
+                  {canDownloadFinal ? (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={{ color: "#fff", fontWeight: "900" }}>Full quality downloads</Text>
+                      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                        Unlocked (OTP verified + delivered). Download and then release funds when satisfied.
+                      </Text>
+
+                      {finalItems.length === 0 ? (
+                        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.60)" }}>
+                          Seller has not uploaded full-quality files yet.
+                        </Text>
+                      ) : (
+                        <View style={{ marginTop: 10, gap: 10 }}>
+                          {finalItems.map((d) => (
+                            <View
+                              key={d.id}
+                              style={{
+                                padding: 12,
+                                borderRadius: 16,
+                                backgroundColor: "rgba(255,255,255,0.06)",
+                                borderWidth: 1,
+                                borderColor: "rgba(255,255,255,0.10)",
+                              }}
+                            >
+                              <Text style={{ color: "#fff", fontWeight: "900" }}>
+                                {d.title ?? `${String(d.kind).toUpperCase()} full`}
+                              </Text>
+
+                              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                                <Pressable
+                                  onPress={() => previewDeliverable(d)}
+                                  style={{
+                                    flex: 1,
+                                    borderRadius: 14,
+                                    paddingVertical: 12,
+                                    alignItems: "center",
+                                    backgroundColor: "rgba(255,255,255,0.08)",
+                                    borderWidth: 1,
+                                    borderColor: "rgba(255,255,255,0.10)",
+                                  }}
+                                >
+                                  <Text style={{ color: "#fff", fontWeight: "900" }}>View</Text>
+                                </Pressable>
+
+                                <Pressable
+                                  onPress={() => downloadDeliverable(d)}
+                                  style={{
+                                    flex: 1,
+                                    borderRadius: 14,
+                                    paddingVertical: 12,
+                                    alignItems: "center",
+                                    backgroundColor: "rgba(16,185,129,0.22)",
+                                    borderWidth: 1,
+                                    borderColor: "rgba(16,185,129,0.35)",
+                                  }}
+                                >
+                                  <Text style={{ color: "#fff", fontWeight: "900" }}>Download</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+
+              {isSeller ? (
+                <View style={{ marginTop: isBuyer ? 16 : 0 }}>
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>Seller upload</Text>
+                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                    Upload preview (low quality / watermarked) and then full-quality deliverables.
                   </Text>
-                ) : (
-                  <View style={{ marginTop: 12, gap: 10 }}>
-                    {previewItemsForBuyer.map((d) => (
-                      <Pressable
-                        key={d.id}
-                        onPress={() => openDeliverablePreview(d)}
-                        style={{
-                          padding: 12,
-                          borderRadius: 16,
-                          backgroundColor: "rgba(255,255,255,0.06)",
-                          borderWidth: 1,
-                          borderColor: "rgba(255,255,255,0.10)",
-                        }}
-                      >
-                        <Text style={{ color: "#fff", fontWeight: "900" }}>
-                          {d.title ?? `${d.kind.toUpperCase()} preview`}
-                        </Text>
-                        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                          Tap to open • Watermarked preview
-                        </Text>
-                      </Pressable>
-                    ))}
+
+                  {!!uploadErr ? <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{uploadErr}</Text> : null}
+
+                  <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                    <Pressable
+                      disabled={uploadBusy}
+                      onPress={() => pickAndUpload("preview")}
+                      style={{
+                        flex: 1,
+                        borderRadius: 16,
+                        paddingVertical: 14,
+                        alignItems: "center",
+                        backgroundColor: "rgba(124,58,237,0.20)",
+                        borderWidth: 1,
+                        borderColor: "rgba(124,58,237,0.35)",
+                        opacity: uploadBusy ? 0.7 : 1,
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "900" }}>{uploadBusy ? "Uploading…" : "Upload preview"}</Text>
+                    </Pressable>
+
+                    <Pressable
+                      disabled={uploadBusy}
+                      onPress={() => pickAndUpload("final")}
+                      style={{
+                        flex: 1,
+                        borderRadius: 16,
+                        paddingVertical: 14,
+                        alignItems: "center",
+                        backgroundColor: "rgba(16,185,129,0.20)",
+                        borderWidth: 1,
+                        borderColor: "rgba(16,185,129,0.35)",
+                        opacity: uploadBusy ? 0.7 : 1,
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "900" }}>{uploadBusy ? "Uploading…" : "Upload full"}</Text>
+                    </Pressable>
                   </View>
-                )}
-              </Card>
-            ) : null}
+
+                  {deliverables.length ? (
+                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.60)", fontSize: 12 }}>
+                      Uploaded: {previewItems.length} preview • {finalItems.length} full
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </Card>
 
             {/* Buyer checkout */}
             {canGoCheckout ? (
@@ -610,9 +765,7 @@ export default function OrderDetails() {
                   borderColor: PURPLE,
                 }}
               >
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-                  Continue to checkout
-                </Text>
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Continue to checkout</Text>
                 <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
                   Choose NGN wallet or USDC
                 </Text>
@@ -633,9 +786,7 @@ export default function OrderDetails() {
                   borderColor: "rgba(239,68,68,0.25)",
                 }}
               >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>
-                  {busy ? "Working…" : "Cancel order"}
-                </Text>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Cancel order"}</Text>
               </Pressable>
             ) : null}
 
@@ -706,9 +857,7 @@ export default function OrderDetails() {
                     borderColor: canOutForDelivery && !busy ? PURPLE : "rgba(124,58,237,0.35)",
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Working…" : "Mark out for delivery"}
-                  </Text>
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Mark out for delivery"}</Text>
                 </Pressable>
 
                 <View style={{ marginTop: 14 }}>
@@ -750,16 +899,12 @@ export default function OrderDetails() {
                       borderRadius: 18,
                       paddingVertical: 14,
                       alignItems: "center",
-                      backgroundColor:
-                        canVerifyOtp && !busy ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.06)",
+                      backgroundColor: canVerifyOtp && !busy ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.06)",
                       borderWidth: 1,
-                      borderColor:
-                        canVerifyOtp && !busy ? "rgba(16,185,129,0.40)" : "rgba(255,255,255,0.10)",
+                      borderColor: canVerifyOtp && !busy ? "rgba(16,185,129,0.40)" : "rgba(255,255,255,0.10)",
                     }}
                   >
-                    <Text style={{ color: "#fff", fontWeight: "900" }}>
-                      {otpVerified ? "OTP verified ✅" : busy ? "Verifying…" : "Verify OTP"}
-                    </Text>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>{otpVerified ? "OTP verified ✅" : busy ? "Verifying…" : "Verify OTP"}</Text>
                   </Pressable>
 
                   {otp ? (
@@ -767,9 +912,7 @@ export default function OrderDetails() {
                       OTP status: {otp.verified_at ? "Verified" : "Pending"} • attempts: {otp.attempts}
                     </Text>
                   ) : (
-                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                      OTP not created yet.
-                    </Text>
+                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>OTP not created yet.</Text>
                   )}
                 </View>
               </Card>
@@ -795,9 +938,7 @@ export default function OrderDetails() {
                     borderColor: canRequestOtp && !busy ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.10)",
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Working…" : "Generate delivery OTP"}
-                  </Text>
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Generate delivery OTP"}</Text>
                 </Pressable>
 
                 <Pressable
@@ -814,9 +955,7 @@ export default function OrderDetails() {
                     opacity: canRelease ? 1 : 0.7,
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Releasing…" : "Release funds to seller"}
-                  </Text>
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Releasing…" : "Release funds to seller"}</Text>
                   <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
                     Requires OTP verified
                   </Text>
@@ -835,9 +974,7 @@ export default function OrderDetails() {
                     borderColor: "rgba(239,68,68,0.25)",
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>
-                    {busy ? "Working…" : "Report issue / request refund"}
-                  </Text>
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Report issue / request refund"}</Text>
                 </Pressable>
 
                 {otp ? (
@@ -867,7 +1004,6 @@ export default function OrderDetails() {
         )}
       </ScrollView>
 
-      {/* Preview modal */}
       <OrderPreviewModal
         open={previewOpen}
         onClose={() => {
@@ -879,3 +1015,4 @@ export default function OrderDetails() {
     </LinearGradient>
   );
 }
+
