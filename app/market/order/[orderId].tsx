@@ -199,7 +199,6 @@ export default function OrderDetails() {
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
-  const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
 
