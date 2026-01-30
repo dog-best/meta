@@ -1,3 +1,4 @@
+// app/market/listings/index.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
@@ -23,6 +24,7 @@ const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 const CARD = "rgba(255,255,255,0.06)";
 const BORDER = "rgba(255,255,255,0.10)";
+const MUTED = "rgba(255,255,255,0.65)";
 
 const LISTINGS_TABLE = "market_listings";
 const IMAGES_TABLE = "market_listing_images";
@@ -63,16 +65,21 @@ type Listing = {
 type FilterTab = "all" | "product" | "service";
 type SortBy = "newest" | "price_low" | "price_high";
 type ActiveFilter = "all" | "active" | "disabled";
+type Mode = "mine" | "seller" | "invalid";
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
-  if (currency === "USDC") return `$${n.toLocaleString()}`;
+  if ((currency ?? "").toUpperCase() === "USDC") return `$${n.toLocaleString()}`;
   return `₦${n.toLocaleString()}`;
 }
 
 function sortImages(imgs: ListingImage[] | null | undefined) {
   if (!imgs?.length) return [];
   return [...imgs].sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
+}
+
+function sanitizeForOr(term: string) {
+  return term.replace(/,/g, " ").trim();
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number) {
@@ -82,10 +89,6 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
     return () => clearTimeout(id);
   }, [value, delayMs]);
   return debounced;
-}
-
-function sanitizeForOr(term: string) {
-  return term.replace(/,/g, " ").trim();
 }
 
 function pickUrl(img: ListingImage | null | undefined, supabaseUrl: string) {
@@ -104,6 +107,14 @@ function pickCoverUrl(listing: Listing, supabaseUrl: string) {
   return pickUrl(first ?? null, supabaseUrl);
 }
 
+function mediaCount(listing: Listing) {
+  const imgs = listing.images ?? [];
+  const cover = listing.cover_image;
+  if (!cover) return imgs.length;
+  const already = imgs.some((i) => i.id === cover.id);
+  return imgs.length + (already ? 0 : 1);
+}
+
 export default function ListingsFeed() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
@@ -114,18 +125,54 @@ export default function ListingsFeed() {
   }>();
 
   const [viewerUid, setViewerUid] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setViewerUid(data?.user?.id ?? null));
+    let alive = true;
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (!alive) return;
+        setViewerUid(data?.user?.id ?? null);
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setViewerUid(null);
+        setAuthChecked(true);
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const sellerIdParam = (params?.seller_id ?? "").trim() || null;
-  const mineParam = ["1", "true", "yes"].includes(String(params?.mine ?? "").toLowerCase());
+  const sellerIdParam = useMemo(() => (params?.seller_id ?? "").trim() || null, [params?.seller_id]);
+  const mineParam = useMemo(
+    () => ["1", "true", "yes"].includes(String(params?.mine ?? "").toLowerCase()),
+    [params?.mine],
+  );
 
+  const mode: Mode = useMemo(() => {
+    if (mineParam) return "mine";
+    if (sellerIdParam) return "seller";
+    return "invalid";
+  }, [mineParam, sellerIdParam]);
 
-  const isSellerView = !!sellerIdParam || mineParam;
-  const resolvedSellerId = mineParam ? viewerUid : sellerIdParam; // if mine=1, use auth uid
-  const isMineView = mineParam || (!!resolvedSellerId && !!viewerUid && resolvedSellerId === viewerUid);
+  // HARD SEPARATION:
+  // This screen is ONLY "mine" or "seller". If no params, bounce to public market feed.
+  useEffect(() => {
+    if (mode === "invalid") {
+      router.replace("/market/(tabs)" as any);
+    }
+  }, [mode]);
+
+  const resolvedSellerId = mode === "mine" ? viewerUid : sellerIdParam;
+
+  const isMineView = useMemo(() => {
+    if (mode === "mine") return true;
+    if (!resolvedSellerId || !viewerUid) return false;
+    return resolvedSellerId === viewerUid;
+  }, [mode, resolvedSellerId, viewerUid]);
 
   const initialCategory = useMemo(() => String(params?.category ?? "all"), [params?.category]);
   const initialQ = useMemo(() => String(params?.q ?? "").trim(), [params?.q]);
@@ -156,6 +203,19 @@ export default function ListingsFeed() {
 
   const listRef = useRef<FlatList<Listing>>(null);
 
+  const title = useMemo(() => {
+    if (mode === "mine") return "My Listings";
+    if (mode === "seller") return isMineView ? "My Listings" : "Store Listings";
+    return "Listings";
+  }, [mode, isMineView]);
+
+  const subtitle = useMemo(() => {
+    if (mode === "mine" || (mode === "seller" && isMineView)) {
+      return "Manage your listings (enable/disable or delete)";
+    }
+    return "Browsing this seller’s active listings";
+  }, [mode, isMineView]);
+
   const buildSort = useCallback(
     (query: any) => {
       if (sortBy === "price_low") return query.order("price_amount", { ascending: true });
@@ -167,8 +227,17 @@ export default function ListingsFeed() {
 
   const fetchPage = useCallback(
     async (reset: boolean) => {
-      // If this is "mine" view but not logged in yet
-      if (mineParam && !viewerUid) {
+      // don’t do anything while we’re redirecting
+      if (mode === "invalid") return;
+
+      // Mine view needs auth check to finish first
+      if (mode === "mine" && !authChecked) {
+        setLoading(true);
+        return;
+      }
+
+      // Mine view but signed out
+      if (mode === "mine" && authChecked && !viewerUid) {
         setErr("Please sign in to view your listings.");
         setLoading(false);
         setRows([]);
@@ -180,7 +249,6 @@ export default function ListingsFeed() {
         setHasMore(true);
         setPage(0);
 
-        // don’t blank the UI if already has data
         if (rows.length === 0) setLoading(true);
         else setRefreshing(true);
       } else {
@@ -189,6 +257,8 @@ export default function ListingsFeed() {
       }
 
       try {
+        if (!resolvedSellerId) throw new Error("Seller not found.");
+
         const currentPage = reset ? 0 : page;
         const from = currentPage * pageSize;
         const to = from + pageSize - 1;
@@ -202,21 +272,13 @@ export default function ListingsFeed() {
             images:${IMAGES_TABLE}!market_listing_images_listing_id_fkey(*)
           `,
           )
-          .is("deleted_at", null);
+          .is("deleted_at", null)
+          .eq("seller_id", resolvedSellerId);
 
-        // Seller view: filter by seller_id
-        if (isSellerView) {
-          if (!resolvedSellerId) throw new Error("Seller not found.");
-          query = query.eq("seller_id", resolvedSellerId);
+        // if not my view, show active only
+        if (!isMineView) query = query.eq("is_active", true);
 
-          // Public viewing someone else: active only
-          if (!isMineView) query = query.eq("is_active", true);
-        } else {
-          // Public feed: active only
-          query = query.eq("is_active", true);
-        }
-
-        // Active filter only affects mine view (optional)
+        // extra filters for mine view
         if (isMineView) {
           if (activeFilter === "active") query = query.eq("is_active", true);
           if (activeFilter === "disabled") query = query.eq("is_active", false);
@@ -227,11 +289,7 @@ export default function ListingsFeed() {
         const term = sanitizeForOr(debouncedQ);
         if (term) {
           query = query.or(
-            [
-              `title.ilike.%${term}%`,
-              `description.ilike.%${term}%`,
-              `sub_category.ilike.%${term}%`,
-            ].join(","),
+            [`title.ilike.%${term}%`, `description.ilike.%${term}%`, `sub_category.ilike.%${term}%`].join(","),
           );
         }
 
@@ -263,14 +321,14 @@ export default function ListingsFeed() {
       }
     },
     [
-      mineParam,
+      mode,
+      authChecked,
       viewerUid,
       rows.length,
       loadingMore,
       hasMore,
       page,
       buildSort,
-      isSellerView,
       resolvedSellerId,
       isMineView,
       activeFilter,
@@ -279,10 +337,12 @@ export default function ListingsFeed() {
     ],
   );
 
+  // reload when filters or mode changes
   useEffect(() => {
+    if (mode === "invalid") return;
     listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
     fetchPage(true);
-  }, [fetchPage]);
+  }, [mode, resolvedSellerId, tab, sortBy, debouncedQ, activeFilter, fetchPage]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -345,7 +405,7 @@ export default function ListingsFeed() {
 
       Alert.alert(
         "Delete listing?",
-        "This removes it from your store. Allowed only if there are NO orders ever on this listing. To change price/details, delete and create a new listing.",
+        "Allowed only if there are NO orders ever on this listing.",
         [
           { text: "Cancel", style: "cancel" },
           {
@@ -390,53 +450,66 @@ export default function ListingsFeed() {
       </Pressable>
     );
 
-    const SortPill = ({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) => (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 10,
-          borderRadius: 16,
-          backgroundColor: active ? PURPLE : "rgba(255,255,255,0.06)",
-          borderWidth: 1,
-          borderColor: active ? PURPLE : BORDER,
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
-      </Pressable>
-    );
-
-    const ActivePill = ({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) => (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 10,
-          borderRadius: 16,
-          backgroundColor: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)",
-          borderWidth: 1,
-          borderColor: active ? "rgba(255,255,255,0.20)" : BORDER,
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
-      </Pressable>
-    );
-
-    const title = mineParam ? "My Listings" : sellerIdParam ? "Listings" : "Listings";
+    const Pill = ({
+      active,
+      label,
+      onPress,
+      tone = "purple",
+    }: {
+      active: boolean;
+      label: string;
+      onPress: () => void;
+      tone?: "purple" | "neutral";
+    }) => {
+      const bg = tone === "purple" ? (active ? PURPLE : "rgba(255,255,255,0.06)") : active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)";
+      const bd =
+        tone === "purple" ? (active ? PURPLE : BORDER) : active ? "rgba(255,255,255,0.22)" : BORDER;
+      return (
+        <Pressable
+          onPress={onPress}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            borderRadius: 16,
+            backgroundColor: bg,
+            borderWidth: 1,
+            borderColor: bd,
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
+        </Pressable>
+      );
+    };
 
     return (
       <View style={{ paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
-        <AppHeader title={title} subtitle="Browse products and services" />
+        <AppHeader title={title} subtitle={subtitle} />
 
-        {isMineView ? (
-          <View style={{ marginTop: 10, borderRadius: 16, padding: 12, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
-            <Text style={{ color: "#fff", fontWeight: "900" }}>No edits allowed</Text>
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.70)" }}>
-              To change price/details, delete the listing and create a new one.
-            </Text>
+        {/* Title row */}
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={{ color: "#fff", fontSize: 28, fontWeight: "900" }}>{title}</Text>
+            <Text style={{ marginTop: 6, color: MUTED, fontSize: 13 }}>{subtitle}</Text>
           </View>
-        ) : null}
 
+          <Pressable
+            onPress={() => router.push("/market/(tabs)/account" as any)}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 16,
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Ionicons name="person-circle-outline" size={22} color="#fff" />
+          </Pressable>
+        </View>
+
+        {/* Search */}
         <View
           style={{
             marginTop: 12,
@@ -454,7 +527,7 @@ export default function ListingsFeed() {
           <TextInput
             value={q}
             onChangeText={setQ}
-            placeholder="Search e.g. iPhone, barber, shoes…"
+            placeholder="Search in this store…"
             placeholderTextColor="rgba(255,255,255,0.45)"
             style={{ flex: 1, color: "#fff", fontWeight: "700" }}
             returnKeyType="search"
@@ -462,8 +535,26 @@ export default function ListingsFeed() {
             autoCapitalize="none"
             autoCorrect={false}
           />
+          {!!q && (
+            <Pressable
+              onPress={() => setQ("")}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 12,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(255,255,255,0.08)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+              }}
+            >
+              <Ionicons name="close" size={16} color="#fff" />
+            </Pressable>
+          )}
         </View>
 
+        {/* Filters */}
         <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
           <Chip active={tab === "all"} label="All" onPress={() => setTab("all")} />
           <Chip active={tab === "product"} label="Products" onPress={() => setTab("product")} />
@@ -471,19 +562,20 @@ export default function ListingsFeed() {
         </View>
 
         <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-          <SortPill active={sortBy === "newest"} label="Newest" onPress={() => setSortBy("newest")} />
-          <SortPill active={sortBy === "price_low"} label="Price ↑" onPress={() => setSortBy("price_low")} />
-          <SortPill active={sortBy === "price_high"} label="Price ↓" onPress={() => setSortBy("price_high")} />
+          <Pill active={sortBy === "newest"} label="Newest" onPress={() => setSortBy("newest")} />
+          <Pill active={sortBy === "price_low"} label="Price ↑" onPress={() => setSortBy("price_low")} />
+          <Pill active={sortBy === "price_high"} label="Price ↓" onPress={() => setSortBy("price_high")} />
         </View>
 
         {isMineView ? (
           <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-            <ActivePill active={activeFilter === "all"} label="All" onPress={() => setActiveFilter("all")} />
-            <ActivePill active={activeFilter === "active"} label="Active" onPress={() => setActiveFilter("active")} />
-            <ActivePill active={activeFilter === "disabled"} label="Disabled" onPress={() => setActiveFilter("disabled")} />
+            <Pill tone="neutral" active={activeFilter === "all"} label="All" onPress={() => setActiveFilter("all")} />
+            <Pill tone="neutral" active={activeFilter === "active"} label="Active" onPress={() => setActiveFilter("active")} />
+            <Pill tone="neutral" active={activeFilter === "disabled"} label="Disabled" onPress={() => setActiveFilter("disabled")} />
           </View>
         ) : null}
 
+        {/* Error box */}
         {err ? (
           <View
             style={{
@@ -496,7 +588,8 @@ export default function ListingsFeed() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>Could not load listings</Text>
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>
+            <Text style={{ marginTop: 6, color: MUTED }}>{err}</Text>
+
             <Pressable
               onPress={() => fetchPage(true)}
               style={{
@@ -513,10 +606,27 @@ export default function ListingsFeed() {
             </Pressable>
           </View>
         ) : null}
+
+        {/* Count row */}
+        {!err ? (
+          <View style={{ marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ color: MUTED, fontWeight: "900", fontSize: 12 }}>
+              {rows.length} item{rows.length === 1 ? "" : "s"}
+            </Text>
+            {refreshing ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <ActivityIndicator />
+                <Text style={{ color: MUTED, fontWeight: "900", fontSize: 12 }}>Refreshing…</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
     );
   }, [
     insets.top,
+    title,
+    subtitle,
     q,
     tab,
     sortBy,
@@ -525,18 +635,73 @@ export default function ListingsFeed() {
     fetchPage,
     onSearchSubmit,
     isMineView,
-    mineParam,
-    sellerIdParam,
+    rows.length,
+    refreshing,
   ]);
+
+  const EmptyState = useMemo(() => {
+    if (loading || err) return null;
+
+    return (
+      <View style={{ paddingHorizontal: 16, marginTop: 14 }}>
+        <View
+          style={{
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+            alignItems: "center",
+          }}
+        >
+          <Ionicons name="albums-outline" size={26} color="rgba(255,255,255,0.65)" />
+          <Text style={{ marginTop: 10, color: "#fff", fontWeight: "900", fontSize: 16 }}>No listings found</Text>
+          <Text style={{ marginTop: 6, color: MUTED, textAlign: "center" }}>
+            Try changing filters or clearing your search.
+          </Text>
+
+          <Pressable
+            onPress={() => {
+              setQ("");
+              setTab("all");
+              setSortBy("newest");
+              setActiveFilter("all");
+              router.setParams({ q: "" } as any);
+            }}
+            style={{
+              marginTop: 12,
+              borderRadius: 18,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              alignItems: "center",
+              backgroundColor: PURPLE,
+              borderWidth: 1,
+              borderColor: PURPLE,
+              alignSelf: "stretch",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Reset filters</Text>
+          </Pressable>
+
+          <Pressable onPress={() => router.push("/market/(tabs)" as any)} style={{ marginTop: 12 }}>
+            <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>Back to Marketplace</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }, [loading, err]);
 
   const renderItem = useCallback(
     ({ item }: { item: Listing }) => {
       const cover = pickCoverUrl(item, supabaseUrl);
       const busy = busyId === item.id;
 
+      const statusBg = item.is_active ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.16)";
+      const statusBd = item.is_active ? "rgba(16,185,129,0.35)" : "rgba(239,68,68,0.35)";
+      const statusTxt = item.is_active ? "Active" : "Disabled";
+
       return (
-        <Pressable
-          onPress={() => router.push(`/market/listing/${item.id}` as any)}
+        <View
           style={{
             width: "48%",
             borderRadius: 22,
@@ -546,116 +711,136 @@ export default function ListingsFeed() {
             borderColor: "rgba(255,255,255,0.08)",
           }}
         >
-          <View style={{ height: 130, backgroundColor: "rgba(255,255,255,0.08)" }}>
-            {cover ? (
-              <Image source={{ uri: cover }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-            ) : (
-              <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="image-outline" size={28} color="rgba(255,255,255,0.55)" />
-              </View>
-            )}
+          <Pressable onPress={() => router.push(`/market/listing/${item.id}` as any)}>
+            <View style={{ height: 130, backgroundColor: "rgba(255,255,255,0.08)" }}>
+              {cover ? (
+                <Image source={{ uri: cover }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+              ) : (
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name="image-outline" size={28} color="rgba(255,255,255,0.55)" />
+                </View>
+              )}
 
-            {!item.is_active ? (
-              <View style={{ position: "absolute", top: 10, left: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.55)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Disabled</Text>
+              <View style={{ position: "absolute", bottom: 10, left: 10 }}>
+                <View
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    borderRadius: 14,
+                    backgroundColor: "rgba(0,0,0,0.55)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.10)",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    {money(item.currency, item.price_amount)}
+                  </Text>
+                </View>
               </View>
-            ) : null}
 
-            <View style={{ position: "absolute", bottom: 10, left: 10 }}>
-              <View
-                style={{
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
-                  borderRadius: 14,
-                  backgroundColor: "rgba(0,0,0,0.55)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.10)",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                  {money(item.currency, item.price_amount)}
+              {isMineView ? (
+                <View style={{ position: "absolute", top: 10, right: 10 }}>
+                  <View
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 999,
+                      backgroundColor: statusBg,
+                      borderWidth: 1,
+                      borderColor: statusBd,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>{statusTxt}</Text>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={{ padding: 12 }}>
+              <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
+                {item.title ?? "Untitled"}
+              </Text>
+
+              <Text numberOfLines={1} style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
+                {item.sub_category ?? "—"}
+                {item.delivery_type ? ` • ${item.delivery_type}` : ""}
+              </Text>
+
+              <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Ionicons name="images-outline" size={14} color={MUTED} />
+                <Text style={{ color: MUTED, fontSize: 11, fontWeight: "800" }}>
+                  {mediaCount(item)} media
                 </Text>
               </View>
             </View>
-          </View>
+          </Pressable>
 
-          <View style={{ padding: 12 }}>
-            <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
-              {item.title ?? "Untitled"}
-            </Text>
+          {isMineView ? (
+            <View style={{ flexDirection: "row", gap: 10, padding: 12, paddingTop: 0 }}>
+              <Pressable
+                disabled={busy}
+                onPress={() => rpcToggleActive(item, !item.is_active)}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  paddingVertical: 10,
+                  alignItems: "center",
+                  backgroundColor: item.is_active ? "rgba(255,255,255,0.08)" : PURPLE,
+                  borderWidth: 1,
+                  borderColor: item.is_active ? "rgba(255,255,255,0.12)" : PURPLE,
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? (
+                  <ActivityIndicator />
+                ) : (
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    {item.is_active ? "Disable" : "Enable"}
+                  </Text>
+                )}
+              </Pressable>
 
-            <Text numberOfLines={1} style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-              {item.sub_category ?? "—"}
-              {item.delivery_type ? ` • ${item.delivery_type}` : ""}
-            </Text>
-
-            <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <Ionicons name="images-outline" size={14} color="rgba(255,255,255,0.65)" />
-              <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontWeight: "800" }}>
-                {(item.images?.length ?? 0) + (item.cover_image ? 1 : 0)} media
-              </Text>
+              <Pressable
+                disabled={busy}
+                onPress={() => rpcDelete(item)}
+                style={{
+                  width: 44,
+                  borderRadius: 14,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,80,80,0.35)",
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                <Ionicons name="trash-outline" size={18} color="#fff" />
+              </Pressable>
             </View>
-
-            {isMineView ? (
-              <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
-                <Pressable
-                  disabled={busy}
-                  onPress={() => rpcToggleActive(item, !item.is_active)}
-                  style={{
-                    flex: 1,
-                    borderRadius: 14,
-                    paddingVertical: 10,
-                    alignItems: "center",
-                    backgroundColor: item.is_active ? "rgba(255,255,255,0.08)" : PURPLE,
-                    borderWidth: 1,
-                    borderColor: item.is_active ? "rgba(255,255,255,0.12)" : PURPLE,
-                    opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  {busy ? (
-                    <ActivityIndicator />
-                  ) : (
-                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                      {item.is_active ? "Disable" : "Enable"}
-                    </Text>
-                  )}
-                </Pressable>
-
-                <Pressable
-                  disabled={busy}
-                  onPress={() => rpcDelete(item)}
-                  style={{
-                    width: 44,
-                    borderRadius: 14,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "rgba(255,255,255,0.06)",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,80,80,0.35)",
-                    opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  <Ionicons name="trash-outline" size={18} color="#fff" />
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-        </Pressable>
+          ) : null}
+        </View>
       );
     },
     [supabaseUrl, isMineView, rpcToggleActive, rpcDelete, busyId],
   );
 
+  // While redirecting away, avoid flicker
+  if (mode === "invalid") {
+    return (
+      <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator />
+      </LinearGradient>
+    );
+  }
+
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
       {loading ? (
         <View style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
-          <AppHeader title="Listings" subtitle="Browse products and services" />
+          <AppHeader title={title} subtitle="Loading…" />
           <View style={{ marginTop: 40, alignItems: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
-              Loading…
-            </Text>
+            <Text style={{ marginTop: 10, color: MUTED, fontWeight: "800" }}>Loading…</Text>
           </View>
         </View>
       ) : (
@@ -668,6 +853,7 @@ export default function ListingsFeed() {
           columnWrapperStyle={{ paddingHorizontal: 16, justifyContent: "space-between", marginTop: 12 }}
           contentContainerStyle={{ paddingBottom: 28 }}
           ListHeaderComponent={Header}
+          ListEmptyComponent={EmptyState}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           onEndReachedThreshold={0.45}
           onEndReached={onEndReached}
@@ -678,9 +864,9 @@ export default function ListingsFeed() {
                   <ActivityIndicator />
                   <Text style={{ color: "#fff", fontWeight: "900" }}>Loading more…</Text>
                 </View>
-              ) : !hasMore ? (
+              ) : !hasMore && rows.length > 0 ? (
                 <Text style={{ color: "rgba(255,255,255,0.60)", fontWeight: "900", textAlign: "center" }}>
-                  No more results
+                  End of results
                 </Text>
               ) : null}
             </View>
