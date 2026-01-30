@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   Text,
   TextInput,
@@ -22,8 +23,12 @@ const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
+const CARD = "rgba(255,255,255,0.06)";
+const BORDER = "rgba(255,255,255,0.10)";
+const MUTED = "rgba(255,255,255,0.65)";
+
 const LISTINGS_TABLE = "market_listings";
-const LISTING_IMAGES_BUCKET = "market-listings"; // adjust if your bucket differs
+const LISTING_IMAGES_BUCKET = "market-listings";
 
 type CoverImage = {
   id: string;
@@ -37,11 +42,14 @@ type ListingRow = {
   price_amount: number | string | null;
   currency: string | null;
   delivery_type: string | null;
-  category: string | null; // "product" | "service"
-  sub_category: string | null; // slug e.g "groceries"
+  category: string | null;
+  sub_category: string | null;
   created_at: string | null;
+  is_active?: boolean | null;
   cover?: CoverImage | null;
 };
+
+type SortBy = "newest" | "price_low" | "price_high";
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
@@ -54,22 +62,70 @@ function buildPublicFromStorage(supabaseUrl: string, storagePath?: string | null
   return `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${storagePath}`;
 }
 
-function Pill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+function Pill({
+  label,
+  icon,
+  active,
+  onPress,
+}: {
+  label: string;
+  icon?: any;
+  active: boolean;
+  onPress: () => void;
+}) {
   return (
     <Pressable
       onPress={onPress}
       style={{
         flex: 1,
-        height: 44,
+        height: 46,
         borderRadius: 999,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: active ? PURPLE : "rgba(255,255,255,0.06)",
+        flexDirection: "row",
+        gap: 8,
+        backgroundColor: active ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.06)",
         borderWidth: 1,
-        borderColor: active ? PURPLE : "rgba(255,255,255,0.10)",
+        borderColor: active ? "rgba(124,58,237,0.55)" : BORDER,
       }}
     >
+      {icon ? <Ionicons name={icon} size={16} color="#fff" /> : null}
       <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function Chip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={{
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 999,
+        backgroundColor: active ? PURPLE : "rgba(255,255,255,0.06)",
+        borderWidth: 1,
+        borderColor: active ? PURPLE : BORDER,
+      }}
+    >
+      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -94,8 +150,8 @@ function CategoryChip({
         paddingVertical: 10,
         borderRadius: 999,
         borderWidth: 1,
-        borderColor: active ? "rgba(124,58,237,0.65)" : "rgba(255,255,255,0.12)",
-        backgroundColor: active ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.06)",
+        borderColor: active ? "rgba(124,58,237,0.60)" : BORDER,
+        backgroundColor: active ? "rgba(124,58,237,0.18)" : "rgba(255,255,255,0.06)",
         marginRight: 10,
       }}
     >
@@ -107,48 +163,116 @@ function CategoryChip({
 
 function ListingCard({ item, supabaseUrl }: { item: ListingRow; supabaseUrl: string }) {
   const coverUrl =
-    item.cover?.public_url ??
-    buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
+    item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
+
+  const isNew = useMemo(() => {
+    if (!item.created_at) return false;
+    const t = new Date(item.created_at).getTime();
+    if (!Number.isFinite(t)) return false;
+    return Date.now() - t < 1000 * 60 * 60 * 48; // 48h
+  }, [item.created_at]);
 
   return (
     <Pressable
-      onPress={() => {
-        // ✅ safest: param routing (prevents mistakes)
-        router.push({ pathname: "/market/listing/[id]" as any, params: { id: item.id } });
-      }}
+      onPress={() =>
+        router.push({ pathname: "/market/listing/[id]" as any, params: { id: item.id } })
+      }
       style={{
-        flex: 1,
-        borderRadius: 18,
+        width: "48%",
+        borderRadius: 22,
         overflow: "hidden",
         borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.05)",
-        marginBottom: 12,
+        borderColor: "rgba(255,255,255,0.08)",
+        backgroundColor: CARD,
       }}
     >
       <View style={{ height: 140, backgroundColor: "rgba(255,255,255,0.06)" }}>
         {coverUrl ? (
-          <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} />
+          <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-            <Ionicons name="image-outline" size={30} color="rgba(255,255,255,0.45)" />
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.45)", fontSize: 11 }}>No photo</Text>
+            <Ionicons name="image-outline" size={28} color="rgba(255,255,255,0.55)" />
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontWeight: "800", fontSize: 11 }}>
+              No photo
+            </Text>
           </View>
         )}
+
+        {/* Badges */}
+        <View style={{ position: "absolute", top: 10, left: 10, flexDirection: "row", gap: 8 }}>
+          <View
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 999,
+              backgroundColor: "rgba(16,185,129,0.18)",
+              borderWidth: 1,
+              borderColor: "rgba(16,185,129,0.35)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Active</Text>
+          </View>
+
+          {isNew ? (
+            <View
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 999,
+                backgroundColor: "rgba(124,58,237,0.22)",
+                borderWidth: 1,
+                borderColor: "rgba(124,58,237,0.45)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>New</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Price */}
+        <View style={{ position: "absolute", bottom: 10, left: 10 }}>
+          <View
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 8,
+              borderRadius: 14,
+              backgroundColor: "rgba(0,0,0,0.55)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+              {money(item.currency, item.price_amount)}
+            </Text>
+          </View>
+        </View>
       </View>
 
       <View style={{ padding: 12 }}>
-        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }} numberOfLines={1}>
+        <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
           {item.title ?? "Untitled"}
         </Text>
 
-        <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 12 }}>
-          {money(item.currency, item.price_amount)}
-        </Text>
-
-        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 11 }} numberOfLines={1}>
-          {item.delivery_type ?? "—"}
-        </Text>
+        <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 7,
+              borderRadius: 999,
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: BORDER,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <Ionicons name="cube-outline" size={14} color="rgba(255,255,255,0.75)" />
+            <Text style={{ color: "rgba(255,255,255,0.78)", fontWeight: "900", fontSize: 11 }} numberOfLines={1}>
+              {item.delivery_type ?? "—"}
+            </Text>
+          </View>
+        </View>
       </View>
     </Pressable>
   );
@@ -158,12 +282,24 @@ export default function MarketHome() {
   const insets = useSafeAreaInsets();
 
   const [main, setMain] = useState<MarketMainCategory>("product");
-  const [q, setQ] = useState("");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
+  const [sortBy, setSortBy] = useState<SortBy>("newest");
+
+  const [q, setQ] = useState("");
+  const debouncedQ = useDebouncedValue(q.trim(), 350);
+
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<ListingRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+
+  const pageSize = 20;
+  const [page, setPage] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  const listRef = useRef<FlatList<ListingRow>>(null);
 
   const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main), [main]);
 
@@ -175,80 +311,130 @@ export default function MarketHome() {
     setSelectedSlug(null);
   }, [main]);
 
-  useEffect(() => {
-    let alive = true;
+  const buildSort = useCallback(
+    (query: any) => {
+      if (sortBy === "price_low") return query.order("price_amount", { ascending: true });
+      if (sortBy === "price_high") return query.order("price_amount", { ascending: false });
+      return query.order("created_at", { ascending: false });
+    },
+    [sortBy],
+  );
 
-    (async () => {
-      console.log("[MarketHome] load start");
-      setLoading(true);
-      setErr(null);
+  const fetchPage = useCallback(
+    async (reset: boolean) => {
+      if (reset) {
+        setErr(null);
+        setHasMore(true);
+        setPage(0);
+
+        if (rows.length === 0) setLoading(true);
+        else setRefreshing(true);
+      } else {
+        if (loadingMore || !hasMore) return;
+        setLoadingMore(true);
+      }
 
       try {
+        const currentPage = reset ? 0 : page;
+        const from = currentPage * pageSize;
+        const to = from + pageSize - 1;
+
         let query = supabase
           .from(LISTINGS_TABLE)
           .select(
             `
-            id,title,price_amount,currency,delivery_type,category,sub_category,created_at,
+            id,title,price_amount,currency,delivery_type,category,sub_category,created_at,is_active,
             cover:market_listing_images!market_listings_cover_image_fk(id,public_url,storage_path)
-          `
+          `,
           )
           .eq("is_active", true)
-          .eq("category", main)
-          .order("created_at", { ascending: false })
-          .limit(60);
+          .eq("category", main);
 
         if (selectedSlug) query = query.eq("sub_category", selectedSlug);
 
-        const term = q.trim();
-        if (term) {
-          query = query.or([`title.ilike.%${term}%`, `description.ilike.%${term}%`].join(","));
+        if (debouncedQ) {
+          query = query.or([`title.ilike.%${debouncedQ}%`, `description.ilike.%${debouncedQ}%`].join(","));
         }
+
+        query = buildSort(query).range(from, to);
 
         const { data, error } = await query;
         if (error) throw new Error(error.message);
 
-        if (alive) setRows((data as any) ?? []);
+        const batch = ((data as any) ?? []) as ListingRow[];
+
+        if (reset) setRows(batch);
+        else setRows((prev) => [...prev, ...batch]);
+
+        setHasMore(batch.length === pageSize);
+        setPage((prev) => (reset ? 1 : prev + 1));
       } catch (e: any) {
-        if (alive) {
-          setErr(e?.message || "Failed to load listings");
-          setRows([]);
-        }
+        setErr(e?.message || "Failed to load listings");
+        if (reset) setRows([]);
       } finally {
-        if (alive) {
+        if (reset) {
           setLoading(false);
-          console.log("[MarketHome] load end");
+          setRefreshing(false);
+        } else {
+          setLoadingMore(false);
         }
       }
-    })();
+    },
+    [buildSort, debouncedQ, hasMore, loadingMore, main, page, rows.length, selectedSlug],
+  );
 
-    return () => {
-      alive = false;
-    };
-  }, [main, selectedSlug, q]);
+  // refetch when filters change
+  useEffect(() => {
+    listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    fetchPage(true);
+  }, [main, selectedSlug, sortBy, debouncedQ, fetchPage]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchPage(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchPage]);
+
+  const onEndReached = useCallback(() => {
+    if (!loading && !err) fetchPage(false);
+  }, [fetchPage, loading, err]);
+
+  const subtitle = useMemo(() => {
+    return "Discover products and services from businesses around you and beyond.";
+  }, []);
 
   return (
     <LinearGradient
       colors={[BG1, BG0]}
       start={{ x: 0.15, y: 0 }}
       end={{ x: 0.9, y: 1 }}
-      style={{ flex: 1, paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}
+      style={{ flex: 1 }}
     >
-      <AppHeader title="Marketplace" subtitle="Browse listings • Buy or hire • Escrow protected" />
       <FlatList
+        ref={listRef}
         data={rows}
         keyExtractor={(it) => it.id}
         numColumns={2}
-        columnWrapperStyle={{ gap: 12 }}
+        columnWrapperStyle={{ paddingHorizontal: 16, justifyContent: "space-between", marginTop: 12 }}
         contentContainerStyle={{ paddingBottom: 28 }}
         renderItem={({ item }) => <ListingCard item={item} supabaseUrl={supabaseUrl} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        onEndReachedThreshold={0.45}
+        onEndReached={onEndReached}
         ListHeaderComponent={
-          <View>
-            {/* Header */}
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: 12 }}>
+          <View style={{ paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
+            <AppHeader title="Marketplace" subtitle={subtitle} />
+
+            {/* Top row */}
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
               <View>
-                <Text style={{ color: "#fff", fontSize: 24, fontWeight: "900" }}>Marketplace</Text>
-                <Text style={{ color: "rgba(255,255,255,0.65)", marginTop: 6, fontSize: 13 }}>
-                  Browse listings • Buy or hire • Escrow protected
+                <Text style={{ color: "#fff", fontSize: 28, fontWeight: "900" }}>Marketplace</Text>
+                <Text style={{ marginTop: 6, color: MUTED, fontSize: 13 }}>
+                  {main === "product" ? "Shop curated products" : "Book trusted services"}
+                  {rows.length ? ` • ${rows.length}${hasMore ? "+" : ""} available` : ""}
                 </Text>
               </View>
 
@@ -272,12 +458,13 @@ export default function MarketHome() {
             {/* Search */}
             <View
               style={{
+                marginTop: 12,
                 flexDirection: "row",
                 gap: 10,
                 borderRadius: 20,
                 padding: 12,
                 borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.10)",
+                borderColor: BORDER,
                 backgroundColor: "rgba(255,255,255,0.06)",
                 alignItems: "center",
               }}
@@ -286,39 +473,55 @@ export default function MarketHome() {
               <TextInput
                 value={q}
                 onChangeText={setQ}
-                placeholder="Search listings"
+                placeholder="Search products, services, brands…"
                 placeholderTextColor="rgba(255,255,255,0.45)"
                 style={{ flex: 1, color: "#fff", fontWeight: "700" }}
                 returnKeyType="search"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
-              <Pressable
-                onPress={() => setQ(q.trim())}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 10,
-                  borderRadius: 16,
-                  backgroundColor: PURPLE,
-                  borderWidth: 1,
-                  borderColor: PURPLE,
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Go</Text>
-              </Pressable>
+              {!!q && (
+                <Pressable
+                  onPress={() => setQ("")}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 12,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.10)",
+                  }}
+                >
+                  <Ionicons name="close" size={16} color="#fff" />
+                </Pressable>
+              )}
             </View>
 
-            {/* Product / Service side-by-side */}
+            {/* Product / Service */}
             <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-              <Pill label="Products" active={main === "product"} onPress={() => setMain("product")} />
-              <Pill label="Services" active={main === "service"} onPress={() => setMain("service")} />
+              <Pill
+                label="Products"
+                icon="cart-outline"
+                active={main === "product"}
+                onPress={() => setMain("product")}
+              />
+              <Pill
+                label="Services"
+                icon="briefcase-outline"
+                active={main === "service"}
+                onPress={() => setMain("service")}
+              />
             </View>
 
-            {/* Categories side-by-side (chips) */}
+            {/* Categories */}
             <View style={{ marginTop: 14 }}>
               <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>
-                {main === "product" ? "Product Categories" : "Service Categories"}
+                {main === "product" ? "Categories" : "Service types"}
               </Text>
               <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                Tap a category to filter listings below
+                Filter results by category
               </Text>
 
               <View style={{ marginTop: 10 }}>
@@ -340,11 +543,20 @@ export default function MarketHome() {
               </View>
             </View>
 
+            {/* Sort */}
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+              <Chip label="Newest" active={sortBy === "newest"} onPress={() => setSortBy("newest")} />
+              <Chip label="Price ↑" active={sortBy === "price_low"} onPress={() => setSortBy("price_low")} />
+              <Chip label="Price ↓" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
+            </View>
+
             {/* State */}
             {loading ? (
               <View style={{ paddingVertical: 18, alignItems: "center" }}>
                 <ActivityIndicator />
-                <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading listings…</Text>
+                <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
+                  Loading listings…
+                </Text>
               </View>
             ) : err ? (
               <View
@@ -359,6 +571,21 @@ export default function MarketHome() {
               >
                 <Text style={{ color: "#fff", fontWeight: "900" }}>Could not load listings</Text>
                 <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>
+
+                <Pressable
+                  onPress={() => fetchPage(true)}
+                  style={{
+                    marginTop: 12,
+                    borderRadius: 16,
+                    paddingVertical: 12,
+                    alignItems: "center",
+                    backgroundColor: PURPLE,
+                    borderWidth: 1,
+                    borderColor: PURPLE,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>Retry</Text>
+                </Pressable>
               </View>
             ) : null}
           </View>
@@ -368,6 +595,7 @@ export default function MarketHome() {
             <View
               style={{
                 marginTop: 14,
+                marginHorizontal: 16,
                 borderRadius: 22,
                 padding: 16,
                 backgroundColor: "rgba(255,255,255,0.05)",
@@ -375,18 +603,19 @@ export default function MarketHome() {
                 borderColor: "rgba(255,255,255,0.08)",
               }}
             >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>No listings found</Text>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>No results</Text>
               <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-                Try another category or clear your search.
+                Try adjusting your search, category, or sort.
               </Text>
               <Pressable
                 onPress={() => {
                   setSelectedSlug(null);
                   setQ("");
+                  setSortBy("newest");
                 }}
                 style={{
                   marginTop: 12,
-                  borderRadius: 18,
+                  borderRadius: 16,
                   paddingVertical: 12,
                   alignItems: "center",
                   backgroundColor: PURPLE,
@@ -398,6 +627,20 @@ export default function MarketHome() {
               </Pressable>
             </View>
           )
+        }
+        ListFooterComponent={
+          <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 }}>
+            {loadingMore ? (
+              <View style={{ flexDirection: "row", gap: 10, alignItems: "center", justifyContent: "center" }}>
+                <ActivityIndicator />
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Loading more…</Text>
+              </View>
+            ) : !hasMore && rows.length > 0 ? (
+              <Text style={{ color: "rgba(255,255,255,0.60)", fontWeight: "900", textAlign: "center" }}>
+                You’ve reached the end
+              </Text>
+            ) : null}
+          </View>
         }
       />
     </LinearGradient>
