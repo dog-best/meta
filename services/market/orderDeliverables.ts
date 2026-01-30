@@ -20,7 +20,9 @@ export type OrderDeliverable = {
 export async function listOrderDeliverables(orderId: string) {
   const { data, error } = await supabase
     .from("market_order_deliverables")
-    .select("id,order_id,access,kind,title,sort_order,storage_bucket,storage_path,link_url,mime_type,duration_sec,preview_seconds,meta,created_at")
+    .select(
+      "id,order_id,access,kind,title,sort_order,storage_bucket,storage_path,link_url,mime_type,duration_sec,preview_seconds,meta,created_at",
+    )
     .eq("order_id", orderId)
     .order("sort_order", { ascending: true });
 

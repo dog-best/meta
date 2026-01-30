@@ -8,6 +8,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
+import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
+import { listOrderDeliverables, signedUrlForDeliverable, OrderDeliverable } from "@/services/market/orderDeliverables";
+
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
@@ -20,7 +23,7 @@ const FN_RELEASE_ESCROW = "market-release-escrow";
 const FN_DISPUTE_OPEN = "market-dispute-open";
 const FN_BUYER_CANCEL = "market-buyer-cancel-order";
 
-// Tables (direct reads are okay if your RLS allows party select)
+// Tables
 const ORDERS_TABLE = "market_orders";
 const LISTINGS_TABLE = "market_listings";
 const SELLERS_TABLE = "market_seller_profiles";
@@ -52,6 +55,7 @@ type ListingRow = {
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
+  website_url?: string | null; // ✅ new
 };
 
 type SellerRow = {
@@ -147,14 +151,45 @@ export default function OrderDetails() {
   const [otp, setOtp] = useState<OtpRow | null>(null);
   const [intents, setIntents] = useState<CryptoIntent[]>([]);
 
+  const [deliverables, setDeliverables] = useState<OrderDeliverable[]>([]);
+
   const [otpInput, setOtpInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Preview modal
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPayload, setPreviewPayload] = useState<PreviewPayload | null>(null);
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
+
+  async function safeLoadListing(listingId: string) {
+    // ✅ Try select with website_url; fallback if column not exists
+    const attempt1 = await supabase
+      .from(LISTINGS_TABLE)
+      .select("id,title,delivery_type,category,sub_category,website_url")
+      .eq("id", listingId)
+      .maybeSingle();
+
+    if (!attempt1.error) return attempt1.data as any;
+
+    const msg = String(attempt1.error.message || "");
+    if (msg.toLowerCase().includes("website_url") && msg.toLowerCase().includes("does not exist")) {
+      const attempt2 = await supabase
+        .from(LISTINGS_TABLE)
+        .select("id,title,delivery_type,category,sub_category")
+        .eq("id", listingId)
+        .maybeSingle();
+
+      if (attempt2.error) throw new Error(attempt2.error.message);
+      return attempt2.data as any;
+    }
+
+    throw new Error(attempt1.error.message);
+  }
 
   async function load() {
     console.log("[OrderDetails] load start", { oid });
@@ -185,12 +220,7 @@ export default function OrderDetails() {
         throw new Error("You are not allowed to view this order.");
       }
 
-      const { data: l, error: lErr } = await supabase
-        .from(LISTINGS_TABLE)
-        .select("id,title,delivery_type,category,sub_category")
-        .eq("id", (o as any).listing_id)
-        .maybeSingle();
-      if (lErr) throw new Error(lErr.message);
+      const l = await safeLoadListing((o as any).listing_id);
 
       const { data: s, error: sErr } = await supabase
         .from(SELLERS_TABLE)
@@ -211,6 +241,15 @@ export default function OrderDetails() {
         .eq("order_id", oid)
         .order("created_at", { ascending: false });
 
+      // ✅ Deliverables (safe: won't break if table missing)
+      try {
+        const dels = await listOrderDeliverables(oid);
+        setDeliverables(dels);
+      } catch (e: any) {
+        console.log("[OrderDetails] deliverables load skipped:", e?.message ?? e);
+        setDeliverables([]);
+      }
+
       setOrder(o as any);
       setListing((l as any) ?? null);
       setSeller((s as any) ?? null);
@@ -223,6 +262,7 @@ export default function OrderDetails() {
       setSeller(null);
       setOtp(null);
       setIntents([]);
+      setDeliverables([]);
     } finally {
       setLoading(false);
       console.log("[OrderDetails] load end");
@@ -350,6 +390,50 @@ export default function OrderDetails() {
     }
   }
 
+  async function openDeliverablePreview(d: OrderDeliverable) {
+    // Buyer sees preview before release.
+    setErr(null);
+
+    if (d.kind === "link") {
+      const url = d.link_url ?? listing?.website_url ?? "";
+      if (!url) return setErr("No website link available for preview.");
+
+      setPreviewPayload({
+        kind: "link",
+        title: d.title ?? "Website preview",
+        url,
+        // seller-controlled: lock to initial host reduces browsing around (best-effort)
+        lockToInitialHost: true,
+        // if you REALLY want Google search inside, set to true (but it reduces “hiding”)
+        allowGoogleSearch: true,
+      });
+
+      setPreviewOpen(true);
+      return;
+    }
+
+    setPreviewPayload({
+      kind: d.kind as any,
+      title: d.title ?? `${d.kind.toUpperCase()} preview`,
+      previewSeconds: d.preview_seconds ?? 20,
+      urlPromise: async () => {
+        const u = await signedUrlForDeliverable(d, 600);
+        return u;
+      },
+    } as any);
+
+    setPreviewOpen(true);
+  }
+
+  const previewItemsForBuyer = useMemo(() => {
+    // buyer can preview "preview" deliverables anytime (before release), and "final" only after release (RLS enforces too)
+    return deliverables.filter((d) => d.access === "preview");
+  }, [deliverables]);
+
+  const canShowWebsiteFromListing = useMemo(() => {
+    return !!listing?.website_url && String(listing?.delivery_type ?? "").toLowerCase() === "digital";
+  }, [listing?.website_url, listing?.delivery_type]);
+
   return (
     <LinearGradient
       colors={[BG1, BG0]}
@@ -442,6 +526,75 @@ export default function OrderDetails() {
                 </View>
               </View>
             </View>
+
+            {/* ✅ Buyer Preview Section */}
+            {isBuyer ? (
+              <Card title="Preview (before release)">
+                <Text style={{ color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
+                  Preview the seller’s work with BestCity watermark before you release funds.
+                </Text>
+
+                {/* Website preview from listing (digital services) */}
+                {canShowWebsiteFromListing ? (
+                  <Pressable
+                    onPress={() => {
+                      setPreviewPayload({
+                        kind: "link",
+                        title: "Website preview",
+                        url: String(listing?.website_url ?? ""),
+                        lockToInitialHost: true,
+                        allowGoogleSearch: true,
+                      });
+                      setPreviewOpen(true);
+                    }}
+                    style={{
+                      marginTop: 12,
+                      borderRadius: 18,
+                      paddingVertical: 14,
+                      alignItems: "center",
+                      backgroundColor: "rgba(124,58,237,0.20)",
+                      borderWidth: 1,
+                      borderColor: "rgba(124,58,237,0.35)",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Open website preview</Text>
+                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                      Embedded browser • URL hidden in-app
+                    </Text>
+                  </Pressable>
+                ) : null}
+
+                {/* Deliverables (seller uploaded for this order) */}
+                {previewItemsForBuyer.length === 0 ? (
+                  <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.60)" }}>
+                    No deliverables uploaded yet.
+                  </Text>
+                ) : (
+                  <View style={{ marginTop: 12, gap: 10 }}>
+                    {previewItemsForBuyer.map((d) => (
+                      <Pressable
+                        key={d.id}
+                        onPress={() => openDeliverablePreview(d)}
+                        style={{
+                          padding: 12,
+                          borderRadius: 16,
+                          backgroundColor: "rgba(255,255,255,0.06)",
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.10)",
+                        }}
+                      >
+                        <Text style={{ color: "#fff", fontWeight: "900" }}>
+                          {d.title ?? `${d.kind.toUpperCase()} preview`}
+                        </Text>
+                        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                          Tap to open • Watermarked preview
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </Card>
+            ) : null}
 
             {/* Buyer checkout */}
             {canGoCheckout ? (
@@ -713,6 +866,16 @@ export default function OrderDetails() {
           </>
         )}
       </ScrollView>
+
+      {/* Preview modal */}
+      <OrderPreviewModal
+        open={previewOpen}
+        onClose={() => {
+          setPreviewOpen(false);
+          setPreviewPayload(null);
+        }}
+        payload={previewPayload}
+      />
     </LinearGradient>
   );
 }
