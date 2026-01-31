@@ -1,7 +1,8 @@
 import ConfirmPurchase from "@/components/common/confirmpurchase";
 import { supabase } from "@/services/supabase";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 type TransferResponse = {
   reference: string;
@@ -33,6 +34,9 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
     const { data: u, error: userErr } = await supabase.auth.getUser();
     if (userErr) throw new Error(userErr.message);
     if (!u.user?.id) throw new Error("Not signed in");
+
+    const auth = await requireLocalAuth("Confirm transfer");
+    if (!auth.ok) throw new Error(auth.message || "Authentication required");
 
     // Call NEW signature: (p_to_public_uid text, p_amount numeric) returns jsonb
     const { data, error } = await supabase.rpc("simple_transfer_by_public_uid", {
@@ -77,12 +81,8 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
         placeholderTextColor="rgba(255,255,255,0.35)"
       />
 
-      <Pressable
-        style={[styles.btn, loading ? styles.btnDisabled : null]}
-        disabled={loading}
-        onPress={() => setConfirm(true)}
-      >
-        <Text style={styles.btnText}>{loading ? "Sending..." : "Review & Send"}</Text>
+      <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} disabled={loading} onPress={() => setConfirm(true)}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review & Send</Text>}
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}

@@ -1,8 +1,9 @@
 import ConfirmPurchase from "@/components/common/confirmpurchase";
 import { filterBanks, useBanks } from "@/hooks/wallet/useBanks";
 import { callFn } from "@/services/functions";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import React, { useMemo, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
   const { banks } = useBanks();
@@ -15,13 +16,21 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
 
   const [confirm, setConfirm] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const a = useMemo(() => Number(amount || 0), [amount]);
   const filtered = useMemo(() => filterBanks(banks, search), [banks, search]);
 
   async function submit() {
     setMsg(null);
+    if (!Number.isFinite(a) || a <= 0) throw new Error("Enter a valid amount");
     if (!bank) throw new Error("Select a bank");
+    if (accountNumber.trim().length < 10) throw new Error("Enter a valid account number");
+    if (!accountName.trim()) throw new Error("Account name is required");
+
+    const auth = await requireLocalAuth("Confirm withdrawal");
+    if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
     const res = await callFn("paystack-withdraw-init", {
       amount: a,
       bank_code: bank.code,
@@ -87,8 +96,8 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
         placeholderTextColor="rgba(255,255,255,0.35)"
       />
 
-      <Pressable style={styles.btn} onPress={() => setConfirm(true)}>
-        <Text style={styles.btnText}>Review & Withdraw</Text>
+      <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} onPress={() => setConfirm(true)} disabled={loading}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review & Withdraw</Text>}
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}
@@ -101,12 +110,15 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {
           setConfirm(false);
+          setLoading(true);
           try {
             const res: any = await submit();
             setMsg(`Withdrawal started. Ref: ${res.reference ?? "OK"}`);
             onSuccess();
           } catch (e: any) {
             setMsg(e.message);
+          } finally {
+            setLoading(false);
           }
         }}
       />
@@ -152,6 +164,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.02)",
   },
   btn: { marginTop: 12, backgroundColor: "#2563EB", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
+  btnDisabled: { opacity: 0.6 },
   btnText: { color: "white", fontWeight: "900" },
   msg: { color: "rgba(255,255,255,0.75)", marginTop: 12 },
 });

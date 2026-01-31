@@ -1,6 +1,7 @@
+import * as Clipboard from "expo-clipboard";
 import { supabase } from "@/services/supabase";
 import React, { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 type Props = {
   visible: boolean;
@@ -9,15 +10,25 @@ type Props = {
 
 export default function ProfileModal({ visible, onClose }: Props) {
   const [uid, setUid] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
+      if (!visible) return;
+      setLoading(true);
+      setMsg(null);
       const { data: u } = await supabase.auth.getUser();
       const userId = u.user?.id;
-      if (!userId) return;
+      if (!userId) {
+        setUid("");
+        setLoading(false);
+        return;
+      }
 
       const p = await supabase.from("profiles").select("public_uid").eq("id", userId).maybeSingle();
       setUid(p.data?.public_uid ?? "");
+      setLoading(false);
     })();
   }, [visible]);
 
@@ -28,10 +39,22 @@ export default function ProfileModal({ visible, onClose }: Props) {
           <Text style={styles.h}>Profile</Text>
           <Text style={styles.label}>Your UID (share to receive money)</Text>
           <View style={styles.uidBox}>
-            <Text style={styles.uid}>{uid || "—"}</Text>
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.uid}>{uid || "—"}</Text>}
           </View>
+          {msg ? <Text style={styles.msg}>{msg}</Text> : null}
 
           <View style={{ height: 12 }} />
+
+          <Pressable
+            style={[styles.btn, styles.btnGhost]}
+            onPress={async () => {
+              if (!uid) return;
+              await Clipboard.setStringAsync(uid);
+              setMsg("UID copied");
+            }}
+          >
+            <Text style={styles.btnGhostText}>Copy UID</Text>
+          </Pressable>
 
           <Pressable
             style={[styles.btn, styles.btnGhost]}
@@ -74,6 +97,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.1)",
   },
   uid: { color: "white", fontWeight: "900", fontSize: 16, letterSpacing: 0.6 },
+  msg: { color: "rgba(255,255,255,0.6)", marginTop: 8, fontSize: 12, textAlign: "center" },
   btn: { marginTop: 10, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
   btnGhost: { backgroundColor: "rgba(255,255,255,0.06)" },
   btnGhostText: { color: "white", fontWeight: "900" },

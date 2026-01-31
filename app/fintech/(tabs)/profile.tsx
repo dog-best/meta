@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAuth } from "@/hooks/authentication/useAuth";
 import { supabase } from "@/services/supabase";
@@ -16,10 +16,14 @@ type VA = { account_number: string; bank_name: string; account_name: string } | 
 export default function ProfileRoute() {
   const { user, profile, loading } = useAuth();
   const [va, setVa] = useState<VA>(null);
+  const [vaLoading, setVaLoading] = useState(false);
+  const [vaErr, setVaErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       if (!user?.id) return;
+      setVaLoading(true);
+      setVaErr(null);
       const res = await supabase
         .from("user_virtual_accounts")
         .select("account_number, bank_name, account_name, active")
@@ -28,7 +32,11 @@ export default function ProfileRoute() {
         .maybeSingle();
 
       if (!res.error && res.data) setVa(res.data as any);
-      else setVa(null);
+      else {
+        setVa(null);
+        if (res.error) setVaErr(res.error.message);
+      }
+      setVaLoading(false);
     })();
   }, [user?.id]);
 
@@ -56,7 +64,13 @@ export default function ProfileRoute() {
 
         <Text style={styles.section}>Virtual Account</Text>
         <Text style={styles.line}>
-          {va?.account_number ? `${va.account_number} • ${va.bank_name}` : "Not available yet (Paystack DVA disabled)"}
+          {vaLoading
+            ? "Loading virtual account…"
+            : va?.account_number
+            ? `${va.account_number} • ${va.bank_name}`
+            : vaErr
+            ? "Unable to load virtual account"
+            : "Not available yet (Paystack DVA disabled)"}
         </Text>
       </View>
 
@@ -68,21 +82,28 @@ export default function ProfileRoute() {
           <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
         </Pressable>
 
-        <Pressable style={styles.row} onPress={async () => {
-          // send reset email to current email (simple + safe)
-          if (!email || email === "—") return;
-          await supabase.auth.resetPasswordForEmail(email);
-        }}>
+        <Pressable
+          style={styles.row}
+          onPress={async () => {
+            if (!email || email === "—") return;
+            try {
+              await supabase.auth.resetPasswordForEmail(email);
+              Alert.alert("Password reset", "A reset link was sent to your email.");
+            } catch (e: any) {
+              Alert.alert("Failed", e?.message ?? "Could not send reset link.");
+            }
+          }}
+        >
           <Text style={styles.rowText}>Change password</Text>
           <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
         </Pressable>
 
-        <Pressable style={styles.row} onPress={() => { /* future: KYC screen */ }}>
+        <Pressable style={styles.row} onPress={() => {}}>
           <Text style={styles.rowText}>KYC verification (coming soon)</Text>
           <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
         </Pressable>
 
-        <Pressable style={styles.row} onPress={() => { /* future: support */ }}>
+        <Pressable style={styles.row} onPress={() => {}}>
           <Text style={styles.rowText}>Support (coming soon)</Text>
           <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
         </Pressable>
@@ -156,4 +177,3 @@ const styles = StyleSheet.create({
   },
   dangerText: { color: "#fff", fontWeight: "900" },
 });
-

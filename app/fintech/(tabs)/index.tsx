@@ -3,13 +3,14 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo } from "react";
 import {
-    FlatList,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -37,7 +38,6 @@ function go(to: RoutePath) {
   router.push(to);
 }
 
-// Navigate wallet but open a specific section in that screen
 function goWallet(action: "fund" | "send" | "withdraw") {
   router.push({ pathname: "./wallet", params: { action } });
 }
@@ -65,7 +65,6 @@ export default function Dashboard() {
   const { user, loading: authLoading } = useAuth();
   const { balance, tx, loading: walletLoading, error, reload } = useWalletSimple();
 
-  // Auth gate (real)
   useEffect(() => {
     if (!authLoading && !user) {
       router.replace("/(auth)/login");
@@ -93,7 +92,6 @@ export default function Dashboard() {
         contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={reload} tintColor="#fff" />}
       >
-        {/* Header */}
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Dashboard</Text>
@@ -107,11 +105,16 @@ export default function Dashboard() {
           </Pressable>
         </View>
 
-        {/* Wallet Card */}
         <View style={styles.walletCard}>
           <View style={{ flex: 1 }}>
             <Text style={styles.walletLabel}>Wallet Balance</Text>
-            <Text style={styles.walletBalance}>₦{Number(balance ?? 0).toLocaleString()}</Text>
+            {walletLoading ? (
+              <View style={{ marginTop: 10 }}>
+                <ActivityIndicator color="#fff" />
+              </View>
+            ) : (
+              <Text style={styles.walletBalance}>₦{Number(balance ?? 0).toLocaleString()}</Text>
+            )}
             {!!error && <Text style={styles.err}>{error}</Text>}
           </View>
 
@@ -121,7 +124,6 @@ export default function Dashboard() {
           </Pressable>
         </View>
 
-        {/* Actions */}
         <View style={styles.actions}>
           <Pressable style={[styles.actionBtn, styles.primaryBtn]} onPress={() => goWallet("fund")}>
             <MaterialCommunityIcons name="cash-plus" size={18} color="#fff" />
@@ -139,7 +141,6 @@ export default function Dashboard() {
           </Pressable>
         </View>
 
-        {/* Big Explore (bigger icons) */}
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Explore</Text>
           <Text style={styles.sectionHint}>Crypto & marketplace</Text>
@@ -163,7 +164,6 @@ export default function Dashboard() {
           </Pressable>
         </View>
 
-        {/* Utilities (advanced wrap) */}
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Utilities</Text>
           <Text style={styles.sectionHint}>Bills & payments</Text>
@@ -179,7 +179,6 @@ export default function Dashboard() {
           ))}
         </View>
 
-        {/* Recent Transactions */}
         <View style={styles.sectionRowBetween}>
           <Text style={styles.sectionTitle}>History</Text>
           <Pressable onPress={() => go(ROUTES.wallet)}>

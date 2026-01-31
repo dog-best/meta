@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AppHeader from "@/components/common/AppHeader";
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 
 const BG0 = "#05040B";
@@ -187,6 +188,8 @@ export default function Checkout() {
     console.log("[Checkout] payWithWallet start", { orderId: oid });
     setBusy(true);
     try {
+      const auth = await requireLocalAuth("Confirm wallet payment");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
       await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
 
       router.replace(`/market/order/${oid}` as any);
@@ -207,6 +210,8 @@ export default function Checkout() {
     console.log("[Checkout] payWithUsdc start", { orderId: oid });
     setBusy(true);
     try {
+      const auth = await requireLocalAuth("Confirm USDC deposit");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
       // Creates/updates a deposit intent for this order (USDC/Base)
       await callFn(FN_MARKET_USDC_DEPOSIT_INTENT, { order_id: oid });
 

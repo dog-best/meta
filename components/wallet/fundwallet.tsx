@@ -1,17 +1,23 @@
 import ConfirmPurchase from "@/components/common/confirmpurchase";
 import { callFn } from "@/services/functions";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import React, { useMemo, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 export default function FundWallet({ onSuccess }: { onSuccess: () => void }) {
   const [amount, setAmount] = useState("1000");
   const [checkout, setCheckout] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
   const a = useMemo(() => Number(amount || 0), [amount]);
 
   async function start() {
-    // calls your paystack-init
+    if (!Number.isFinite(a) || a <= 0) throw new Error("Enter a valid amount");
+    const auth = await requireLocalAuth("Confirm wallet funding");
+    if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
     const res = await callFn<{ authorization_url: string }>("paystack-init", { amount: a });
     setCheckout(res.authorization_url);
   }
@@ -31,8 +37,10 @@ export default function FundWallet({ onSuccess }: { onSuccess: () => void }) {
         placeholderTextColor="rgba(255,255,255,0.35)"
       />
 
-      <Pressable style={styles.btn} onPress={() => setConfirm(true)}>
-        <Text style={styles.btnText}>Continue to Paystack</Text>
+      {msg ? <Text style={styles.msg}>{msg}</Text> : null}
+
+      <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} onPress={() => setConfirm(true)} disabled={loading}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Continue to Paystack</Text>}
       </Pressable>
 
       <ConfirmPurchase
@@ -43,7 +51,15 @@ export default function FundWallet({ onSuccess }: { onSuccess: () => void }) {
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {
           setConfirm(false);
-          await start();
+          setLoading(true);
+          setMsg(null);
+          try {
+            await start();
+          } catch (e: any) {
+            setMsg(e?.message ?? "Funding failed");
+          } finally {
+            setLoading(false);
+          }
         }}
       />
 
@@ -87,7 +103,9 @@ const styles = StyleSheet.create({
     color: "white",
   },
   btn: { marginTop: 12, backgroundColor: "#2563EB", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
+  btnDisabled: { opacity: 0.6 },
   btnText: { color: "white", fontWeight: "900" },
+  msg: { color: "rgba(255,255,255,0.75)", marginTop: 10 },
   webTop: {
     paddingTop: 50,
     paddingBottom: 10,

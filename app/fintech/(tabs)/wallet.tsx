@@ -5,6 +5,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 
 import FundWallet from "@/components/wallet/fundwallet";
 import WalletHeader from "@/components/wallet/header";
+import ProfileModal from "@/components/wallet/profile";
 import SendMoney from "@/components/wallet/send";
 import Withdraw from "@/components/wallet/withdraw";
 
@@ -39,6 +40,7 @@ export default function WalletRoute() {
   const initial: Section = (params.action as Section) || "fund";
 
   const [section, setSection] = useState<Section>(initial);
+  const [showProfile, setShowProfile] = useState(false);
 
   const { balance, error: walletErr, loading: walletLoading, reload: reloadWallet } = useWalletSimple();
   const tx = useWalletTxPaginated();
@@ -65,7 +67,7 @@ export default function WalletRoute() {
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={styles.screen}>
-      <WalletHeader balance={balance} onRefresh={refreshAll} onOpenProfile={() => {}} />
+      <WalletHeader balance={balance} onRefresh={refreshAll} onOpenProfile={() => setShowProfile(true)} refreshing={walletLoading || tx.loading} />
 
       {!!walletErr ? <Text style={styles.err}>{walletErr}</Text> : null}
       {walletLoading ? <Text style={styles.dim}>Loading wallet…</Text> : null}
@@ -120,6 +122,8 @@ export default function WalletRoute() {
           )}
         </View>
       ) : null}
+
+      <ProfileModal visible={showProfile} onClose={() => setShowProfile(false)} />
     </LinearGradient>
   );
 }

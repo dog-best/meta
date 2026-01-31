@@ -1,20 +1,21 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
 type Props = {
   balance: number;
   onRefresh: () => void;
   onOpenProfile: () => void;
+  refreshing?: boolean;
 };
 
-export default function WalletHeader({ balance, onRefresh, onOpenProfile }: Props) {
+export default function WalletHeader({ balance, onRefresh, onOpenProfile, refreshing }: Props) {
   return (
     <View style={styles.wrap}>
       <View style={styles.topRow}>
         <Text style={styles.title}>Wallet</Text>
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable style={styles.smallBtn} onPress={onRefresh}>
-            <Text style={styles.smallBtnText}>↻</Text>
+            {refreshing ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.smallBtnText}>↻</Text>}
           </Pressable>
           <Pressable style={styles.smallBtn} onPress={onOpenProfile}>
             <Text style={styles.smallBtnText}>☰</Text>
@@ -24,7 +25,7 @@ export default function WalletHeader({ balance, onRefresh, onOpenProfile }: Prop
 
       <View style={styles.card}>
         <Text style={styles.label}>Available Balance</Text>
-        <Text style={styles.balance}>₦{balance.toLocaleString()}</Text>
+        <Text style={styles.balance}>₦{Number(balance || 0).toLocaleString()}</Text>
         <Text style={styles.sub}>Secure ledger-backed balance</Text>
       </View>
     </View>

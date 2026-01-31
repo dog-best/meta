@@ -1,6 +1,6 @@
 import type { WalletTx } from "@/hooks/wallet/useWalletSimple";
 import React from "react";
-import { FlatList, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native";
 
 function badge(type: WalletTx["type"]) {
   switch (type) {
@@ -13,33 +13,40 @@ function badge(type: WalletTx["type"]) {
   }
 }
 
-export default function WalletActivity({ items }: { items: WalletTx[] }) {
+export default function WalletActivity({ items, loading }: { items: WalletTx[]; loading?: boolean }) {
   return (
     <View style={styles.section}>
       <Text style={styles.h}>Activity</Text>
 
       <View style={styles.card}>
-        <FlatList
-          data={items}
-          keyExtractor={(i) => i.id}
-          ListEmptyComponent={<Text style={styles.empty}>No activity yet.</Text>}
-          renderItem={({ item }) => {
-            const b = badge(item.type);
-            return (
-              <View style={styles.row}>
-                <View style={[styles.pill, { backgroundColor: `${b.c}22`, borderColor: `${b.c}55` }]}>
-                  <Text style={[styles.pillText, { color: b.c }]}>{b.t}</Text>
+        {loading ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color="#fff" />
+            <Text style={styles.loadingText}>Loading activity…</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={items}
+            keyExtractor={(i) => i.id}
+            ListEmptyComponent={<Text style={styles.empty}>No activity yet.</Text>}
+            renderItem={({ item }) => {
+              const b = badge(item.type);
+              return (
+                <View style={styles.row}>
+                  <View style={[styles.pill, { backgroundColor: `${b.c}22`, borderColor: `${b.c}55` }]}>
+                    <Text style={[styles.pillText, { color: b.c }]}>{b.t}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.amount}>₦{Number(item.amount).toLocaleString()}</Text>
+                    <Text style={styles.meta}>
+                      {new Date(item.created_at).toLocaleString()} {item.reference ? `• ${item.reference}` : ""}
+                    </Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.amount}>₦{Number(item.amount).toLocaleString()}</Text>
-                  <Text style={styles.meta}>
-                    {new Date(item.created_at).toLocaleString()} {item.reference ? `• ${item.reference}` : ""}
-                  </Text>
-                </View>
-              </View>
-            );
-          }}
-        />
+              );
+            }}
+          />
+        )}
       </View>
     </View>
   );
@@ -61,4 +68,6 @@ const styles = StyleSheet.create({
   amount: { color: "white", fontWeight: "900" },
   meta: { color: "rgba(255,255,255,0.5)", marginTop: 3, fontSize: 12 },
   empty: { color: "rgba(255,255,255,0.6)", padding: 14 },
+  loading: { padding: 16, alignItems: "center", gap: 8 },
+  loadingText: { color: "rgba(255,255,255,0.6)", fontSize: 12 },
 });

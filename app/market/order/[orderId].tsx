@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linkin
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { callFn } from "@/services/functions";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
@@ -360,6 +361,8 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
+      const auth = await requireLocalAuth("Release escrow to seller");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
       await callFn(FN_RELEASE_ESCROW, { order_id: order.id });
       await load();
     } catch (e: any) {
