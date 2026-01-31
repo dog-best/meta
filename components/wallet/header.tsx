@@ -13,7 +13,12 @@ export default function WalletHeader({ balance, onRefresh, onOpenProfile, refres
   return (
     <View style={styles.wrap}>
       <View style={styles.topRow}>
-        <Text style={styles.title}>Wallet</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Text style={styles.title}>Wallet</Text>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>NGN</Text>
+          </View>
+        </View>
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable style={styles.smallBtn} onPress={onRefresh}>
             {refreshing ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="refresh" size={18} color="#fff" />}
@@ -58,4 +63,13 @@ const styles = StyleSheet.create({
   label: { color: "rgba(255,255,255,0.65)", fontWeight: "700" },
   balance: { color: "white", fontSize: 28, fontWeight: "900", marginTop: 8 },
   sub: { color: "rgba(255,255,255,0.45)", marginTop: 6, fontSize: 12 },
+  pill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  pillText: { color: "#fff", fontWeight: "900", fontSize: 10 },
 });

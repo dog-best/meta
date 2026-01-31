@@ -22,7 +22,12 @@ function badge(type: WalletTx["type"]) {
 export default function WalletActivity({ items, loading }: { items: WalletTx[]; loading?: boolean }) {
   return (
     <View style={styles.section}>
-      <Text style={styles.h}>Activity</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <Text style={styles.h}>Activity</Text>
+        <View style={styles.countPill}>
+          <Text style={styles.countText}>{items.length}</Text>
+        </View>
+      </View>
 
       <View style={styles.card}>
         {loading ? (
@@ -62,6 +67,15 @@ export default function WalletActivity({ items, loading }: { items: WalletTx[]; 
 const styles = StyleSheet.create({
   section: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 20 },
   h: { color: "white", fontWeight: "900", fontSize: 16, marginBottom: 10 },
+  countPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  countText: { color: "#fff", fontWeight: "900", fontSize: 11 },
   card: {
     backgroundColor: "#0B0F17",
     borderRadius: 18,

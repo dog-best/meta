@@ -1,4 +1,5 @@
-import { Ionicons } from "@expo/vector-icons";
+﻿import { Ionicons } from "@expo/vector-icons";
+import { Audio, ResizeMode, Video } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
@@ -7,7 +8,6 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -16,16 +16,19 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import {
-  DMMessage,
   DMAttachment,
+  DMMessage,
   fetchMessages,
   getOrCreateThread,
   getUserByUsername,
   markRead,
+  reactToMessage,
+  removeReaction,
   sendMedia,
   sendText,
 } from "@/services/dm/dmService";
@@ -37,6 +40,15 @@ const PURPLE = "#7C3AED";
 const CARD = "rgba(255,255,255,0.06)";
 const BORDER = "rgba(255,255,255,0.10)";
 const MUTED = "rgba(255,255,255,0.62)";
+
+const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+type PendingMedia = {
+  kind: "image" | "video" | "audio";
+  uri: string;
+  mime_type?: string | null;
+  duration_sec?: number | null;
+};
 
 function formatTime(ts: string) {
   const d = new Date(ts);
@@ -61,15 +73,19 @@ export default function DMChat() {
   const [messages, setMessages] = useState<DMMessage[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [recording, setRecording] = useState(false);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [pendingMedia, setPendingMedia] = useState<PendingMedia | null>(null);
+  const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
+  const [activeReactionFor, setActiveReactionFor] = useState<string | null>(null);
 
   const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [videoViewer, setVideoViewer] = useState<string | null>(null);
+  const [audioViewer, setAudioViewer] = useState<string | null>(null);
+  const [audioSound, setAudioSound] = useState<Audio.Sound | null>(null);
+  const [audioPlaying, setAudioPlaying] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
-
-  const avError = "Media playback not available on this build.";
 
   useEffect(() => {
     let mounted = true;
@@ -113,28 +129,55 @@ export default function DMChat() {
     if (!threadId) return;
     const ch = supabase
       .channel(`dm-thread-${threadId}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "dm_messages", filter: `thread_id=eq.${threadId}` },
-        async () => {
-          const msgs = await fetchMessages(threadId, 120);
-          setMessages(msgs);
-          await markRead(threadId);
-        },
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "dm_messages", filter: `thread_id=eq.${threadId}` }, async () => {
+        const msgs = await fetchMessages(threadId, 120);
+        setMessages(msgs);
+        await markRead(threadId);
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dm_messages", filter: `thread_id=eq.${threadId}` }, async () => {
+        const msgs = await fetchMessages(threadId, 120);
+        setMessages(msgs);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "dm_message_reactions" }, async () => {
+        const msgs = await fetchMessages(threadId, 120);
+        setMessages(msgs);
+      })
       .subscribe();
+
     return () => {
       supabase.removeChannel(ch);
     };
   }, [threadId]);
 
-  async function onSendText() {
-    const value = text.trim();
-    if (!value || !threadId) return;
+  useEffect(() => {
+    return () => {
+      if (audioSound) audioSound.unloadAsync();
+    };
+  }, [audioSound]);
+
+  async function onSend() {
+    if (!threadId) return;
+    if (!text.trim() && !pendingMedia) return;
+
     setSending(true);
     try {
-      await sendText(threadId, value);
+      if (pendingMedia) {
+        await sendMedia({
+          threadId,
+          kind: pendingMedia.kind,
+          uri: pendingMedia.uri,
+          mime_type: pendingMedia.mime_type,
+          duration_sec: pendingMedia.duration_sec ?? null,
+          body: text.trim() || null,
+          reply_to_message_id: replyTo?.id ?? null,
+        });
+      } else {
+        await sendText(threadId, text.trim(), replyTo?.id ?? null);
+      }
+
       setText("");
+      setPendingMedia(null);
+      setReplyTo(null);
       const msgs = await fetchMessages(threadId, 120);
       setMessages(msgs);
       await markRead(threadId);
@@ -145,85 +188,172 @@ export default function DMChat() {
     }
   }
 
-  async function onPickImage(fromCamera: boolean) {
-    setErr(null);
+  async function onPickFromLibrary() {
     if (!threadId) return;
-    try {
-      if (fromCamera) {
-        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!camPerm.granted) throw new Error("Camera permission denied");
-      } else {
-        const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!libPerm.granted) throw new Error("Media library permission denied");
-      }
-
-      const res = fromCamera
-        ? await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85,
-          });
-
-      if (res.canceled || !res.assets?.[0]?.uri) return;
-      setSending(true);
-      await sendMedia({ threadId, kind: "image", uri: res.assets[0].uri, mime_type: res.assets[0].mimeType ?? "image/jpeg" });
-      const msgs = await fetchMessages(threadId, 120);
-      setMessages(msgs);
-      await markRead(threadId);
-    } catch (e: any) {
-      setErr(e?.message || "Image upload failed");
-    } finally {
-      setSending(false);
+    setErr(null);
+    const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!libPerm.granted) {
+      setErr("Media library permission denied");
+      return;
     }
+
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.9,
+    });
+
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    const asset = res.assets[0];
+    const isVideo = asset.type === "video";
+    setPendingMedia({
+      kind: isVideo ? "video" : "image",
+      uri: asset.uri,
+      mime_type: asset.mimeType ?? null,
+      duration_sec: asset.duration ? Math.round(asset.duration / 1000) : null,
+    });
   }
 
-  async function onPickVideo(fromCamera: boolean) {
-    setErr(null);
+  async function onPickCameraPhoto() {
     if (!threadId) return;
-    try {
-      if (fromCamera) {
-        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!camPerm.granted) throw new Error("Camera permission denied");
-      } else {
-        const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!libPerm.granted) throw new Error("Media library permission denied");
-      }
-
-      const res = fromCamera
-        ? await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-            quality: 1,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-            quality: 1,
-          });
-
-      if (res.canceled || !res.assets?.[0]?.uri) return;
-      setSending(true);
-      await sendMedia({
-        threadId,
-        kind: "video",
-        uri: res.assets[0].uri,
-        mime_type: res.assets[0].mimeType ?? "video/mp4",
-        duration_sec: res.assets[0].duration ? Math.round(res.assets[0].duration / 1000) : null,
-      });
-      const msgs = await fetchMessages(threadId, 120);
-      setMessages(msgs);
-      await markRead(threadId);
-    } catch (e: any) {
-      setErr(e?.message || "Video upload failed");
-    } finally {
-      setSending(false);
+    setErr(null);
+    const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!camPerm.granted) {
+      setErr("Camera permission denied");
+      return;
     }
+
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.9,
+    });
+
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    const asset = res.assets[0];
+    setPendingMedia({
+      kind: "image",
+      uri: asset.uri,
+      mime_type: asset.mimeType ?? "image/jpeg",
+    });
+  }
+
+  async function onPickCameraVideo() {
+    if (!threadId) return;
+    setErr(null);
+    const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!camPerm.granted) {
+      setErr("Camera permission denied");
+      return;
+    }
+
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 1,
+    });
+
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    const asset = res.assets[0];
+    setPendingMedia({
+      kind: "video",
+      uri: asset.uri,
+      mime_type: asset.mimeType ?? "video/mp4",
+      duration_sec: asset.duration ? Math.round(asset.duration / 1000) : null,
+    });
   }
 
   async function toggleRecord() {
     if (!threadId) return;
-    setErr(avError);
+    if (recording) {
+      setRecordingBusy(true);
+      try {
+        await recording.stopAndUnloadAsync();
+        const uri = recording.getURI();
+        const status = await recording.getStatusAsync();
+        setRecording(null);
+        if (!uri) throw new Error("Recording failed");
+        setPendingMedia({
+          kind: "audio",
+          uri,
+          mime_type: "audio/m4a",
+          duration_sec: status?.durationMillis ? Math.round(status.durationMillis / 1000) : null,
+        });
+      } catch (e: any) {
+        setErr(e?.message || "Audio capture failed");
+      } finally {
+        setRecordingBusy(false);
+      }
+      return;
+    }
+
+    try {
+      const perm = await Audio.requestPermissionsAsync();
+      if (!perm.granted) throw new Error("Microphone permission denied");
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+      setRecording(rec);
+    } catch (e: any) {
+      setErr(e?.message || "Could not start recording");
+    }
+  }
+
+  async function onOpenAudio(url: string) {
+    try {
+      if (audioSound) {
+        await audioSound.unloadAsync();
+      }
+      const { sound } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status) => {
+        if (!status.isLoaded) return;
+        setAudioPlaying(status.isPlaying);
+      });
+      setAudioSound(sound);
+      setAudioViewer(url);
+      setAudioPlaying(true);
+    } catch (e: any) {
+      setErr(e?.message || "Audio playback failed");
+    }
+  }
+
+  async function toggleAudio() {
+    if (!audioSound) return;
+    const status = await audioSound.getStatusAsync();
+    if (!status.isLoaded) return;
+    if (status.isPlaying) {
+      await audioSound.pauseAsync();
+      setAudioPlaying(false);
+    } else {
+      await audioSound.playAsync();
+      setAudioPlaying(true);
+    }
+  }
+
+  async function closeAudio() {
+    if (audioSound) await audioSound.unloadAsync();
+    setAudioSound(null);
+    setAudioViewer(null);
+    setAudioPlaying(false);
+  }
+
+  async function onReact(message: DMMessage, emoji: string) {
+    if (!message?.id) return;
+    const mine = message.reactions?.find((r) => r.user_id === meId);
+    try {
+      if (mine && mine.emoji === emoji) {
+        await removeReaction(message.id);
+      } else {
+        await reactToMessage(message.id, emoji);
+      }
+      setActiveReactionFor(null);
+      if (threadId) {
+        const msgs = await fetchMessages(threadId, 120);
+        setMessages(msgs);
+      }
+    } catch (e: any) {
+      setErr(e?.message || "Could not react");
+    }
   }
 
   const title = other?.seller_profile?.active
@@ -232,8 +362,6 @@ export default function DMChat() {
   const subtitle = other?.seller_profile?.active
     ? `@${other?.seller_profile?.market_username ?? other?.username ?? "seller"}`
     : `@${other?.username ?? "user"}`;
-  const VideoComp = null as any;
-  const videoResize = undefined;
 
   if (loading) {
     return (
@@ -313,7 +441,12 @@ export default function DMChat() {
               mine={isMine(m.sender_id, meId)}
               onViewImage={setImageViewer}
               onViewVideo={setVideoViewer}
-              audioModule={null}
+              onViewAudio={onOpenAudio}
+              onReply={() => setReplyTo(m)}
+              onReact={(emoji) => onReact(m, emoji)}
+              showReactionPicker={activeReactionFor === m.id}
+              setShowReactionPicker={(v) => setActiveReactionFor(v ? m.id : null)}
+              meId={meId}
             />
           ))}
         </ScrollView>
@@ -334,30 +467,60 @@ export default function DMChat() {
             backgroundColor: "rgba(5,4,11,0.92)",
           }}
         >
+          {replyTo ? (
+            <View style={{ marginBottom: 8, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.06)", padding: 10, flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={{ width: 3, height: "100%", backgroundColor: PURPLE, borderRadius: 3 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Replying</Text>
+                <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                  {replyTo.body || replyTo.meta?.kind || "Attachment"}
+                </Text>
+              </View>
+              <Pressable onPress={() => setReplyTo(null)}>
+                <Ionicons name="close" size={18} color="#fff" />
+              </Pressable>
+            </View>
+          ) : null}
+
+          {pendingMedia ? (
+            <View style={{ marginBottom: 8, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.06)", padding: 10, flexDirection: "row", alignItems: "center", gap: 10 }}>
+              {pendingMedia.kind === "image" ? (
+                <Image source={{ uri: pendingMedia.uri }} style={{ width: 54, height: 54, borderRadius: 8 }} />
+              ) : (
+                <View style={{ width: 54, height: 54, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name={pendingMedia.kind === "video" ? "videocam-outline" : "mic-outline"} size={20} color="#fff" />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>
+                  {pendingMedia.kind === "image" ? "Image" : pendingMedia.kind === "video" ? "Video" : "Audio"}
+                </Text>
+                <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>Ready to send</Text>
+              </View>
+              <Pressable onPress={() => setPendingMedia(null)}>
+                <Ionicons name="close-circle" size={20} color="#fff" />
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Pressable
-              onPress={() => onPickImage(false)}
+              onPress={onPickFromLibrary}
               style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
             >
-              <Ionicons name="image-outline" size={18} color="#fff" />
+              <Ionicons name="attach" size={18} color="#fff" />
             </Pressable>
             <Pressable
-              onPress={() => onPickImage(true)}
+              onPress={onPickCameraPhoto}
               style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
             >
               <Ionicons name="camera-outline" size={18} color="#fff" />
             </Pressable>
             <Pressable
-              onPress={() => onPickVideo(false)}
+              onPress={onPickCameraVideo}
               style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
             >
               <Ionicons name="videocam-outline" size={18} color="#fff" />
-            </Pressable>
-            <Pressable
-              onPress={() => onPickVideo(true)}
-              style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
-            >
-              <Ionicons name="camera-reverse-outline" size={18} color="#fff" />
             </Pressable>
             <Pressable
               onPress={toggleRecord}
@@ -396,8 +559,8 @@ export default function DMChat() {
             </View>
 
             <Pressable
-              onPress={onSendText}
-              disabled={sending || !text.trim()}
+              onPress={onSend}
+              disabled={sending || (!text.trim() && !pendingMedia)}
               style={{
                 width: 42,
                 height: 42,
@@ -407,7 +570,7 @@ export default function DMChat() {
                 borderColor: "rgba(255,255,255,0.2)",
                 alignItems: "center",
                 justifyContent: "center",
-                opacity: sending || !text.trim() ? 0.6 : 1,
+                opacity: sending || (!text.trim() && !pendingMedia) ? 0.6 : 1,
               }}
             >
               {sending ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
@@ -431,25 +594,27 @@ export default function DMChat() {
             <Ionicons name="close" size={26} color="#fff" />
           </Pressable>
           {videoViewer ? (
-            VideoComp ? (
-              <VideoComp
-                source={{ uri: videoViewer }}
-                style={{ width: "100%", height: "60%" }}
-                useNativeControls
-                resizeMode={videoResize}
-              />
-            ) : (
-              <View style={{ padding: 16, alignItems: "center" }}>
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Video playback unavailable</Text>
-                <Pressable
-                  onPress={() => Linking.openURL(videoViewer)}
-                  style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" }}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>Open video</Text>
-                </Pressable>
-              </View>
-            )
+            <Video
+              source={{ uri: videoViewer }}
+              style={{ width: "100%", height: "60%" }}
+              useNativeControls
+              resizeMode={ResizeMode.CONTAIN}
+            />
           ) : null}
+        </View>
+      </Modal>
+
+      <Modal visible={!!audioViewer} transparent animationType="fade" onRequestClose={closeAudio}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.85)", justifyContent: "center", padding: 24 }}>
+          <View style={{ borderRadius: 18, padding: 16, backgroundColor: "#0B0F17", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Audio</Text>
+            <Pressable onPress={toggleAudio} style={{ marginTop: 14, paddingVertical: 12, borderRadius: 12, backgroundColor: PURPLE, alignItems: "center" }}>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>{audioPlaying ? "Pause" : "Play"}</Text>
+            </Pressable>
+            <Pressable onPress={closeAudio} style={{ marginTop: 10, paddingVertical: 12, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center" }}>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Close</Text>
+            </Pressable>
+          </View>
         </View>
       </Modal>
     </LinearGradient>
@@ -461,48 +626,106 @@ function MessageBubble({
   mine,
   onViewImage,
   onViewVideo,
-  audioModule,
+  onViewAudio,
+  onReply,
+  onReact,
+  showReactionPicker,
+  setShowReactionPicker,
+  meId,
 }: {
   message: DMMessage;
   mine: boolean;
   onViewImage: (url: string) => void;
   onViewVideo: (url: string) => void;
-  audioModule: any;
+  onViewAudio: (url: string) => void;
+  onReply: () => void;
+  onReact: (emoji: string) => void;
+  showReactionPicker: boolean;
+  setShowReactionPicker: (v: boolean) => void;
+  meId: string | null;
 }) {
   const attachments = (message.dm_message_attachments ?? []) as DMAttachment[];
+  const reactions = message.reactions ?? [];
+  const grouped = reactions.reduce<Record<string, number>>((acc, r) => {
+    acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+    return acc;
+  }, {});
+  const myReaction = reactions.find((r) => r.user_id === meId)?.emoji ?? null;
+
   return (
-    <View
-      style={{
-        marginTop: 8,
-        alignSelf: mine ? "flex-end" : "flex-start",
-        maxWidth: "82%",
-      }}
+    <Swipeable
+      renderLeftActions={() => (
+        <View style={{ width: 64, justifyContent: "center", alignItems: "center" }}>
+          <Ionicons name="return-down-back" size={18} color="rgba(255,255,255,0.6)" />
+        </View>
+      )}
+      onSwipeableOpen={onReply}
     >
-      <View
-        style={{
-          padding: 12,
-          borderRadius: 16,
-          backgroundColor: mine ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.08)",
-          borderWidth: 1,
-          borderColor: mine ? "rgba(124,58,237,0.55)" : "rgba(255,255,255,0.10)",
-        }}
-      >
-        {message.body ? (
-          <Text style={{ color: "#fff", fontWeight: "800", lineHeight: 20 }}>{message.body}</Text>
+      <View style={{ marginTop: 8, alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "82%" }}>
+        {showReactionPicker ? (
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 6, padding: 8, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.35)", alignSelf: mine ? "flex-end" : "flex-start" }}>
+            {REACTIONS.map((e) => (
+              <Pressable key={e} onPress={() => onReact(e)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 18 }}>{e}</Text>
+              </Pressable>
+            ))}
+            <Pressable onPress={() => setShowReactionPicker(false)} style={{ padding: 4 }}>
+              <Ionicons name="close" size={16} color="#fff" />
+            </Pressable>
+          </View>
         ) : null}
 
-        {attachments.length > 0 ? (
-          <View style={{ marginTop: message.body ? 8 : 0, gap: 8 }}>
-            {attachments.map((a) => (
-              <AttachmentView key={a.id} attachment={a} onViewImage={onViewImage} onViewVideo={onViewVideo} audioModule={audioModule} />
+        <Pressable
+          onLongPress={() => setShowReactionPicker(true)}
+          style={{
+            padding: 12,
+            borderRadius: 16,
+            backgroundColor: mine ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.08)",
+            borderWidth: 1,
+            borderColor: mine ? "rgba(124,58,237,0.55)" : "rgba(255,255,255,0.10)",
+          }}
+        >
+          {message.reply_to ? (
+            <View style={{ marginBottom: 8, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: PURPLE }}>
+              <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 11 }}>
+                Replying to {message.reply_to.sender_id === message.sender_id ? "self" : "message"}
+              </Text>
+              <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>
+                {message.reply_to.body || "Attachment"}
+              </Text>
+            </View>
+          ) : null}
+
+          {message.body ? (
+            <Text style={{ color: "#fff", fontWeight: "800", lineHeight: 20 }}>{message.body}</Text>
+          ) : null}
+
+          {attachments.length > 0 ? (
+            <View style={{ marginTop: message.body ? 8 : 0, gap: 8 }}>
+              {attachments.map((a) => (
+                <AttachmentView key={a.id} attachment={a} onViewImage={onViewImage} onViewVideo={onViewVideo} onViewAudio={onViewAudio} />
+              ))}
+            </View>
+          ) : null}
+        </Pressable>
+
+        {Object.keys(grouped).length ? (
+          <View style={{ marginTop: 6, flexDirection: "row", gap: 6, alignSelf: mine ? "flex-end" : "flex-start" }}>
+            {Object.entries(grouped).map(([emoji, count]) => (
+              <View key={emoji} style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text>{emoji}</Text>
+                <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>{count}</Text>
+                {myReaction === emoji ? <Ionicons name="checkmark" size={12} color="#fff" /> : null}
+              </View>
             ))}
           </View>
         ) : null}
+
+        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.5)", fontSize: 10, textAlign: mine ? "right" : "left" }}>
+          {formatTime(message.created_at)}
+        </Text>
       </View>
-      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.5)", fontSize: 10, textAlign: mine ? "right" : "left" }}>
-        {formatTime(message.created_at)}
-      </Text>
-    </View>
+    </Swipeable>
   );
 }
 
@@ -510,12 +733,12 @@ function AttachmentView({
   attachment,
   onViewImage,
   onViewVideo,
-  audioModule,
+  onViewAudio,
 }: {
   attachment: DMAttachment;
   onViewImage: (url: string) => void;
   onViewVideo: (url: string) => void;
-  audioModule: any;
+  onViewAudio: (url: string) => void;
 }) {
   const url = attachment.public_url || "";
 
@@ -536,89 +759,17 @@ function AttachmentView({
   }
 
   if (attachment.kind === "audio") {
-    return <AudioPlayer url={url} duration={attachment.duration_sec ?? null} audioModule={audioModule} />;
+    return (
+      <Pressable onPress={() => onViewAudio(url)} style={{ padding: 10, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.08)", flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Ionicons name="musical-notes-outline" size={18} color="#fff" />
+        <Text style={{ color: "#fff", fontWeight: "800" }}>Play audio</Text>
+      </Pressable>
+    );
   }
 
   return (
     <View style={{ padding: 10, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.08)" }}>
       <Text style={{ color: "#fff", fontWeight: "800" }}>Attachment</Text>
     </View>
-  );
-}
-
-function AudioPlayer({ url, duration, audioModule }: { url: string; duration: number | null; audioModule: any }) {
-  const [sound, setSound] = useState<any>(null);
-  const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-
-  if (!audioModule) {
-    return (
-      <Pressable
-        onPress={() => Linking.openURL(url)}
-        style={{ padding: 10, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.08)", flexDirection: "row", alignItems: "center", gap: 8 }}
-      >
-        <Ionicons name="musical-notes-outline" size={18} color="#fff" />
-        <Text style={{ color: "#fff", fontWeight: "800" }}>Open audio</Text>
-      </Pressable>
-    );
-  }
-
-  useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.unloadAsync();
-      }
-    };
-  }, [sound]);
-
-  async function toggle() {
-    if (!url) return;
-    if (!audioModule) return;
-    if (!sound) {
-      const { sound: s } = await audioModule.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status: any) => {
-        if (!status.isLoaded) return;
-        setProgress(status.positionMillis / (status.durationMillis || 1));
-        setPlaying(status.isPlaying);
-      });
-      setSound(s);
-      setPlaying(true);
-      return;
-    }
-
-    const status = await sound.getStatusAsync();
-    if (!status.isLoaded) return;
-    if (status.isPlaying) {
-      await sound.pauseAsync();
-      setPlaying(false);
-    } else {
-      await sound.playAsync();
-      setPlaying(true);
-    }
-  }
-
-  const pct = Math.max(0, Math.min(1, progress || 0));
-
-  return (
-    <Pressable
-      onPress={toggle}
-      style={{
-        padding: 10,
-        borderRadius: 12,
-        backgroundColor: "rgba(255,255,255,0.08)",
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-      }}
-    >
-      <Ionicons name={playing ? "pause-circle-outline" : "play-circle-outline"} size={22} color="#fff" />
-      <View style={{ flex: 1 }}>
-        <View style={{ height: 4, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.2)" }}>
-          <View style={{ height: 4, width: `${pct * 100}%`, borderRadius: 4, backgroundColor: PURPLE }} />
-        </View>
-        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 10 }}>
-          {duration ? `${duration}s` : "Voice note"}
-        </Text>
-      </View>
-    </Pressable>
   );
 }

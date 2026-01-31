@@ -71,6 +71,7 @@ export default function WalletRoute() {
 
       {!!walletErr ? <Text style={styles.err}>{walletErr}</Text> : null}
       {walletLoading ? <Text style={styles.dim}>Loading wallet...</Text> : null}
+      {!walletLoading ? <Text style={styles.dim}>Your balance updates in real time.</Text> : null}
 
       <View style={styles.tabRow}>
         {tabs.map((t) => (

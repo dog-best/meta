@@ -34,7 +34,23 @@ export type DMMessage = {
   created_at: string;
   meta: any;
   has_attachments: boolean | null;
+  reply_to_message_id?: string | null;
+  reply_to?: {
+    id: string;
+    sender_id: string;
+    body: string | null;
+    created_at: string;
+  } | null;
   dm_message_attachments?: DMAttachment[];
+  reactions?: DMReaction[];
+};
+
+export type DMReaction = {
+  id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  created_at: string;
 };
 
 export type DMAttachment = {
@@ -199,7 +215,7 @@ export async function fetchMessages(threadId: string, limit = 50) {
   const { data, error } = await supabase
     .from("dm_messages")
     .select(
-      "id,thread_id,sender_id,body,created_at,meta,has_attachments,dm_message_attachments(*)",
+      "id,thread_id,sender_id,body,created_at,meta,has_attachments,reply_to_message_id,dm_message_attachments(*),reply_to:dm_messages!dm_messages_reply_to_message_id_fkey(id,sender_id,body,created_at)",
     )
     .eq("thread_id", threadId)
     .order("created_at", { ascending: true })
@@ -207,6 +223,19 @@ export async function fetchMessages(threadId: string, limit = 50) {
 
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as DMMessage[];
+  const messageIds = rows.map((m) => m.id);
+  const reactionsMap = new Map<string, DMReaction[]>();
+  if (messageIds.length) {
+    const { data: reactions } = await supabase
+      .from("dm_message_reactions")
+      .select("id,message_id,user_id,emoji,created_at")
+      .in("message_id", messageIds);
+    (reactions ?? []).forEach((r: any) => {
+      const list = reactionsMap.get(r.message_id) ?? [];
+      list.push(r as any);
+      reactionsMap.set(r.message_id, list);
+    });
+  }
   const hydrated = await Promise.all(
     rows.map(async (m) => {
       if (!m.dm_message_attachments?.length) return m;
@@ -226,10 +255,10 @@ export async function fetchMessages(threadId: string, limit = 50) {
       return { ...m, dm_message_attachments: att };
     }),
   );
-  return hydrated;
+  return hydrated.map((m) => ({ ...m, reactions: reactionsMap.get(m.id) ?? [] }));
 }
 
-export async function sendText(threadId: string, text: string) {
+export async function sendText(threadId: string, text: string, replyToId?: string | null) {
   const { data: auth } = await supabase.auth.getUser();
   const me = auth?.user;
   if (!me) throw new Error("Not authenticated");
@@ -241,6 +270,7 @@ export async function sendText(threadId: string, text: string) {
       sender_id: me.id,
       body: text.trim(),
       has_attachments: false,
+      reply_to_message_id: replyToId ?? null,
     })
     .select("id")
     .single();
@@ -271,12 +301,13 @@ export async function sendMedia(params: {
   mime_type?: string | null;
   duration_sec?: number | null;
   body?: string | null;
+  reply_to_message_id?: string | null;
 }) {
   const { data: auth } = await supabase.auth.getUser();
   const me = auth?.user;
   if (!me) throw new Error("Not authenticated");
 
-  const { threadId, kind, uri, duration_sec, body } = params;
+  const { threadId, kind, uri, duration_sec, body, reply_to_message_id } = params;
   const mime_type = params.mime_type || (await inferMimeFromUri(uri));
 
   const { data: msg, error: mErr } = await supabase
@@ -287,6 +318,7 @@ export async function sendMedia(params: {
       body: body?.trim() || null,
       has_attachments: true,
       meta: { kind },
+      reply_to_message_id: reply_to_message_id ?? null,
     })
     .select("id")
     .single();
@@ -341,6 +373,37 @@ export async function markRead(threadId: string) {
       { thread_id: threadId, user_id: me.id, last_read_at: new Date().toISOString() },
       { onConflict: "thread_id,user_id" },
     );
+
+  if (error) throw new Error(error.message);
+}
+
+export async function reactToMessage(messageId: string, emoji: string) {
+  const { data: auth } = await supabase.auth.getUser();
+  const me = auth?.user;
+  if (!me) throw new Error("Not authenticated");
+  if (!messageId) throw new Error("Missing message id");
+
+  const { error } = await supabase
+    .from("dm_message_reactions")
+    .upsert(
+      { message_id: messageId, user_id: me.id, emoji },
+      { onConflict: "message_id,user_id" },
+    );
+
+  if (error) throw new Error(error.message);
+}
+
+export async function removeReaction(messageId: string) {
+  const { data: auth } = await supabase.auth.getUser();
+  const me = auth?.user;
+  if (!me) throw new Error("Not authenticated");
+  if (!messageId) throw new Error("Missing message id");
+
+  const { error } = await supabase
+    .from("dm_message_reactions")
+    .delete()
+    .eq("message_id", messageId)
+    .eq("user_id", me.id);
 
   if (error) throw new Error(error.message);
 }

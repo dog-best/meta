@@ -67,12 +67,6 @@
         }
       ],
       [
-        "expo-camera",
-        {
-          "cameraPermission": "Allow Best City to use your camera to send images and videos in chat."
-        }
-      ],
-      [
         "expo-location",
         {
           "locationWhenInUsePermission": "Allow Best City to access your location to set delivery and availability."
