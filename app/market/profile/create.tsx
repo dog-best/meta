@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -32,6 +32,33 @@ const DANGER = "#FCA5A5";
 const SUCCESS = "rgba(187,247,208,0.95)";
 const BUCKET_SELLERS = "market-sellers";
 
+type SocialKey =
+  | "x"
+  | "instagram"
+  | "facebook"
+  | "tiktok"
+  | "linkedin"
+  | "telegram"
+  | "youtube"
+  | "github"
+  | "whatsapp"
+  | "website";
+
+type SocialLinks = Record<SocialKey, { enabled?: boolean; handle?: string }>;
+
+const SOCIALS: { key: SocialKey; label: string; prefix: string; icon: string }[] = [
+  { key: "x", label: "X (Twitter)", prefix: "https://x.com/", icon: "twitter" },
+  { key: "instagram", label: "Instagram", prefix: "https://instagram.com/", icon: "instagram" },
+  { key: "facebook", label: "Facebook", prefix: "https://facebook.com/", icon: "facebook" },
+  { key: "tiktok", label: "TikTok", prefix: "https://tiktok.com/@", icon: "tiktok" },
+  { key: "linkedin", label: "LinkedIn", prefix: "https://linkedin.com/in/", icon: "linkedin" },
+  { key: "telegram", label: "Telegram", prefix: "https://t.me/", icon: "telegram" },
+  { key: "youtube", label: "YouTube", prefix: "https://youtube.com/@", icon: "youtube" },
+  { key: "github", label: "GitHub", prefix: "https://github.com/", icon: "github" },
+  { key: "whatsapp", label: "WhatsApp", prefix: "https://wa.me/", icon: "whatsapp" },
+  { key: "website", label: "Website", prefix: "https://", icon: "web" },
+];
+
 function cleanUsername(input: string) {
   return input
     .trim()
@@ -54,6 +81,19 @@ function prettyErr(e: any) {
   const details = e?.details ? `\n${e.details}` : "";
   const hint = e?.hint ? `\nHint: ${e.hint}` : "";
   return `${msg}${code}${details}${hint}`;
+}
+
+function normalizeSocialLinks(input: Partial<SocialLinks> | null | undefined) {
+  const next: Partial<SocialLinks> = {};
+  SOCIALS.forEach((s) => {
+    const raw = (input as any)?.[s.key] ?? {};
+    const handle = String(raw?.handle ?? "").trim();
+    const enabled = !!raw?.enabled && handle.length > 0;
+    if (handle.length) {
+      (next as any)[s.key] = { enabled, handle };
+    }
+  });
+  return next;
 }
 
 async function pickImage() {
@@ -112,6 +152,7 @@ export default function CreateMarketProfile() {
   const [locationText, setLocationText] = useState("");
   const [address, setAddress] = useState<any>({});
   const [locatingAddress, setLocatingAddress] = useState(false);
+  const [socialLinks, setSocialLinks] = useState<Partial<SocialLinks>>({});
 
   const [offersRemote, setOffersRemote] = useState(false);
   const [offersInPerson, setOffersInPerson] = useState(false);
@@ -268,6 +309,7 @@ export default function CreateMarketProfile() {
         phone: phone.trim() || null,
         location_text: locationText.trim() || null,
         address: address || {},
+        social_links: normalizeSocialLinks(socialLinks),
         offers_remote: offersRemote,
         offers_in_person: offersInPerson,
         is_verified: false,
@@ -573,6 +615,9 @@ export default function CreateMarketProfile() {
             <Text style={{ color: "#fff", fontWeight: "900" }}>Use my current location</Text>
           </Pressable>
 
+          <SectionTitle title="Social links" />
+          <SocialLinksEditor value={socialLinks} onChange={setSocialLinks} />
+
           {/* Section: About */}
           <SectionTitle title="About your store" />
 
@@ -664,6 +709,94 @@ function SectionTitle({ title }: { title: string }) {
     <Text style={{ marginTop: 14, marginBottom: 8, color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 13 }}>
       {title.toUpperCase()}
     </Text>
+  );
+}
+
+function SocialLinksEditor(props: {
+  value: Partial<SocialLinks>;
+  onChange: (v: Partial<SocialLinks>) => void;
+}) {
+  const update = (key: SocialKey, patch: { enabled?: boolean; handle?: string }) => {
+    const current = (props.value as any)?.[key] ?? {};
+    props.onChange({ ...props.value, [key]: { ...current, ...patch } });
+  };
+
+  return (
+    <View style={{ borderRadius: 22, padding: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
+      <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 8 }}>
+        Toggle a platform and enter a username or number. Public profiles show only enabled links.
+      </Text>
+
+      {SOCIALS.map((s) => {
+        const entry = (props.value as any)?.[s.key] ?? {};
+        const enabled = !!entry.enabled;
+        const handle = String(entry.handle ?? "");
+        return (
+          <View key={s.key} style={{ marginTop: 12 }}>
+            <Pressable
+              onPress={() => update(s.key, { enabled: !enabled })}
+              style={{
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.04)",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ width: 30, height: 30, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+                  <MaterialCommunityIcons name={s.icon as any} size={16} color="rgba(255,255,255,0.8)" />
+                </View>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>{s.label}</Text>
+              </View>
+
+              <View
+                style={{
+                  width: 46,
+                  height: 28,
+                  borderRadius: 999,
+                  backgroundColor: enabled ? "rgba(124,58,237,0.65)" : "rgba(255,255,255,0.15)",
+                  borderWidth: 1,
+                  borderColor: enabled ? "rgba(124,58,237,0.85)" : "rgba(255,255,255,0.18)",
+                  padding: 3,
+                  justifyContent: "center",
+                }}
+              >
+                <View
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: 999,
+                    backgroundColor: "#fff",
+                    alignSelf: enabled ? "flex-end" : "flex-start",
+                  }}
+                />
+              </View>
+            </Pressable>
+
+            {enabled ? (
+              <View style={{ marginTop: 8, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.10)", backgroundColor: "rgba(255,255,255,0.06)" }}>
+                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, paddingHorizontal: 12, paddingTop: 10 }}>
+                  {s.prefix}
+                </Text>
+                <TextInput
+                  value={handle}
+                  onChangeText={(v) => update(s.key, { handle: v })}
+                  placeholder={s.key === "whatsapp" ? "2348012345678" : "username"}
+                  placeholderTextColor="rgba(255,255,255,0.35)"
+                  autoCapitalize="none"
+                  style={{ color: "#fff", fontWeight: "800", paddingHorizontal: 12, paddingBottom: 12 }}
+                />
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
   );
 }
 

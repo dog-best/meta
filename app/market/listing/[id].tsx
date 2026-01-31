@@ -1,17 +1,18 @@
-import { Ionicons } from "@expo/vector-icons";
+﻿import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Linking,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Linking,
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -27,7 +28,7 @@ const LISTINGS_TABLE = "market_listings";
 const IMAGES_TABLE = "market_listing_images";
 const SELLERS_TABLE = "market_seller_profiles";
 const ORDERS_TABLE = "market_orders";
-const LISTING_IMAGES_BUCKET = "market-listings"; // change if needed
+const LISTING_IMAGES_BUCKET = "market-listings";
 
 type ListingImage = {
   id: string;
@@ -73,7 +74,7 @@ type Seller = {
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
   if (currency === "USDC") return `$${n.toLocaleString()}`;
-  return `₦${n.toLocaleString()}`;
+  return `NGN ${n.toLocaleString()}`;
 }
 
 function imgUrl(img: ListingImage, supabaseUrl: string) {
@@ -107,6 +108,7 @@ export default function ListingDetails() {
   const [commentCount, setCommentCount] = useState(0);
   const [commentInput, setCommentInput] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
+  const [showAllComments, setShowAllComments] = useState(false);
 
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
@@ -122,7 +124,6 @@ export default function ListingDetails() {
     let mounted = true;
 
     (async () => {
-      console.log("[ListingDetails] load start", { listingId });
       setLoading(true);
       setErr(null);
 
@@ -175,7 +176,6 @@ export default function ListingDetails() {
       } finally {
         if (mounted) {
           setLoading(false);
-          console.log("[ListingDetails] load end");
         }
       }
     })();
@@ -305,7 +305,6 @@ export default function ListingDetails() {
         return;
       }
 
-      // ✅ MVP create order (later replace with Edge Function order_create)
       const unit = Number(listing.price_amount ?? 0);
       const qty = 1;
       const amount = unit * qty;
@@ -328,7 +327,7 @@ export default function ListingDetails() {
 
       if (oErr) throw new Error(oErr.message);
 
-      router.push(`/market/checkout/${order.id}` as any); // user chooses NGN or USDC there
+      router.push(`/market/checkout/${order.id}` as any);
     } catch (e: any) {
       setErr(e?.message || "Could not create order");
     }
@@ -367,7 +366,7 @@ export default function ListingDetails() {
         <AppHeader title="Listing" />
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator />
-          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
+          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading...</Text>
         </View>
       </LinearGradient>
     );
@@ -398,6 +397,8 @@ export default function ListingDetails() {
 
   const imageUrls = images.map((im) => imgUrl(im, supabaseUrl)).filter(Boolean) as string[];
   const availabilitySummary = formatAvailabilitySummary((listing as any)?.availability);
+  const recentComments = comments.slice(0, 4);
+  const showSeeMore = commentCount > 4;
 
   return (
     <LinearGradient
@@ -408,10 +409,10 @@ export default function ListingDetails() {
     >
       <AppHeader
         title={listing.title ?? "Listing"}
-        subtitle={`${listing.category ?? "—"} • ${listing.delivery_type ?? "—"} • ${listing.sub_category ?? "—"}`}
+        subtitle={`${listing.category ?? "-"} - ${listing.delivery_type ?? "-"} - ${listing.sub_category ?? "-"}`}
       />
-      <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
-        {/* Header */}
+
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>
           <Pressable
             onPress={() => router.back()}
@@ -434,12 +435,11 @@ export default function ListingDetails() {
               {listing.title ?? "Listing"}
             </Text>
             <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-              {listing.category ?? "—"} • {listing.delivery_type ?? "—"} • {listing.sub_category ?? "—"}
+              {listing.category ?? "-"} - {listing.delivery_type ?? "-"} - {listing.sub_category ?? "-"}
             </Text>
           </View>
         </View>
 
-        {/* Images carousel */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
           <View style={{ flexDirection: "row", gap: 12 }}>
             {(imageUrls.length ? imageUrls : [null]).map((u, idx) => (
@@ -470,7 +470,6 @@ export default function ListingDetails() {
           </View>
         </ScrollView>
 
-        {/* Price */}
         <View
           style={{
             marginTop: 14,
@@ -586,7 +585,6 @@ export default function ListingDetails() {
           ) : null}
         </View>
 
-        {/* Description */}
         <View
           style={{
             marginTop: 12,
@@ -603,7 +601,6 @@ export default function ListingDetails() {
           </Text>
         </View>
 
-        {/* Seller */}
         <View
           style={{
             marginTop: 12,
@@ -717,72 +714,6 @@ export default function ListingDetails() {
             borderColor: "rgba(255,255,255,0.08)",
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Comments</Text>
-
-          <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
-            <TextInput
-              value={commentInput}
-              onChangeText={setCommentInput}
-              placeholder="Write a public comment…"
-              placeholderTextColor="rgba(255,255,255,0.35)"
-              style={{
-                flex: 1,
-                borderRadius: 14,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                color: "#fff",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.10)",
-              }}
-            />
-            <Pressable
-              onPress={submitComment}
-              disabled={commentBusy || commentInput.trim().length < 2}
-              style={{
-                paddingHorizontal: 14,
-                borderRadius: 14,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "rgba(124,58,237,0.85)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.2)",
-                opacity: commentBusy ? 0.7 : 1,
-              }}
-            >
-              {commentBusy ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={16} color="#fff" />}
-            </Pressable>
-          </View>
-
-          <View style={{ marginTop: 12, gap: 10 }}>
-            {comments.length === 0 ? (
-              <Text style={{ color: "rgba(255,255,255,0.6)" }}>No comments yet.</Text>
-            ) : (
-              comments.map((c) => (
-                <View key={c.id} style={{ borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: "rgba(255,255,255,0.04)" }}>
-                  <Text style={{ color: "#fff", fontWeight: "800" }}>
-                    @{c.profiles?.username || "user"}{" "}
-                    <Text style={{ color: "rgba(255,255,255,0.5)", fontWeight: "600", fontSize: 11 }}>
-                      • {new Date(c.created_at).toLocaleString()}
-                    </Text>
-                  </Text>
-                  <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>{c.body}</Text>
-                </View>
-              ))
-            )}
-          </View>
-        </View>
-
-        <View
-          style={{
-            marginTop: 12,
-            borderRadius: 22,
-            padding: 16,
-            backgroundColor: "rgba(255,255,255,0.05)",
-            borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.08)",
-          }}
-        >
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Delivery / Service location</Text>
           <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
             Buyers set a delivery/service location when creating the order.
@@ -828,8 +759,91 @@ export default function ListingDetails() {
 
           {deliveryGeo ? (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-              {deliveryGeo.label || deliveryLabel || "Current location set"} • {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
+              {deliveryGeo.label || deliveryLabel || "Current location set"} - {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
             </Text>
+          ) : null}
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Comments</Text>
+
+          <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
+            <TextInput
+              value={commentInput}
+              onChangeText={setCommentInput}
+              placeholder="Write a public comment..."
+              placeholderTextColor="rgba(255,255,255,0.35)"
+              style={{
+                flex: 1,
+                borderRadius: 14,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                color: "#fff",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+              }}
+            />
+            <Pressable
+              onPress={submitComment}
+              disabled={commentBusy || commentInput.trim().length < 2}
+              style={{
+                paddingHorizontal: 14,
+                borderRadius: 14,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(124,58,237,0.85)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.2)",
+                opacity: commentBusy ? 0.7 : 1,
+              }}
+            >
+              {commentBusy ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={16} color="#fff" />}
+            </Pressable>
+          </View>
+
+          <View style={{ marginTop: 12, gap: 10 }}>
+            {recentComments.length === 0 ? (
+              <Text style={{ color: "rgba(255,255,255,0.6)" }}>No comments yet.</Text>
+            ) : (
+              recentComments.map((c) => (
+                <View key={c.id} style={{ borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: "rgba(255,255,255,0.04)" }}>
+                  <Text style={{ color: "#fff", fontWeight: "800" }}>
+                    @{c.profiles?.username || "user"}{" "}
+                    <Text style={{ color: "rgba(255,255,255,0.5)", fontWeight: "600", fontSize: 11 }}>
+                      - {new Date(c.created_at).toLocaleString()}
+                    </Text>
+                  </Text>
+                  <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>{c.body}</Text>
+                </View>
+              ))
+            )}
+          </View>
+
+          {showSeeMore ? (
+            <Pressable
+              onPress={() => setShowAllComments(true)}
+              style={{
+                marginTop: 10,
+                paddingVertical: 10,
+                borderRadius: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900" }}>See all comments</Text>
+            </Pressable>
           ) : null}
         </View>
 
@@ -838,12 +852,25 @@ export default function ListingDetails() {
             <Text style={{ color: "#FCA5A5", fontWeight: "800" }}>{err}</Text>
           </View>
         ) : null}
+      </ScrollView>
 
-        {/* Buy */}
+      <View
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          paddingHorizontal: 16,
+          paddingTop: 10,
+          paddingBottom: Math.max(insets.bottom, 16),
+          backgroundColor: "rgba(5,4,11,0.92)",
+          borderTopWidth: 1,
+          borderTopColor: "rgba(255,255,255,0.08)",
+        }}
+      >
         <Pressable
           onPress={buyNow}
           style={{
-            marginTop: 16,
             borderRadius: 22,
             paddingVertical: 16,
             alignItems: "center",
@@ -854,10 +881,55 @@ export default function ListingDetails() {
         >
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Buy now</Text>
           <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-            Escrow protected • Choose NGN or USDC next
+            Escrow protected - choose NGN or USDC next
           </Text>
         </Pressable>
-      </ScrollView>
+      </View>
+
+      <Modal visible={showAllComments} transparent animationType="slide" onRequestClose={() => setShowAllComments(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "flex-end" }}>
+          <View
+            style={{
+              maxHeight: "80%",
+              backgroundColor: BG0,
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>All comments</Text>
+              <Pressable onPress={() => setShowAllComments(false)}>
+                <Ionicons name="close" size={20} color="#fff" />
+              </Pressable>
+            </View>
+
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+              {commentCount} total comments
+            </Text>
+
+            <ScrollView contentContainerStyle={{ paddingVertical: 12, gap: 10 }}>
+              {comments.length === 0 ? (
+                <Text style={{ color: "rgba(255,255,255,0.6)" }}>No comments yet.</Text>
+              ) : (
+                comments.map((c) => (
+                  <View key={c.id} style={{ borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: "rgba(255,255,255,0.04)" }}>
+                    <Text style={{ color: "#fff", fontWeight: "800" }}>
+                      @{c.profiles?.username || "user"}{" "}
+                      <Text style={{ color: "rgba(255,255,255,0.5)", fontWeight: "600", fontSize: 11 }}>
+                        - {new Date(c.created_at).toLocaleString()}
+                      </Text>
+                    </Text>
+                    <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>{c.body}</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }

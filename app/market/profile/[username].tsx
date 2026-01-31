@@ -2,7 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
@@ -12,6 +12,33 @@ const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 const BUCKET_SELLERS = "market-sellers";
 const BUCKET_LISTINGS = "market-listings";
+
+type SocialKey =
+  | "x"
+  | "instagram"
+  | "facebook"
+  | "tiktok"
+  | "linkedin"
+  | "telegram"
+  | "youtube"
+  | "github"
+  | "whatsapp"
+  | "website";
+
+type SocialLinks = Record<SocialKey, { enabled?: boolean; handle?: string }>;
+
+const SOCIALS: { key: SocialKey; label: string; prefix: string; icon: string }[] = [
+  { key: "x", label: "X", prefix: "https://x.com/", icon: "twitter" },
+  { key: "instagram", label: "Instagram", prefix: "https://instagram.com/", icon: "instagram" },
+  { key: "facebook", label: "Facebook", prefix: "https://facebook.com/", icon: "facebook" },
+  { key: "tiktok", label: "TikTok", prefix: "https://tiktok.com/@", icon: "tiktok" },
+  { key: "linkedin", label: "LinkedIn", prefix: "https://linkedin.com/in/", icon: "linkedin" },
+  { key: "telegram", label: "Telegram", prefix: "https://t.me/", icon: "telegram" },
+  { key: "youtube", label: "YouTube", prefix: "https://youtube.com/@", icon: "youtube" },
+  { key: "github", label: "GitHub", prefix: "https://github.com/", icon: "github" },
+  { key: "whatsapp", label: "WhatsApp", prefix: "https://wa.me/", icon: "whatsapp" },
+  { key: "website", label: "Website", prefix: "https://", icon: "web" },
+];
 
 type Seller = {
   user_id: string;
@@ -27,6 +54,7 @@ type Seller = {
   offers_in_person: boolean;
   payout_tier: "standard" | "fast";
   active: boolean;
+  social_links?: SocialLinks;
 };
 
 type Listing = {
@@ -55,6 +83,21 @@ function publicUrl(bucket: string, path: string | null) {
   if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl ?? null;
+}
+
+function buildSocialUrl(key: SocialKey, handle: string) {
+  const raw = handle.trim();
+  if (!raw) return null;
+  if (key === "website") {
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+    return `https://${raw}`;
+  }
+  const cleaned = raw.replace(/^@/, "").replace(/\s+/g, "");
+  const base = SOCIALS.find((s) => s.key === key)?.prefix ?? "";
+  if (key === "whatsapp") {
+    return `${base}${cleaned.replace(/\\+/g, "")}`;
+  }
+  return `${base}${cleaned}`;
 }
 
 export default function PublicSellerProfile() {
@@ -93,7 +136,7 @@ export default function PublicSellerProfile() {
         const { data: sp, error: spErr } = await supabase
           .from("market_seller_public_profiles")
           .select(
-            "user_id,market_username,display_name,business_name,bio,location_text,is_verified,logo_path,banner_path,offers_remote,offers_in_person,payout_tier,active"
+            "user_id,market_username,display_name,business_name,bio,location_text,is_verified,logo_path,banner_path,offers_remote,offers_in_person,payout_tier,active,social_links"
           )
           .eq("market_username", handle)
           .eq("active", true)
@@ -308,6 +351,16 @@ export default function PublicSellerProfile() {
 
   const bannerUrl = useMemo(() => publicUrl(BUCKET_SELLERS, seller?.banner_path ?? null), [seller?.banner_path]);
   const logoUrl = useMemo(() => publicUrl(BUCKET_SELLERS, seller?.logo_path ?? null), [seller?.logo_path]);
+  const socialItems = useMemo(() => {
+    const links = (seller?.social_links ?? {}) as SocialLinks;
+    return SOCIALS.map((s) => {
+      const item = (links as any)[s.key] ?? {};
+      const enabled = !!item.enabled;
+      const handle = String(item.handle ?? "").trim();
+      const url = enabled ? buildSocialUrl(s.key, handle) : null;
+      return { ...s, enabled, handle, url };
+    }).filter((s) => !!s.url);
+  }, [seller?.social_links]);
 
   if (loading) {
     return (
@@ -454,6 +507,32 @@ export default function PublicSellerProfile() {
                 {seller.bio || "No bio yet."}
               </Text>
             </View>
+
+            {socialItems.length ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Socials</Text>
+                <View style={{ marginTop: 8, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+                  {socialItems.map((s) => (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => s.url && Linking.openURL(s.url)}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 12,
+                        backgroundColor: "rgba(255,255,255,0.06)",
+                        borderWidth: 1,
+                        borderColor: "rgba(255,255,255,0.12)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <MaterialCommunityIcons name={s.icon as any} size={18} color="#fff" />
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
 
             <Pressable
               onPress={() =>
