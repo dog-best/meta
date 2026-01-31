@@ -51,6 +51,14 @@ type Listing = {
   availability?: any;
 };
 
+type ListingComment = {
+  id: string;
+  body: string;
+  created_at: string;
+  user_id: string;
+  profiles?: { username?: string | null; full_name?: string | null } | null;
+};
+
 type Seller = {
   user_id: string;
   market_username: string | null;
@@ -90,9 +98,25 @@ export default function ListingDetails() {
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [deliveryLabel, setDeliveryLabel] = useState("");
   const [locatingDelivery, setLocatingDelivery] = useState(false);
+  const [meId, setMeId] = useState<string | null>(null);
+
+  const [likes, setLikes] = useState(0);
+  const [dislikes, setDislikes] = useState(0);
+  const [myReaction, setMyReaction] = useState<"like" | "dislike" | null>(null);
+  const [comments, setComments] = useState<ListingComment[]>([]);
+  const [commentCount, setCommentCount] = useState(0);
+  const [commentInput, setCommentInput] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
 
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      setMeId(data?.user?.id ?? null);
+    })();
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -160,6 +184,106 @@ export default function ListingDetails() {
       mounted = false;
     };
   }, [listingId]);
+
+  async function loadReactions() {
+    if (!listingId) return;
+    const { count: likeCount } = await supabase
+      .from("market_listing_reactions")
+      .select("id", { count: "exact", head: true })
+      .eq("listing_id", listingId)
+      .eq("reaction", "like");
+    const { count: dislikeCount } = await supabase
+      .from("market_listing_reactions")
+      .select("id", { count: "exact", head: true })
+      .eq("listing_id", listingId)
+      .eq("reaction", "dislike");
+    setLikes(likeCount ?? 0);
+    setDislikes(dislikeCount ?? 0);
+
+    if (meId) {
+      const { data: mine } = await supabase
+        .from("market_listing_reactions")
+        .select("reaction")
+        .eq("listing_id", listingId)
+        .eq("user_id", meId)
+        .maybeSingle();
+      setMyReaction((mine as any)?.reaction ?? null);
+    } else {
+      setMyReaction(null);
+    }
+  }
+
+  async function loadComments() {
+    if (!listingId) return;
+    const { data, count } = await supabase
+      .from("market_listing_comments")
+      .select("id,body,created_at,user_id,profiles(username,full_name)", { count: "exact" })
+      .eq("listing_id", listingId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    setComments((data as any) ?? []);
+    setCommentCount(count ?? 0);
+  }
+
+  useEffect(() => {
+    if (!listingId) return;
+    loadReactions();
+    loadComments();
+
+    const ch = supabase
+      .channel(`listing-social-${listingId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_listing_reactions", filter: `listing_id=eq.${listingId}` }, () => {
+        loadReactions();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_listing_comments", filter: `listing_id=eq.${listingId}` }, () => {
+        loadComments();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [listingId, meId]);
+
+  async function toggleReaction(next: "like" | "dislike") {
+    if (!meId) {
+      Alert.alert("Sign in required", "Please sign in to react to listings.");
+      return;
+    }
+    if (!listingId) return;
+    try {
+      if (myReaction === next) {
+        await supabase.from("market_listing_reactions").delete().eq("listing_id", listingId).eq("user_id", meId);
+      } else {
+        await supabase
+          .from("market_listing_reactions")
+          .upsert({ listing_id: listingId, user_id: meId, reaction: next }, { onConflict: "listing_id,user_id" });
+      }
+      await loadReactions();
+    } catch (e: any) {
+      Alert.alert("Failed", e?.message ?? "Could not update reaction");
+    }
+  }
+
+  async function submitComment() {
+    if (!meId) {
+      Alert.alert("Sign in required", "Please sign in to comment.");
+      return;
+    }
+    if (!listingId) return;
+    const body = commentInput.trim();
+    if (body.length < 2) return;
+    setCommentBusy(true);
+    try {
+      await supabase.from("market_listing_comments").insert({ listing_id: listingId, user_id: meId, body });
+      setCommentInput("");
+      await loadComments();
+    } catch (e: any) {
+      Alert.alert("Failed", e?.message ?? "Could not post comment");
+    } finally {
+      setCommentBusy(false);
+    }
+  }
 
   async function buyNow() {
     try {
@@ -373,6 +497,62 @@ export default function ListingDetails() {
 
         <View
           style={{
+            marginTop: 10,
+            borderRadius: 18,
+            padding: 12,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <Pressable
+            onPress={() => toggleReaction("like")}
+            style={{
+              flexDirection: "row",
+              gap: 6,
+              alignItems: "center",
+              paddingVertical: 8,
+              paddingHorizontal: 10,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: myReaction === "like" ? "rgba(16,185,129,0.45)" : "rgba(255,255,255,0.1)",
+              backgroundColor: myReaction === "like" ? "rgba(16,185,129,0.15)" : "rgba(255,255,255,0.04)",
+            }}
+          >
+            <Ionicons name="thumbs-up-outline" size={16} color="#fff" />
+            <Text style={{ color: "#fff", fontWeight: "900" }}>{likes}</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => toggleReaction("dislike")}
+            style={{
+              flexDirection: "row",
+              gap: 6,
+              alignItems: "center",
+              paddingVertical: 8,
+              paddingHorizontal: 10,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: myReaction === "dislike" ? "rgba(239,68,68,0.45)" : "rgba(255,255,255,0.1)",
+              backgroundColor: myReaction === "dislike" ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.04)",
+            }}
+          >
+            <Ionicons name="thumbs-down-outline" size={16} color="#fff" />
+            <Text style={{ color: "#fff", fontWeight: "900" }}>{dislikes}</Text>
+          </Pressable>
+
+          <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+            <Ionicons name="chatbubble-ellipses-outline" size={16} color="rgba(255,255,255,0.8)" />
+            <Text style={{ color: "rgba(255,255,255,0.8)", fontWeight: "900" }}>{commentCount}</Text>
+          </View>
+        </View>
+
+        <View
+          style={{
             marginTop: 12,
             borderRadius: 22,
             padding: 16,
@@ -521,6 +701,72 @@ export default function ListingDetails() {
               {seller.bio}
             </Text>
           ) : null}
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Comments</Text>
+
+          <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
+            <TextInput
+              value={commentInput}
+              onChangeText={setCommentInput}
+              placeholder="Write a public comment…"
+              placeholderTextColor="rgba(255,255,255,0.35)"
+              style={{
+                flex: 1,
+                borderRadius: 14,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                color: "#fff",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+              }}
+            />
+            <Pressable
+              onPress={submitComment}
+              disabled={commentBusy || commentInput.trim().length < 2}
+              style={{
+                paddingHorizontal: 14,
+                borderRadius: 14,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(124,58,237,0.85)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.2)",
+                opacity: commentBusy ? 0.7 : 1,
+              }}
+            >
+              {commentBusy ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={16} color="#fff" />}
+            </Pressable>
+          </View>
+
+          <View style={{ marginTop: 12, gap: 10 }}>
+            {comments.length === 0 ? (
+              <Text style={{ color: "rgba(255,255,255,0.6)" }}>No comments yet.</Text>
+            ) : (
+              comments.map((c) => (
+                <View key={c.id} style={{ borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: "rgba(255,255,255,0.04)" }}>
+                  <Text style={{ color: "#fff", fontWeight: "800" }}>
+                    @{c.profiles?.username || "user"}{" "}
+                    <Text style={{ color: "rgba(255,255,255,0.5)", fontWeight: "600", fontSize: 11 }}>
+                      • {new Date(c.created_at).toLocaleString()}
+                    </Text>
+                  </Text>
+                  <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>{c.body}</Text>
+                </View>
+              ))
+            )}
+          </View>
         </View>
 
         <View

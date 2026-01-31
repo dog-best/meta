@@ -2,7 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
@@ -41,6 +41,16 @@ type Listing = {
   cover_url?: string | null;
 };
 
+type Review = {
+  id: string;
+  seller_id: string;
+  reviewer_id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  profiles?: { username?: string | null; full_name?: string | null } | null;
+};
+
 function publicUrl(bucket: string, path: string | null) {
   if (!path) return null;
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
@@ -55,6 +65,18 @@ export default function PublicSellerProfile() {
   const [seller, setSeller] = useState<Seller | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [meId, setMeId] = useState<string | null>(null);
+
+  const [followersCount, setFollowersCount] = useState(0);
+  const [isFollowing, setIsFollowing] = useState(false);
+
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [avgRating, setAvgRating] = useState(0);
+  const [reviewCount, setReviewCount] = useState(0);
+  const [myRating, setMyRating] = useState<number>(0);
+  const [myComment, setMyComment] = useState("");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [canReview, setCanReview] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -142,6 +164,147 @@ export default function PublicSellerProfile() {
       mounted = false;
     };
   }, [handle]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      setMeId(data?.user?.id ?? null);
+    })();
+  }, []);
+
+  async function loadFollowers() {
+    if (!seller?.user_id) return;
+    const { count } = await supabase
+      .from("market_profile_follows")
+      .select("id", { count: "exact", head: true })
+      .eq("followed_id", seller.user_id);
+    setFollowersCount(count ?? 0);
+
+    if (meId) {
+      const { data } = await supabase
+        .from("market_profile_follows")
+        .select("id")
+        .eq("followed_id", seller.user_id)
+        .eq("follower_id", meId)
+        .maybeSingle();
+      setIsFollowing(!!data?.id);
+    } else {
+      setIsFollowing(false);
+    }
+  }
+
+  async function loadReviews() {
+    if (!seller?.user_id) return;
+    const { data, count } = await supabase
+      .from("market_seller_reviews")
+      .select("id,seller_id,reviewer_id,rating,comment,created_at,profiles(username,full_name)", { count: "exact" })
+      .eq("seller_id", seller.user_id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    const rows = (data as any as Review[]) ?? [];
+    setReviews(rows);
+    setReviewCount(count ?? rows.length);
+    if (rows.length) {
+      const avg = rows.reduce((a, b) => a + Number(b.rating || 0), 0) / rows.length;
+      setAvgRating(Math.round(avg * 10) / 10);
+    } else {
+      setAvgRating(0);
+    }
+  }
+
+  async function loadCanReview() {
+    if (!seller?.user_id || !meId) {
+      setCanReview(false);
+      return;
+    }
+    if (meId === seller.user_id) {
+      setCanReview(false);
+      return;
+    }
+    const { data } = await supabase
+      .from("market_orders")
+      .select("id,status")
+      .eq("buyer_id", meId)
+      .eq("seller_id", seller.user_id)
+      .in("status", ["DELIVERED", "RELEASED"])
+      .limit(1);
+    setCanReview(!!data?.length);
+  }
+
+  useEffect(() => {
+    if (!seller?.user_id) return;
+    loadFollowers();
+    loadReviews();
+    loadCanReview();
+
+    const ch = supabase
+      .channel(`seller-social-${seller.user_id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_profile_follows", filter: `followed_id=eq.${seller.user_id}` }, () => {
+        loadFollowers();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_seller_reviews", filter: `seller_id=eq.${seller.user_id}` }, () => {
+        loadReviews();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [seller?.user_id, meId]);
+
+  async function toggleFollow() {
+    if (!meId) {
+      setErr("Please sign in to follow stores.");
+      return;
+    }
+    if (!seller?.user_id) return;
+    if (meId === seller.user_id) return;
+    try {
+      if (isFollowing) {
+        await supabase.from("market_profile_follows").delete().eq("follower_id", meId).eq("followed_id", seller.user_id);
+      } else {
+        await supabase.from("market_profile_follows").insert({ follower_id: meId, followed_id: seller.user_id });
+      }
+      await loadFollowers();
+    } catch (e: any) {
+      setErr(e?.message || "Could not update follow");
+    }
+  }
+
+  async function submitReview() {
+    if (!seller?.user_id || !meId) return;
+    if (meId === seller.user_id) return;
+    if (!canReview) {
+      setErr("Only buyers who completed an order can review this store.");
+      return;
+    }
+    if (myRating < 1) {
+      setErr("Select a star rating.");
+      return;
+    }
+    setReviewBusy(true);
+    setErr(null);
+    try {
+      await supabase
+        .from("market_seller_reviews")
+        .upsert(
+          {
+            seller_id: seller.user_id,
+            reviewer_id: meId,
+            rating: myRating,
+            comment: myComment.trim() || null,
+          },
+          { onConflict: "seller_id,reviewer_id" }
+        );
+      setMyComment("");
+      setMyRating(0);
+      await loadReviews();
+    } catch (e: any) {
+      setErr(e?.message || "Could not submit review");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
 
   const bannerUrl = useMemo(() => publicUrl(BUCKET_SELLERS, seller?.banner_path ?? null), [seller?.banner_path]);
   const logoUrl = useMemo(() => publicUrl(BUCKET_SELLERS, seller?.logo_path ?? null), [seller?.logo_path]);
@@ -258,6 +421,33 @@ export default function PublicSellerProfile() {
               </View>
             </View>
 
+            <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{followersCount} Followers</Text>
+                </View>
+                <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    {avgRating ? `${avgRating} ★` : "No ratings"} ({reviewCount})
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                onPress={toggleFollow}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: isFollowing ? "rgba(239,68,68,0.35)" : "rgba(124,58,237,0.45)",
+                  backgroundColor: isFollowing ? "rgba(239,68,68,0.12)" : "rgba(124,58,237,0.20)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{isFollowing ? "Unfollow" : "Follow"}</Text>
+              </Pressable>
+            </View>
+
             <View style={{ marginTop: 12 }}>
               <Text style={{ color: "#fff", fontWeight: "900" }}>About</Text>
               <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", lineHeight: 18 }}>
@@ -293,6 +483,84 @@ export default function PublicSellerProfile() {
               {seller.offers_remote ? <Pill icon="laptop-outline" label="Remote service" /> : null}
               {seller.offers_in_person ? <Pill icon="walk-outline" label="In-person service" /> : null}
               <Pill icon="shield-checkmark-outline" label={`Payout: ${seller.payout_tier}`} />
+            </View>
+          </View>
+
+          <View style={{ marginTop: 12, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Reviews</Text>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+              {reviewCount ? `${reviewCount} reviews • ${avgRating}★ average` : "No reviews yet"}
+            </Text>
+
+            {canReview ? (
+              <View style={{ marginTop: 12 }}>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <Pressable key={n} onPress={() => setMyRating(n)} style={{ padding: 6 }}>
+                      <Ionicons name={myRating >= n ? "star" : "star-outline"} size={20} color="#FBBF24" />
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  value={myComment}
+                  onChangeText={setMyComment}
+                  placeholder="Write a short review (optional)"
+                  placeholderTextColor="rgba(255,255,255,0.35)"
+                  style={{
+                    marginTop: 8,
+                    borderRadius: 14,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    color: "#fff",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.10)",
+                  }}
+                />
+                <Pressable
+                  onPress={submitReview}
+                  disabled={reviewBusy}
+                  style={{
+                    marginTop: 10,
+                    borderRadius: 14,
+                    paddingVertical: 12,
+                    alignItems: "center",
+                    backgroundColor: "rgba(124,58,237,0.20)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,237,0.45)",
+                    opacity: reviewBusy ? 0.7 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{reviewBusy ? "Submitting…" : "Submit review"}</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
+                Only buyers who completed an order can review.
+              </Text>
+            )}
+
+            <View style={{ marginTop: 12, gap: 10 }}>
+              {reviews.length === 0 ? (
+                <Text style={{ color: "rgba(255,255,255,0.6)" }}>No reviews yet.</Text>
+              ) : (
+                reviews.map((r) => (
+                  <View key={r.id} style={{ borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: "rgba(255,255,255,0.04)" }}>
+                    <Text style={{ color: "#fff", fontWeight: "800" }}>
+                      @{r.profiles?.username || "user"}{" "}
+                      <Text style={{ color: "rgba(255,255,255,0.5)", fontWeight: "600", fontSize: 11 }}>
+                        • {new Date(r.created_at).toLocaleString()}
+                      </Text>
+                    </Text>
+                    <View style={{ marginTop: 6, flexDirection: "row", gap: 4 }}>
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <Ionicons key={n} name={r.rating >= n ? "star" : "star-outline"} size={14} color="#FBBF24" />
+                      ))}
+                    </View>
+                    {r.comment ? <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>{r.comment}</Text> : null}
+                  </View>
+                ))
+              )}
             </View>
           </View>
 
