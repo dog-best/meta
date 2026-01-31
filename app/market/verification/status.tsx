@@ -1,4 +1,3 @@
-import { supabase } from "@/services/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -6,9 +5,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
+import { supabase } from "@/services/supabase";
+
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
+const BLUE = "#3B82F6";
 
 type SellerProfile = {
   user_id: string;
@@ -62,7 +64,7 @@ export default function VerificationStatus() {
 
   const headline = useMemo(() => {
     if (!profile) return "No seller profile";
-    if (verified) return "Verified ✅";
+    if (verified) return "Verified";
     if (!reqRow) return "Not applied yet";
     if (reqRow.status === "PENDING") return "Under review";
     if (reqRow.status === "REJECTED") return "Rejected";
@@ -71,7 +73,6 @@ export default function VerificationStatus() {
   }, [profile, verified, reqRow]);
 
   async function load() {
-    console.log("[VerificationStatus] load start");
     setLoading(true);
     try {
       const { data: auth } = await supabase.auth.getUser();
@@ -101,7 +102,6 @@ export default function VerificationStatus() {
       setReqRow(null);
     } finally {
       setLoading(false);
-      console.log("[VerificationStatus] load end");
     }
   }
 
@@ -146,7 +146,7 @@ export default function VerificationStatus() {
         {loading ? (
           <View style={{ marginTop: 40, alignItems: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading...</Text>
           </View>
         ) : (
           <View
@@ -166,12 +166,11 @@ export default function VerificationStatus() {
               <Ionicons
                 name={verified ? "checkmark-circle" : "alert-circle"}
                 size={20}
-                color={verified ? "rgba(16,185,129,1)" : "rgba(251,191,36,1)"}
+                color={verified ? BLUE : "rgba(251,191,36,1)"}
               />
               <Text style={{ color: "#fff", fontWeight: "900" }}>{headline}</Text>
             </View>
 
-            {/* Request status */}
             {reqRow ? (
               <View style={{ marginTop: 12 }}>
                 <StatusPill status={reqRow.status} />
@@ -188,16 +187,14 @@ export default function VerificationStatus() {
               </View>
             ) : (
               <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-                You haven’t submitted verification yet. Apply and we’ll review it.
+                You have not submitted verification yet. Apply and we will review it.
               </Text>
             )}
 
-            {/* Payout tier info */}
             <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
               Verified sellers can move to faster payout tier and higher limits (Team 3 rules).
             </Text>
 
-            {/* Actions */}
             {!profile ? (
               <Pressable
                 onPress={() => router.push("/market/profile/create" as any)}

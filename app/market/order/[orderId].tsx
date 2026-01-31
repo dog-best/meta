@@ -563,8 +563,10 @@ async function pickAndUpload(access: "preview" | "final") {
                     {listing?.category ?? "—"} • {listing?.delivery_type ?? "—"} • {listing?.sub_category ?? "—"}
                   </Text>
                   <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                    Seller: {seller?.business_name || seller?.display_name || "Seller"}
-                    {seller?.is_verified ? " ✅" : ""} @{seller?.market_username || "seller"}
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>
+                      Seller: {seller?.business_name || seller?.display_name || "Seller"}{" "}
+                      {seller?.is_verified ? <Ionicons name="checkmark-circle" size={14} color="#3B82F6" /> : null} @{seller?.market_username || "seller"}
+                    </Text>
                   </Text>
                 </View>
 

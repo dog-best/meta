@@ -4,12 +4,18 @@ import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-nativ
 
 function badge(type: WalletTx["type"]) {
   switch (type) {
-    case "deposit": return { t: "Deposit", c: "#16A34A" };
-    case "withdrawal": return { t: "Withdraw", c: "#F97316" };
-    case "transfer_in": return { t: "Received", c: "#22C55E" };
-    case "transfer_out": return { t: "Sent", c: "#EF4444" };
-    case "fee": return { t: "Fee", c: "#A855F7" };
-    default: return { t: type, c: "#60A5FA" };
+    case "deposit":
+      return { t: "Deposit", c: "#16A34A" };
+    case "withdrawal":
+      return { t: "Withdraw", c: "#F97316" };
+    case "transfer_in":
+      return { t: "Received", c: "#22C55E" };
+    case "transfer_out":
+      return { t: "Sent", c: "#EF4444" };
+    case "fee":
+      return { t: "Fee", c: "#A855F7" };
+    default:
+      return { t: type, c: "#60A5FA" };
   }
 }
 
@@ -22,7 +28,7 @@ export default function WalletActivity({ items, loading }: { items: WalletTx[]; 
         {loading ? (
           <View style={styles.loading}>
             <ActivityIndicator color="#fff" />
-            <Text style={styles.loadingText}>Loading activity…</Text>
+            <Text style={styles.loadingText}>Loading activity...</Text>
           </View>
         ) : (
           <FlatList
@@ -37,9 +43,10 @@ export default function WalletActivity({ items, loading }: { items: WalletTx[]; 
                     <Text style={[styles.pillText, { color: b.c }]}>{b.t}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.amount}>₦{Number(item.amount).toLocaleString()}</Text>
+                    <Text style={styles.amount}>NGN {Number(item.amount).toLocaleString()}</Text>
                     <Text style={styles.meta}>
-                      {new Date(item.created_at).toLocaleString()} {item.reference ? `• ${item.reference}` : ""}
+                      {new Date(item.created_at).toLocaleString()}
+                      {item.reference ? ` - ${item.reference}` : ""}
                     </Text>
                   </View>
                 </View>

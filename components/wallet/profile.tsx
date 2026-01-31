@@ -1,7 +1,8 @@
 import * as Clipboard from "expo-clipboard";
-import { supabase } from "@/services/supabase";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+
+import { supabase } from "@/services/supabase";
 
 type Props = {
   visible: boolean;
@@ -39,7 +40,7 @@ export default function ProfileModal({ visible, onClose }: Props) {
           <Text style={styles.h}>Profile</Text>
           <Text style={styles.label}>Your UID (share to receive money)</Text>
           <View style={styles.uidBox}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.uid}>{uid || "—"}</Text>}
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.uid}>{uid || "-"}</Text>}
           </View>
           {msg ? <Text style={styles.msg}>{msg}</Text> : null}
 

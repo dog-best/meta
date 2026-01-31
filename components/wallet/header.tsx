@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -15,17 +16,17 @@ export default function WalletHeader({ balance, onRefresh, onOpenProfile, refres
         <Text style={styles.title}>Wallet</Text>
         <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable style={styles.smallBtn} onPress={onRefresh}>
-            {refreshing ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.smallBtnText}>↻</Text>}
+            {refreshing ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="refresh" size={18} color="#fff" />}
           </Pressable>
           <Pressable style={styles.smallBtn} onPress={onOpenProfile}>
-            <Text style={styles.smallBtnText}>☰</Text>
+            <Ionicons name="menu" size={18} color="#fff" />
           </Pressable>
         </View>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Available Balance</Text>
-        <Text style={styles.balance}>₦{Number(balance || 0).toLocaleString()}</Text>
+        <Text style={styles.balance}>NGN {Number(balance || 0).toLocaleString()}</Text>
         <Text style={styles.sub}>Secure ledger-backed balance</Text>
       </View>
     </View>
@@ -46,7 +47,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  smallBtnText: { color: "white", fontSize: 16, fontWeight: "900" },
   card: {
     marginTop: 12,
     backgroundColor: "#0B0F17",

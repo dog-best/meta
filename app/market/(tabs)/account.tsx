@@ -25,6 +25,7 @@ const PURPLE = "#7C3AED";
 const CARD = "rgba(255,255,255,0.05)";
 const BORDER = "rgba(255,255,255,0.09)";
 const MUTED = "rgba(255,255,255,0.62)";
+const BLUE = "#3B82F6";
 
 function publicUrl(bucket: string, path?: string | null) {
   if (!path) return null;
@@ -92,7 +93,6 @@ export default function MarketAccountTab() {
   const [profile, setProfile] = useState<SellerProfile | null>(null);
 
   async function load() {
-    console.log("[MarketAccountTab] load start");
     setLoading(true);
     try {
       const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -114,7 +114,6 @@ export default function MarketAccountTab() {
       setProfile(null);
     } finally {
       setLoading(false);
-      console.log("[MarketAccountTab] load end");
     }
   }
 
@@ -138,7 +137,7 @@ export default function MarketAccountTab() {
         <AppHeader title="Market Account" subtitle="Manage your store profile, listings, and marketplace wallet." />
         <View style={{ marginTop: 70, alignItems: "center" }}>
           <ActivityIndicator />
-          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading…</Text>
+          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading...</Text>
         </View>
       </LinearGradient>
     );
@@ -184,7 +183,6 @@ export default function MarketAccountTab() {
           </CardBox>
         ) : (
           <View style={{ marginTop: 12, borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
-            {/* Banner */}
             <View style={{ height: 150 }}>
               {banner ? (
                 <Image source={{ uri: banner }} style={{ width: "100%", height: "100%" }} />
@@ -192,14 +190,12 @@ export default function MarketAccountTab() {
                 <LinearGradient colors={["rgba(124,58,237,0.35)", "rgba(255,255,255,0.04)"]} style={{ width: "100%", height: "100%" }} />
               )}
 
-              {/* Fade */}
               <LinearGradient
                 colors={["rgba(0,0,0,0.0)", "rgba(5,4,11,0.85)"]}
                 style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 90 }}
               />
             </View>
 
-            {/* Identity row */}
             <View style={{ padding: 14, marginTop: -34, flexDirection: "row", alignItems: "flex-end", gap: 12 }}>
               <View style={{ width: 78, height: 78, borderRadius: 26, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", backgroundColor: "rgba(255,255,255,0.06)", alignItems: "center", justifyContent: "center" }}>
                 {logo ? <Image source={{ uri: logo }} style={{ width: 78, height: 78 }} /> : <Ionicons name="person-outline" size={26} color="rgba(255,255,255,0.8)" />}
@@ -208,7 +204,11 @@ export default function MarketAccountTab() {
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }}>{handle}</Text>
-                  {profile.is_verified ? <Badge text="Verified" tone="green" /> : <Badge text="Unverified" tone="gray" />}
+                  {profile.is_verified ? (
+                    <View style={{ paddingHorizontal: 6, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(59,130,246,0.15)", borderWidth: 1, borderColor: "rgba(59,130,246,0.35)" }}>
+                      <Ionicons name="checkmark-circle" size={14} color={BLUE} />
+                    </View>
+                  ) : null}
                   <Badge text={profile.payout_tier === "fast" ? "Fast payouts" : "Standard payouts"} tone="purple" />
                 </View>
 
@@ -264,7 +264,7 @@ export default function MarketAccountTab() {
         </CardBox>
 
         <CardBox>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Verified Seller</Text>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Seller verification</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
             Apply for a badge and higher trust ranking.
           </Text>

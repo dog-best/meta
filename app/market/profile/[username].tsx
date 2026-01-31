@@ -403,8 +403,8 @@ export default function PublicSellerProfile() {
                     {seller.business_name || seller.display_name || "Store"}
                   </Text>
                   {seller.is_verified ? (
-                    <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(16,185,129,0.15)", borderWidth: 1, borderColor: "rgba(16,185,129,0.35)" }}>
-                      <Text style={{ color: "#10B981", fontWeight: "900", fontSize: 12 }}>Verified</Text>
+                    <View style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(59,130,246,0.15)", borderWidth: 1, borderColor: "rgba(59,130,246,0.35)" }}>
+                      <Ionicons name="checkmark-circle" size={14} color="#3B82F6" />
                     </View>
                   ) : null}
                 </View>

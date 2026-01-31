@@ -643,10 +643,14 @@ export default function ListingDetails() {
             </View>
 
             <View style={{ flex: 1 }}>
-              <Text style={{ color: "#fff", fontWeight: "900" }}>
-                {seller?.business_name || seller?.display_name || "Seller"}
-                {seller?.is_verified ? " ✅" : ""}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>
+                  {seller?.business_name || seller?.display_name || "Seller"}
+                </Text>
+                {seller?.is_verified ? (
+                  <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />
+                ) : null}
+              </View>
               <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
                 @{seller?.market_username || "seller"}
               </Text>

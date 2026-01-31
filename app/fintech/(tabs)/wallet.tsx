@@ -4,9 +4,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 
 import FundWallet from "@/components/wallet/fundwallet";
-import WalletHeader from "@/components/wallet/header";
 import ProfileModal from "@/components/wallet/profile";
 import SendMoney from "@/components/wallet/send";
+import WalletHeader from "@/components/wallet/header";
 import Withdraw from "@/components/wallet/withdraw";
 
 import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
@@ -70,7 +70,7 @@ export default function WalletRoute() {
       <WalletHeader balance={balance} onRefresh={refreshAll} onOpenProfile={() => setShowProfile(true)} refreshing={walletLoading || tx.loading} />
 
       {!!walletErr ? <Text style={styles.err}>{walletErr}</Text> : null}
-      {walletLoading ? <Text style={styles.dim}>Loading wallet…</Text> : null}
+      {walletLoading ? <Text style={styles.dim}>Loading wallet...</Text> : null}
 
       <View style={styles.tabRow}>
         {tabs.map((t) => (
@@ -94,7 +94,7 @@ export default function WalletRoute() {
         <View style={styles.historyCard}>
           <Text style={styles.hTitle}>Transactions</Text>
           {!!tx.error ? <Text style={styles.err}>{tx.error}</Text> : null}
-          {tx.loading ? <Text style={styles.dim}>Loading history…</Text> : null}
+          {tx.loading ? <Text style={styles.dim}>Loading history...</Text> : null}
 
           <FlatList
             data={tx.items}
@@ -104,9 +104,10 @@ export default function WalletRoute() {
               <View style={styles.txRow}>
                 <TxBadge type={item.type} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.txAmount}>₦{Number(item.amount).toLocaleString()}</Text>
+                  <Text style={styles.txAmount}>NGN {Number(item.amount).toLocaleString()}</Text>
                   <Text style={styles.txMeta}>
-                    {new Date(item.created_at).toLocaleString()} {item.reference ? `• ${item.reference}` : ""}
+                    {new Date(item.created_at).toLocaleString()}
+                    {item.reference ? ` - ${item.reference}` : ""}
                   </Text>
                 </View>
               </View>
@@ -115,7 +116,7 @@ export default function WalletRoute() {
 
           {tx.hasMore ? (
             <Pressable style={styles.loadMoreBtn} onPress={tx.loadMore} disabled={tx.loadingMore}>
-              <Text style={styles.loadMoreText}>{tx.loadingMore ? "Loading…" : "Load more"}</Text>
+              <Text style={styles.loadMoreText}>{tx.loadingMore ? "Loading..." : "Load more"}</Text>
             </Pressable>
           ) : (
             <Text style={[styles.dim, { textAlign: "center", marginTop: 10 }]}>End of history</Text>

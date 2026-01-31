@@ -96,7 +96,7 @@ export default function Dashboard() {
           <View>
             <Text style={styles.title}>Dashboard</Text>
             <Text style={styles.subtitle}>
-              {user?.email ? `Welcome back • ${user.email}` : "Welcome back"}
+              {user?.email ? `Welcome back - ${user.email}` : "Welcome back"}
             </Text>
           </View>
 
@@ -113,7 +113,7 @@ export default function Dashboard() {
                 <ActivityIndicator color="#fff" />
               </View>
             ) : (
-              <Text style={styles.walletBalance}>₦{Number(balance ?? 0).toLocaleString()}</Text>
+              <Text style={styles.walletBalance}>NGN {Number(balance ?? 0).toLocaleString()}</Text>
             )}
             {!!error && <Text style={styles.err}>{error}</Text>}
           </View>
@@ -143,7 +143,7 @@ export default function Dashboard() {
 
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Explore</Text>
-          <Text style={styles.sectionHint}>Crypto & marketplace</Text>
+          <Text style={styles.sectionHint}>Crypto and marketplace</Text>
         </View>
 
         <View style={styles.bigRow}>
@@ -152,7 +152,7 @@ export default function Dashboard() {
               <MaterialCommunityIcons name="bitcoin" size={34} color="#fff" />
             </View>
             <Text style={styles.bigTitle}>Crypto</Text>
-            <Text style={styles.bigSub}>Receive • Convert</Text>
+            <Text style={styles.bigSub}>Receive - Convert</Text>
           </Pressable>
 
           <Pressable style={styles.bigCard} onPress={() => go(ROUTES.market)}>
@@ -160,13 +160,13 @@ export default function Dashboard() {
               <MaterialCommunityIcons name="storefront-outline" size={34} color="#fff" />
             </View>
             <Text style={styles.bigTitle}>Marketplace</Text>
-            <Text style={styles.bigSub}>Buy • Sell • Escrow</Text>
+            <Text style={styles.bigSub}>Buy - Sell - Escrow</Text>
           </Pressable>
         </View>
 
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>Utilities</Text>
-          <Text style={styles.sectionHint}>Bills & payments</Text>
+          <Text style={styles.sectionHint}>Bills and payments</Text>
         </View>
 
         <View style={styles.utilWrap}>
@@ -196,9 +196,10 @@ export default function Dashboard() {
               <View style={styles.txRow}>
                 <TxBadge type={item.type} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.txAmount}>₦{Number(item.amount).toLocaleString()}</Text>
+                  <Text style={styles.txAmount}>NGN {Number(item.amount).toLocaleString()}</Text>
                   <Text style={styles.txMeta}>
-                    {new Date(item.created_at).toLocaleString()} {item.reference ? `• ${item.reference}` : ""}
+                    {new Date(item.created_at).toLocaleString()}
+                    {item.reference ? ` - ${item.reference}` : ""}
                   </Text>
                 </View>
               </View>

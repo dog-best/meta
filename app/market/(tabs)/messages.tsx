@@ -157,7 +157,12 @@ export default function MessagesTab() {
                 <Pressable
                   key={t.id}
                   onPress={() => {
-                    if (routeUsername) router.push(`/market/dm/${routeUsername}` as any);
+                    if (routeUsername) {
+                      router.push({
+                        pathname: "/market/dm/[username]" as any,
+                        params: { username: routeUsername },
+                      });
+                    }
                   }}
                   disabled={!routeUsername}
                   style={{

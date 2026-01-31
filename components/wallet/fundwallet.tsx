@@ -1,9 +1,10 @@
-import ConfirmPurchase from "@/components/common/confirmpurchase";
-import { callFn } from "@/services/functions";
-import { requireLocalAuth } from "@/utils/secureAuth";
 import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { WebView } from "react-native-webview";
+
+import ConfirmPurchase from "@/components/common/confirmpurchase";
+import { callFn } from "@/services/functions";
+import { requireLocalAuth } from "@/utils/secureAuth";
 
 export default function FundWallet({ onSuccess }: { onSuccess: () => void }) {
   const [amount, setAmount] = useState("1000");
@@ -46,7 +47,7 @@ export default function FundWallet({ onSuccess }: { onSuccess: () => void }) {
       <ConfirmPurchase
         visible={confirm}
         title="Confirm deposit"
-        message={`You are about to fund ₦${(a || 0).toLocaleString()} into your wallet.`}
+        message={`You are about to fund NGN ${(a || 0).toLocaleString()} into your wallet.`}
         confirmText="Proceed"
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {

@@ -1,4 +1,3 @@
-import { supabase } from "@/services/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -6,9 +5,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
+import { supabase } from "@/services/supabase";
+
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
+const BLUE = "#3B82F6";
 
 type SellerProfile = {
   user_id: string;
@@ -82,15 +84,12 @@ export default function VerificationApply() {
 
   const canSubmit = useMemo(() => {
     if (!profile) return false;
-    if (profile.is_verified) return false; // already verified
-    // allow submit anytime; if rejected/pending, we will upsert
+    if (profile.is_verified) return false;
     return true;
   }, [profile]);
 
   async function load() {
-    console.log("[VerificationApply] load start");
     setLoading(true);
-
     try {
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth?.user?.id;
@@ -100,7 +99,6 @@ export default function VerificationApply() {
       }
       setMe(uid);
 
-      // seller profile must exist
       const { data: sp, error: spErr } = await supabase
         .from("market_seller_profiles")
         .select("user_id,business_name,market_username,is_verified")
@@ -113,7 +111,6 @@ export default function VerificationApply() {
         setProfile((sp as any) ?? null);
       }
 
-      // load existing request (if any)
       const { data: vr } = await supabase
         .from("market_verification_requests")
         .select("id,user_id,status,note,admin_note,submitted_at,reviewed_at,updated_at")
@@ -121,8 +118,6 @@ export default function VerificationApply() {
         .maybeSingle();
 
       setReqRow((vr as any) ?? null);
-
-      // prefill note if they already have one
       if ((vr as any)?.note) setNote(String((vr as any).note));
       else setNote("");
     } catch {
@@ -131,7 +126,6 @@ export default function VerificationApply() {
       setNote("");
     } finally {
       setLoading(false);
-      console.log("[VerificationApply] load end");
     }
   }
 
@@ -161,16 +155,11 @@ export default function VerificationApply() {
     }
 
     setBusy(true);
-    console.log("[VerificationApply] submit start");
     try {
-      // IMPORTANT:
-      // - If row exists: update status to PENDING again (re-apply)
-      // - If new: create row as PENDING
       const payload: any = {
         user_id: me,
         status: "PENDING",
         note: cleanNote,
-        // Keep admin_note as-is server-side; but on reapply we can clear it so UI isn't confusing
         admin_note: null,
         submitted_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -189,7 +178,6 @@ export default function VerificationApply() {
       Alert.alert("Failed", e?.message || "Could not submit verification.");
     } finally {
       setBusy(false);
-      console.log("[VerificationApply] submit end");
     }
   }
 
@@ -202,7 +190,6 @@ export default function VerificationApply() {
     >
       <AppHeader title="Apply for Verification" subtitle="Admin approves before badge is granted" />
       <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
-        {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>
           <Pressable
             onPress={() => router.back()}
@@ -231,7 +218,7 @@ export default function VerificationApply() {
         {loading ? (
           <View style={{ marginTop: 40, alignItems: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading...</Text>
           </View>
         ) : !profile ? (
           <Card title="You need a seller profile">
@@ -260,9 +247,14 @@ export default function VerificationApply() {
               <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
                 {profile.business_name || `@${profile.market_username || "yourstore"}`}
               </Text>
-              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-                Current badge: {profile.is_verified ? "Verified ✅" : "Not verified"}
-              </Text>
+              <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={{ color: "rgba(255,255,255,0.65)" }}>Current badge:</Text>
+                {profile.is_verified ? (
+                  <Ionicons name="checkmark-circle" size={16} color={BLUE} />
+                ) : (
+                  <Text style={{ color: "rgba(255,255,255,0.65)" }}>Not verified</Text>
+                )}
+              </View>
 
               {reqRow ? (
                 <View style={{ marginTop: 12 }}>
@@ -282,7 +274,7 @@ export default function VerificationApply() {
 
             <Card title="Application message">
               <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
-                Tell us what you sell and why you should be verified. (This is what you’ll review in dashboard.)
+                Tell us what you sell and why you should be verified. (This is what you will review in dashboard.)
               </Text>
 
               <View
@@ -299,7 +291,7 @@ export default function VerificationApply() {
                 <TextInput
                   value={note}
                   onChangeText={setNote}
-                  placeholder="Example: I sell electronics, I’ve completed 20 deliveries, I want faster payout tier…"
+                  placeholder="Example: I sell electronics, I have completed 20 deliveries, I want faster payout tier..."
                   placeholderTextColor="rgba(255,255,255,0.45)"
                   style={{ color: "#fff", fontWeight: "700", minHeight: 90 }}
                   multiline
@@ -320,7 +312,7 @@ export default function VerificationApply() {
                 }}
               >
                 <Text style={{ color: "#fff", fontWeight: "900" }}>
-                  {busy ? "Submitting…" : reqRow ? "Update application" : "Submit application"}
+                  {busy ? "Submitting..." : reqRow ? "Update application" : "Submit application"}
                 </Text>
               </Pressable>
 

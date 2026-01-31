@@ -1,9 +1,10 @@
+import React, { useMemo, useState } from "react";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+
 import ConfirmPurchase from "@/components/common/confirmpurchase";
 import { filterBanks, useBanks } from "@/hooks/wallet/useBanks";
 import { callFn } from "@/services/functions";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import React, { useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
   const { banks } = useBanks();
@@ -43,7 +44,7 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
   return (
     <View style={styles.card}>
       <Text style={styles.h}>Withdraw</Text>
-      <Text style={styles.sub}>Fee: ₦20 flat • Any amount</Text>
+      <Text style={styles.sub}>Fee: NGN 20 flat - Any amount</Text>
 
       <Text style={styles.label}>Amount (NGN)</Text>
       <TextInput
@@ -97,7 +98,7 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
       />
 
       <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} onPress={() => setConfirm(true)} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review & Withdraw</Text>}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review and Withdraw</Text>}
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}
@@ -105,7 +106,7 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
       <ConfirmPurchase
         visible={confirm}
         title="Confirm withdrawal"
-        message={`Withdraw ₦${(a || 0).toLocaleString()} to ${bank?.name || "bank"}.\n\nFee: ₦20\nTotal debit: ₦${((a || 0) + 20).toLocaleString()}`}
+        message={`Withdraw NGN ${(a || 0).toLocaleString()} to ${bank?.name || "bank"}.\n\nFee: NGN 20\nTotal debit: NGN ${((a || 0) + 20).toLocaleString()}`}
         confirmText="Withdraw"
         onCancel={() => setConfirm(false)}
         onConfirm={async () => {

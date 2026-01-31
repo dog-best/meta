@@ -2,9 +2,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 
 import { useAuth } from "@/hooks/authentication/useAuth";
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
 const PURPLE = "#7C3AED";
@@ -18,6 +20,12 @@ export default function ProfileRoute() {
   const [va, setVa] = useState<VA>(null);
   const [vaLoading, setVaLoading] = useState(false);
   const [vaErr, setVaErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [publicName, setPublicName] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -41,8 +49,80 @@ export default function ProfileRoute() {
   }, [user?.id]);
 
   const name = profile?.full_name || profile?.username || "Account";
-  const email = profile?.email || user?.email || "—";
-  const uid = profile?.public_uid || "—";
+  const email = profile?.email || user?.email || "-";
+  const uid = profile?.public_uid || "-";
+
+  useEffect(() => {
+    (async () => {
+      if (!user?.id) return;
+      const { data } = await supabase.from("profiles").select("username,full_name,public_uid,avatar_url").eq("id", user.id).maybeSingle();
+      if (!data) return;
+      setUsername(data.username ?? "");
+      setDisplayName(data.full_name ?? "");
+      setPublicName(data.username ?? "");
+      setAvatarUrl((data as any).avatar_url ?? null);
+    })();
+  }, [user?.id]);
+
+  async function pickAvatar() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Permission needed", "Allow photo access to upload your avatar.");
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!res.canceled && res.assets?.[0]?.uri) {
+      setAvatarUri(res.assets[0].uri);
+    }
+  }
+
+  async function saveProfile() {
+    if (!user?.id) return;
+    if (saving) return;
+    if (!username.trim()) {
+      Alert.alert("Username required", "Please set a public username.");
+      return;
+    }
+    setSaving(true);
+    try {
+      let nextAvatarUrl = avatarUrl;
+      if (avatarUri) {
+        const ext = avatarUri.split(".").pop() || "jpg";
+        const path = `avatars/${user.id}_${Date.now()}.${ext}`;
+        const up = await uploadToSupabaseStorage({
+          bucket: "avatars",
+          path,
+          localUri: avatarUri,
+          contentType: "image/jpeg",
+        });
+        nextAvatarUrl = up.publicUrl ?? null;
+      }
+
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          username: username.trim(),
+          full_name: displayName.trim() || null,
+          avatar_url: nextAvatarUrl,
+        })
+        .eq("id", user.id);
+
+      if (error) throw error;
+      setAvatarUrl(nextAvatarUrl);
+      setAvatarUri(null);
+      setPublicName(username.trim());
+      Alert.alert("Saved", "Your public profile has been updated.");
+    } catch (e: any) {
+      Alert.alert("Failed", e?.message ?? "Could not save profile.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={styles.screen}>
@@ -53,7 +133,7 @@ export default function ProfileRoute() {
         </Pressable>
       </View>
 
-      {loading ? <Text style={styles.dim}>Loading…</Text> : null}
+      {loading ? <Text style={styles.dim}>Loading...</Text> : null}
 
       <View style={styles.card}>
         <Text style={styles.name}>{name}</Text>
@@ -65,13 +145,61 @@ export default function ProfileRoute() {
         <Text style={styles.section}>Virtual Account</Text>
         <Text style={styles.line}>
           {vaLoading
-            ? "Loading virtual account…"
+            ? "Loading virtual account..."
             : va?.account_number
-            ? `${va.account_number} • ${va.bank_name}`
+            ? `${va.account_number} - ${va.bank_name}`
             : vaErr
             ? "Unable to load virtual account"
             : "Not available yet (Paystack DVA disabled)"}
         </Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.section}>Public profile</Text>
+        <Text style={styles.line}>This is how others see you.</Text>
+
+        <Pressable onPress={pickAvatar} style={styles.avatarRow}>
+          <View style={styles.avatarWrap}>
+            {avatarUri || avatarUrl ? (
+              <Image source={{ uri: avatarUri || avatarUrl || "" }} style={{ width: 64, height: 64 }} />
+            ) : (
+              <Ionicons name="person-circle-outline" size={36} color="rgba(255,255,255,0.7)" />
+            )}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Profile image</Text>
+            <Text style={{ color: "rgba(255,255,255,0.55)", marginTop: 4, fontSize: 12 }}>Tap to change</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
+        </Pressable>
+
+        <Text style={styles.label}>Public username</Text>
+        <TextInput
+          value={username}
+          onChangeText={setUsername}
+          placeholder="username"
+          placeholderTextColor="rgba(255,255,255,0.35)"
+          autoCapitalize="none"
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Display name</Text>
+        <TextInput
+          value={displayName}
+          onChangeText={setDisplayName}
+          placeholder="Your name"
+          placeholderTextColor="rgba(255,255,255,0.35)"
+          style={styles.input}
+        />
+
+        <Pressable
+          onPress={saveProfile}
+          disabled={saving}
+          style={[styles.saveBtn, { opacity: saving ? 0.7 : 1 }]}
+        >
+          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save changes</Text>}
+        </Pressable>
+        <Text style={styles.hint}>Public profile: @{publicName || "username"}</Text>
       </View>
 
       <View style={styles.card}>
@@ -85,7 +213,7 @@ export default function ProfileRoute() {
         <Pressable
           style={styles.row}
           onPress={async () => {
-            if (!email || email === "—") return;
+            if (!email || email === "-") return;
             try {
               await supabase.auth.resetPasswordForEmail(email);
               Alert.alert("Password reset", "A reset link was sent to your email.");
@@ -150,6 +278,45 @@ const styles = StyleSheet.create({
   line: { color: "rgba(255,255,255,0.7)", marginTop: 6 },
   section: { color: "#fff", fontWeight: "900", marginTop: 4 },
   divider: { height: 1, backgroundColor: "rgba(255,255,255,0.08)", marginVertical: 12 },
+  label: { color: "rgba(255,255,255,0.7)", fontWeight: "800", marginTop: 12, marginBottom: 6, fontSize: 12 },
+  input: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    color: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
+  avatarRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+  },
+  avatarWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  saveBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: "center",
+    backgroundColor: "rgba(124,58,237,0.85)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  saveText: { color: "#fff", fontWeight: "900" },
+  hint: { marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 },
 
   row: {
     height: 52,
