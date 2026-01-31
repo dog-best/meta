@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Audio, ResizeMode, Video } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
@@ -8,6 +7,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -61,13 +61,15 @@ export default function DMChat() {
   const [messages, setMessages] = useState<DMMessage[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
 
   const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [videoViewer, setVideoViewer] = useState<string | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
+
+  const avError = "Media playback not available on this build.";
 
   useEffect(() => {
     let mounted = true;
@@ -221,48 +223,7 @@ export default function DMChat() {
 
   async function toggleRecord() {
     if (!threadId) return;
-    if (recording) {
-      setRecordingBusy(true);
-      try {
-        await recording.stopAndUnloadAsync();
-        const uri = recording.getURI();
-        const status = await recording.getStatusAsync();
-        setRecording(null);
-        if (!uri) throw new Error("Recording failed");
-        setSending(true);
-        await sendMedia({
-          threadId,
-          kind: "audio",
-          uri,
-          mime_type: "audio/m4a",
-          duration_sec: status?.durationMillis ? Math.round(status.durationMillis / 1000) : null,
-        });
-        const msgs = await fetchMessages(threadId, 120);
-        setMessages(msgs);
-        await markRead(threadId);
-      } catch (e: any) {
-        setErr(e?.message || "Audio upload failed");
-      } finally {
-        setRecordingBusy(false);
-        setSending(false);
-      }
-      return;
-    }
-
-    try {
-      const perm = await Audio.requestPermissionsAsync();
-      if (!perm.granted) throw new Error("Microphone permission denied");
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      setRecording(rec);
-    } catch (e: any) {
-      setErr(e?.message || "Could not start recording");
-    }
+    setErr(avError);
   }
 
   const title = other?.seller_profile?.active
@@ -271,13 +232,15 @@ export default function DMChat() {
   const subtitle = other?.seller_profile?.active
     ? `@${other?.seller_profile?.market_username ?? other?.username ?? "seller"}`
     : `@${other?.username ?? "user"}`;
+  const VideoComp = null as any;
+  const videoResize = undefined;
 
   if (loading) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <AppHeader title="Chat" />
         <ActivityIndicator />
-        <Text style={{ marginTop: 10, color: MUTED }}>Opening chatâ€¦</Text>
+        <Text style={{ marginTop: 10, color: MUTED }}>Opening chat...</Text>
       </LinearGradient>
     );
   }
@@ -350,6 +313,7 @@ export default function DMChat() {
               mine={isMine(m.sender_id, meId)}
               onViewImage={setImageViewer}
               onViewVideo={setVideoViewer}
+              audioModule={null}
             />
           ))}
         </ScrollView>
@@ -467,12 +431,24 @@ export default function DMChat() {
             <Ionicons name="close" size={26} color="#fff" />
           </Pressable>
           {videoViewer ? (
-            <Video
-              source={{ uri: videoViewer }}
-              style={{ width: "100%", height: "60%" }}
-              useNativeControls
-              resizeMode={ResizeMode.CONTAIN}
-            />
+            VideoComp ? (
+              <VideoComp
+                source={{ uri: videoViewer }}
+                style={{ width: "100%", height: "60%" }}
+                useNativeControls
+                resizeMode={videoResize}
+              />
+            ) : (
+              <View style={{ padding: 16, alignItems: "center" }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Video playback unavailable</Text>
+                <Pressable
+                  onPress={() => Linking.openURL(videoViewer)}
+                  style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>Open video</Text>
+                </Pressable>
+              </View>
+            )
           ) : null}
         </View>
       </Modal>
@@ -485,11 +461,13 @@ function MessageBubble({
   mine,
   onViewImage,
   onViewVideo,
+  audioModule,
 }: {
   message: DMMessage;
   mine: boolean;
   onViewImage: (url: string) => void;
   onViewVideo: (url: string) => void;
+  audioModule: any;
 }) {
   const attachments = (message.dm_message_attachments ?? []) as DMAttachment[];
   return (
@@ -516,7 +494,7 @@ function MessageBubble({
         {attachments.length > 0 ? (
           <View style={{ marginTop: message.body ? 8 : 0, gap: 8 }}>
             {attachments.map((a) => (
-              <AttachmentView key={a.id} attachment={a} onViewImage={onViewImage} onViewVideo={onViewVideo} />
+              <AttachmentView key={a.id} attachment={a} onViewImage={onViewImage} onViewVideo={onViewVideo} audioModule={audioModule} />
             ))}
           </View>
         ) : null}
@@ -532,10 +510,12 @@ function AttachmentView({
   attachment,
   onViewImage,
   onViewVideo,
+  audioModule,
 }: {
   attachment: DMAttachment;
   onViewImage: (url: string) => void;
   onViewVideo: (url: string) => void;
+  audioModule: any;
 }) {
   const url = attachment.public_url || "";
 
@@ -556,7 +536,7 @@ function AttachmentView({
   }
 
   if (attachment.kind === "audio") {
-    return <AudioPlayer url={url} duration={attachment.duration_sec ?? null} />;
+    return <AudioPlayer url={url} duration={attachment.duration_sec ?? null} audioModule={audioModule} />;
   }
 
   return (
@@ -566,10 +546,22 @@ function AttachmentView({
   );
 }
 
-function AudioPlayer({ url, duration }: { url: string; duration: number | null }) {
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
+function AudioPlayer({ url, duration, audioModule }: { url: string; duration: number | null; audioModule: any }) {
+  const [sound, setSound] = useState<any>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+
+  if (!audioModule) {
+    return (
+      <Pressable
+        onPress={() => Linking.openURL(url)}
+        style={{ padding: 10, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.08)", flexDirection: "row", alignItems: "center", gap: 8 }}
+      >
+        <Ionicons name="musical-notes-outline" size={18} color="#fff" />
+        <Text style={{ color: "#fff", fontWeight: "800" }}>Open audio</Text>
+      </Pressable>
+    );
+  }
 
   useEffect(() => {
     return () => {
@@ -581,8 +573,9 @@ function AudioPlayer({ url, duration }: { url: string; duration: number | null }
 
   async function toggle() {
     if (!url) return;
+    if (!audioModule) return;
     if (!sound) {
-      const { sound: s } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status) => {
+      const { sound: s } = await audioModule.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status: any) => {
         if (!status.isLoaded) return;
         setProgress(status.positionMillis / (status.durationMillis || 1));
         setPlaying(status.isPlaying);
