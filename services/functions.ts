@@ -4,6 +4,7 @@ import {
   getSupabaseFunctionsBaseUrl,
   getSupabaseJwtOrThrow,
 } from "@/services/net";
+import { supabase } from "@/services/supabase";
 
 function shortText(text: string | null | undefined, limit = 600) {
   if (!text) return "";
@@ -56,7 +57,7 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
 
     if (shouldRetry) {
       try {
-        const { data: refreshed, error } = await (await import("@/services/supabase")).supabase.auth.refreshSession();
+        const { data: refreshed, error } = await supabase.auth.refreshSession();
         if (!error && refreshed.session?.access_token) {
           token = refreshed.session.access_token;
           const retry = await invokeFn<T>(name, body, timeoutMs, token);
@@ -71,7 +72,37 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
     }
   }
 
+  // Last-resort: use supabase.functions.invoke to let the SDK attach auth headers
   if (!res.ok || (json as any)?.success === false) {
+    const lower = String(msg || "").toLowerCase();
+    const shouldInvokeFallback =
+      res.status === 401 && (lower.includes("invalid jwt") || lower.includes("jwt"));
+
+    if (shouldInvokeFallback) {
+      try {
+        const { data, error } = await supabase.functions.invoke(name, { body: body ?? {} });
+        if (!error && data) {
+          return data as T;
+        }
+        if (error) {
+          msg = error.message || msg;
+        }
+      } catch {
+        // fall through to error handling
+      }
+    }
+  }
+
+  if (!res.ok || (json as any)?.success === false) {
+    const lower = String(msg || "").toLowerCase();
+    if (res.status === 401 && (lower.includes("invalid jwt") || lower.includes("jwt"))) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore sign out failures
+      }
+      throw new Error("Session expired. Please sign in again.");
+    }
     console.log(`[callFn] ${name} -> error`, msg);
     throw new Error(msg);
   }

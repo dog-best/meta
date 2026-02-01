@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+﻿import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
@@ -99,6 +99,7 @@ export default function MarketAccountTab() {
   const [wallet, setWallet] = useState<{ address: string } | null>(null);
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletErr, setWalletErr] = useState<string | null>(null);
+  const [chainErr, setChainErr] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -127,6 +128,7 @@ export default function MarketAccountTab() {
 
   async function loadChains() {
     try {
+      setChainErr(null);
       const items = await fetchMarketChains();
       setChains(items);
       const preferred = await getPreferredMarketChain();
@@ -135,10 +137,11 @@ export default function MarketAccountTab() {
         const w = await getMyWalletForChain(preferred.chain);
         setWallet(w ? { address: w.address } : null);
       }
-    } catch {
+    } catch (e: any) {
       setChains([]);
       setChain(null);
       setWallet(null);
+      setChainErr(e?.message || "Unable to load network settings. Pull to refresh or try again.");
     }
   }
 
@@ -292,45 +295,74 @@ export default function MarketAccountTab() {
         <CardBox>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Create your smart account only when you’re ready. We never store your private keys.
+            Create your smart account only when youâ€™re ready. We never store your private keys.
           </Text>
-
-          <View style={{ marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {chains.map((c) => {
-              const active = c.active;
-              const selected = chain?.chain === c.chain;
-              return (
-                <Pressable
-                  key={c.chain}
-                  disabled={!active}
-                  onPress={async () => {
-                    setChain(c);
-                    await setPreferredMarketChain(c.chain);
-                    const w = await getMyWalletForChain(c.chain);
-                    setWallet(w ? { address: w.address } : null);
-                  }}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    borderRadius: 999,
-                    backgroundColor: selected ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.06)",
-                    borderWidth: 1,
-                    borderColor: selected ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
-                    opacity: active ? 1 : 0.45,
-                  }}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                    {String(c.chain).toUpperCase().replace("_", " ")}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {!!chainErr ? (
+            <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{chainErr}</Text>
+          ) : null}
+          {chains.length === 0 ? (
+            <View style={{ marginTop: 12 }}>
+              <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
+                No networks available yet.
+              </Text>
+              <Pressable
+                onPress={loadChains}
+                style={{
+                  marginTop: 10,
+                  borderRadius: 16,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.12)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Reload networks</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={{ marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {chains.map((c) => {
+                const active = c.active;
+                const selected = chain?.chain === c.chain;
+                return (
+                  <Pressable
+                    key={c.chain}
+                    disabled={!active}
+                    onPress={async () => {
+                      setChain(c);
+                      await setPreferredMarketChain(c.chain);
+                      const w = await getMyWalletForChain(c.chain);
+                      setWallet(w ? { address: w.address } : null);
+                    }}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: 999,
+                      backgroundColor: selected ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.06)",
+                      borderWidth: 1,
+                      borderColor: selected ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
+                      opacity: active ? 1 : 0.45,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                      {String(c.chain).toUpperCase().replace("_", " ")}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
 
           <View style={{ marginTop: 10 }}>
             <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
               {chain?.active ? "Active network" : "Network not active yet"}
             </Text>
+            {!chain?.rpc_url && !process.env.EXPO_PUBLIC_ALCHEMY_API_KEY ? (
+              <Text style={{ marginTop: 6, color: "#FCA5A5", fontWeight: "800", fontSize: 12 }}>
+                Missing RPC URL or Alchemy API key. Add rpc_url in market_chain_config or set EXPO_PUBLIC_ALCHEMY_API_KEY.
+              </Text>
+            ) : null}
             <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
               {wallet?.address ? wallet.address : "No wallet address generated"}
             </Text>
@@ -398,3 +430,4 @@ export default function MarketAccountTab() {
     </LinearGradient>
   );
 }
+
