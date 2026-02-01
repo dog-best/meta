@@ -10,6 +10,8 @@ import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
+import { payUsdcForOrder } from "@/services/market/usdcCheckout";
+import { getPreferredMarketChain } from "@/services/market/chainConfig";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -17,7 +19,6 @@ const PURPLE = "#7C3AED";
 
 // ✅ Real function names in your repo
 const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
-const FN_MARKET_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent"; // USDC deposit intent (Base)
 
 function Pill({
   icon,
@@ -85,6 +86,7 @@ export default function Checkout() {
   const [listing, setListing] = useState<any>(null);
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [savingGeo, setSavingGeo] = useState(false);
+  const [chain, setChain] = useState<{ chain: string } | null>(null);
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();
@@ -132,6 +134,10 @@ export default function Checkout() {
       } finally {
         if (mounted) setLoading(false);
       }
+    })();
+    (async () => {
+      const c = await getPreferredMarketChain().catch(() => null);
+      if (mounted) setChain(c);
     })();
     return () => {
       mounted = false;
@@ -210,10 +216,7 @@ export default function Checkout() {
     console.log("[Checkout] payWithUsdc start", { orderId: oid });
     setBusy(true);
     try {
-      const auth = await requireLocalAuth("Confirm USDC deposit");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      // Creates/updates a deposit intent for this order (USDC/Base)
-      await callFn(FN_MARKET_USDC_DEPOSIT_INTENT, { order_id: oid });
+      await payUsdcForOrder(oid);
 
       // We route back to order screen where you can show deposit instructions/intents history
       router.replace(`/market/order/${oid}` as any);
@@ -338,8 +341,13 @@ export default function Checkout() {
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Payment options</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
             • **NGN Wallet**: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).{"\n"}
-            • **USDC (Base)**: creates a deposit intent; you’ll deposit USDC to escrow on-chain (Team 4 revisit for wallet connect).
+            • **USDC**: uses your smart account and deposits USDC into escrow on-chain.
           </Text>
+          {chain ? (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+              Network: {String(chain.chain).toUpperCase().replace("_", " ")}
+            </Text>
+          ) : null}
 
           <Pill
             icon="wallet-outline"
@@ -351,8 +359,8 @@ export default function Checkout() {
 
           <Pill
             icon="logo-bitcoin"
-            title="Pay with USDC (Base)"
-            subtitle="Creates a USDC deposit intent for this order"
+            title="Pay with USDC"
+            subtitle="Approve + deposit into escrow using your smart account"
             onPress={payWithUsdc}
             disabled={busy}
           />

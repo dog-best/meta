@@ -1,78 +1,61 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
+import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return methodNotAllowed();
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders },
-  });
-}
+  const supabase = supabaseUserClient(req);
+  const admin = supabaseAdminClient();
 
-function envAny(...names: string[]) {
-  for (const n of names) {
-    const v = Deno.env.get(n);
-    if (v && v.trim().length > 0) return v.trim();
-  }
-  return "";
-}
-
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST") return json(405, { ok: false, message: "Method not allowed" });
-
-  const SB_URL = envAny("SB_URL", "SUPABASE_URL");
-  const SB_ANON = envAny("SB_ANON_KEY", "SUPABASE_ANON_KEY");
-  const SB_SERVICE = envAny("SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY");
-
-  if (!SB_URL || !SB_ANON || !SB_SERVICE) return json(500, { ok: false, message: "Missing env vars" });
-
-  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
-  if (!authHeader) return json(401, { ok: false, message: "Missing Authorization" });
-
-  const supabase = createClient(SB_URL, SB_ANON, { global: { headers: { Authorization: authHeader } } });
-  const admin = createClient(SB_URL, SB_SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
-
-  const { data: auth } = await supabase.auth.getUser();
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
   const user = auth?.user;
-  if (!user) return json(401, { ok: false, message: "Unauthorized" });
+  if (authErr || !user) return unauth();
 
   const body = await req.json().catch(() => ({}));
   const order_id = String(body?.order_id ?? "");
-  if (!order_id) return json(400, { ok: false, message: "order_id required" });
+  const chain = String(body?.chain ?? "");
 
-  // Order + buyer check
+  if (!order_id) return bad("order_id required");
+
   const { data: order } = await admin
     .from("market_orders")
-    .select("id,buyer_id,currency,status")
+    .select("id,buyer_id,currency,status,listing_id")
     .eq("id", order_id)
     .maybeSingle();
 
-  if (!order) return json(404, { ok: false, message: "Order not found" });
-  if (order.buyer_id !== user.id) return json(403, { ok: false, message: "Not your order" });
-  if (order.currency !== "USDC") return json(400, { ok: false, message: "Not USDC order" });
+  if (!order) return bad("Order not found");
+  if (order.buyer_id !== user.id) return bad("Not your order");
+  if (order.currency !== "USDC") return bad("Not USDC order");
 
-  // Only allow release when delivered/service ready etc.
-  // Minimal v1: require IN_ESCROW or DELIVERED or DELIVERABLE_UPLOADED
   const allowed = ["IN_ESCROW", "DELIVERED", "DELIVERABLE_UPLOADED"];
   if (!allowed.includes(order.status)) {
-    return json(400, { ok: false, message: `Cannot release from status: ${order.status}` });
+    return bad(`Cannot release from status: ${order.status}`);
   }
 
   const { data: esc } = await admin
     .from("market_crypto_escrows")
-    .select("order_id,order_key,escrow_address,buyer_wallet,seller_wallet,token_address,amount_units,amount_raw")
+    .select("order_id,order_key,escrow_address,buyer_wallet,seller_wallet,token_address,amount_units,amount_raw,chain")
     .eq("order_id", order_id)
     .maybeSingle();
 
-  if (!esc?.order_key) return json(404, { ok: false, message: "Crypto escrow mapping missing" });
+  if (!esc?.order_key) return bad("Crypto escrow mapping missing");
+  if (chain && esc.chain && chain !== esc.chain) return bad("Chain mismatch");
 
-  // record intent
+  const { data: listing } = await admin
+    .from("market_listings")
+    .select("delivery_type")
+    .eq("id", order.listing_id)
+    .maybeSingle();
+
+  const { data: otp } = await admin
+    .from("market_order_otps")
+    .select("verified_at")
+    .eq("order_id", order_id)
+    .maybeSingle();
+
+  const isDigital = String(listing?.delivery_type ?? "").toLowerCase() === "digital";
+  if (!isDigital && !otp?.verified_at) return bad("OTP not verified");
+
   await admin.rpc("market_set_crypto_intent", {
     p_order_id: order_id,
     p_intent_type: "RELEASE",
@@ -91,13 +74,14 @@ serve(async (req) => {
     action: "USDC_RELEASE_INTENT",
     entity_type: "market_orders",
     entity_id: order_id,
-    payload: { order_key: esc.order_key },
+    payload: { order_key: esc.order_key, chain: esc.chain },
   });
 
-  return json(200, {
+  return ok({
     ok: true,
     order_id,
     order_key: esc.order_key,
+    chain: esc.chain,
     escrow_address: esc.escrow_address,
     contract_method: "release(bytes32 orderKey)",
     args: [esc.order_key],

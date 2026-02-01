@@ -1,84 +1,62 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
+import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
+import { addRaw, feeFromRaw, getFeeBps, getFeeRecipient, toUsdcRaw } from "../_shared/market/crypto.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return methodNotAllowed();
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders },
-  });
-}
+  const supabase = supabaseUserClient(req);
+  const admin = supabaseAdminClient();
 
-function envAny(...names: string[]) {
-  for (const n of names) {
-    const v = Deno.env.get(n);
-    if (v && v.trim().length > 0) return v.trim();
-  }
-  return "";
-}
-
-function toUsdcRaw(amountUnits: number): string {
-  // USDC has 6 decimals
-  return String(Math.round(amountUnits * 1_000_000));
-}
-
-serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST") return json(405, { ok: false, message: "Method not allowed" });
-
-  const SB_URL = envAny("SB_URL", "SUPABASE_URL");
-  const SB_ANON = envAny("SB_ANON_KEY", "SUPABASE_ANON_KEY");
-  const SB_SERVICE = envAny("SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY");
-
-  if (!SB_URL || !SB_ANON || !SB_SERVICE) return json(500, { ok: false, message: "Missing env vars" });
-
-  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
-  if (!authHeader) return json(401, { ok: false, message: "Missing Authorization" });
-
-  const supabase = createClient(SB_URL, SB_ANON, { global: { headers: { Authorization: authHeader } } });
-  const admin = createClient(SB_URL, SB_SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
-
-  const { data: auth } = await supabase.auth.getUser();
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
   const user = auth?.user;
-  if (!user) return json(401, { ok: false, message: "Unauthorized" });
+  if (authErr || !user) return unauth();
 
   const body = await req.json().catch(() => ({}));
   const order_id = String(body?.order_id ?? "");
+  const chain = String(body?.chain ?? "");
 
-  if (!order_id) return json(400, { ok: false, message: "order_id required" });
+  if (!order_id) return bad("order_id required");
 
-  // Ensure caller is buyer
   const { data: order } = await admin
     .from("market_orders")
-    .select("id,buyer_id,currency,status,amount")
+    .select("id,buyer_id,currency,status,amount,listing_id")
     .eq("id", order_id)
     .maybeSingle();
 
-  if (!order) return json(404, { ok: false, message: "Order not found" });
-  if (order.buyer_id !== user.id) return json(403, { ok: false, message: "Not your order" });
-  if (order.currency !== "USDC") return json(400, { ok: false, message: "Not USDC order" });
+  if (!order) return bad("Order not found");
+  if (order.buyer_id !== user.id) return bad("Not your order");
+  if (order.currency !== "USDC") return bad("Not USDC order");
 
-  // Load escrow mapping
   const { data: esc, error: escErr } = await admin
     .from("market_crypto_escrows")
-    .select("order_id,order_key,buyer_wallet,seller_wallet,token_address,escrow_address,amount_units")
+    .select("order_id,order_key,buyer_wallet,seller_wallet,token_address,escrow_address,amount_units,chain")
     .eq("order_id", order_id)
     .maybeSingle();
 
-  if (escErr || !esc) return json(404, { ok: false, message: "Crypto escrow mapping not found" });
+  if (escErr || !esc) return bad("Crypto escrow mapping not found");
+
+  const chainToUse = chain || esc.chain;
+  if (chain && esc.chain && chain !== esc.chain) return bad("Chain mismatch");
+
+  const { data: cfg } = await admin
+    .from("market_chain_config")
+    .select("chain,chain_id,usdc_address,escrow_address,confirmations_required,rpc_url,active")
+    .eq("chain", chainToUse)
+    .eq("active", true)
+    .maybeSingle();
+
+  if (!cfg) return bad("Chain config missing");
 
   const amountUnits = Number(esc.amount_units);
   const amountRaw = toUsdcRaw(amountUnits);
 
-  // Store amount_raw on escrow row (optional but nice)
+  const feeBps = getFeeBps();
+  const buyerFeeRaw = feeFromRaw(amountRaw, feeBps);
+  const buyerTotalRaw = addRaw(amountRaw, buyerFeeRaw);
+
   await admin.from("market_crypto_escrows").update({ amount_raw: amountRaw }).eq("order_id", order_id);
 
-  // Record intent (service role)
   await admin.rpc("market_set_crypto_intent", {
     p_order_id: order_id,
     p_intent_type: "DEPOSIT",
@@ -91,16 +69,24 @@ serve(async (req) => {
     p_failure_reason: null,
   });
 
-  return json(200, {
+  return ok({
     ok: true,
     order_id,
     order_key: esc.order_key,
-    escrow_address: esc.escrow_address,
-    usdc_address: esc.token_address,
+    chain: cfg.chain,
+    chain_id: cfg.chain_id,
+    confirmations_required: cfg.confirmations_required,
+    rpc_url: cfg.rpc_url,
+    escrow_address: cfg.escrow_address,
+    usdc_address: cfg.usdc_address,
     buyer_wallet: esc.buyer_wallet,
     seller_wallet: esc.seller_wallet,
     amount_units: amountUnits,
     amount_raw: amountRaw,
+    fee_bps: feeBps,
+    fee_recipient: getFeeRecipient(),
+    buyer_fee_raw: buyerFeeRaw,
+    buyer_total_raw: buyerTotalRaw,
     contract_method: "deposit(bytes32 orderKey, address seller, uint256 amount)",
   });
 });

@@ -5,6 +5,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
+import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } from "@/services/market/chainConfig";
+import { getMyWalletForChain, ensureSmartAccount } from "@/services/market/usdcCheckout";
+import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 
 type SellerProfile = {
@@ -91,6 +94,11 @@ function ActionBtn({
 export default function MarketAccountTab() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<SellerProfile | null>(null);
+  const [chains, setChains] = useState<any[]>([]);
+  const [chain, setChain] = useState<any | null>(null);
+  const [wallet, setWallet] = useState<{ address: string } | null>(null);
+  const [walletBusy, setWalletBusy] = useState(false);
+  const [walletErr, setWalletErr] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -117,8 +125,26 @@ export default function MarketAccountTab() {
     }
   }
 
+  async function loadChains() {
+    try {
+      const items = await fetchMarketChains();
+      setChains(items);
+      const preferred = await getPreferredMarketChain();
+      setChain(preferred);
+      if (preferred) {
+        const w = await getMyWalletForChain(preferred.chain);
+        setWallet(w ? { address: w.address } : null);
+      }
+    } catch {
+      setChains([]);
+      setChain(null);
+      setWallet(null);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadChains();
   }, []);
 
   const handle = useMemo(() => (profile?.market_username ? `@${profile.market_username}` : "@yourstore"), [profile?.market_username]);
@@ -260,6 +286,90 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>Open Fintech Tabs</Text>
+          </Pressable>
+        </CardBox>
+
+        <CardBox>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>
+          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
+            Create your smart account only when you’re ready. We never store your private keys.
+          </Text>
+
+          <View style={{ marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {chains.map((c) => {
+              const active = c.active;
+              const selected = chain?.chain === c.chain;
+              return (
+                <Pressable
+                  key={c.chain}
+                  disabled={!active}
+                  onPress={async () => {
+                    setChain(c);
+                    await setPreferredMarketChain(c.chain);
+                    const w = await getMyWalletForChain(c.chain);
+                    setWallet(w ? { address: w.address } : null);
+                  }}
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 999,
+                    backgroundColor: selected ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.06)",
+                    borderWidth: 1,
+                    borderColor: selected ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
+                    opacity: active ? 1 : 0.45,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    {String(c.chain).toUpperCase().replace("_", " ")}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View style={{ marginTop: 10 }}>
+            <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
+              {chain?.active ? "Active network" : "Network not active yet"}
+            </Text>
+            <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
+              {wallet?.address ? wallet.address : "No wallet address generated"}
+            </Text>
+          </View>
+
+          {walletErr ? (
+            <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{walletErr}</Text>
+          ) : null}
+
+          <Pressable
+            disabled={!chain?.active || walletBusy}
+            onPress={async () => {
+              if (!chain) return;
+              setWalletErr(null);
+              setWalletBusy(true);
+              try {
+                const auth = await requireLocalAuth("Create smart wallet");
+                if (!auth.ok) throw new Error(auth.message || "Authentication required");
+                const res = await ensureSmartAccount(chain);
+                setWallet({ address: res.address });
+              } catch (e: any) {
+                setWalletErr(e?.message || "Could not generate wallet");
+              } finally {
+                setWalletBusy(false);
+              }
+            }}
+            style={{
+              marginTop: 12,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: chain?.active ? "rgba(59,130,246,0.22)" : "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: chain?.active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>
+              {walletBusy ? "Generating..." : wallet?.address ? "Regenerate wallet" : "Generate wallet"}
+            </Text>
           </Pressable>
         </CardBox>
 

@@ -23,6 +23,11 @@ function envAny(...names: string[]) {
   return "";
 }
 
+function arbiterKeyForChain(chain: string) {
+  const upper = chain.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  return envAny(`ARBITER_PRIVATE_KEY_${upper}`, "ARBITER_PRIVATE_KEY");
+}
+
 // Minimal ABI for refund()
 const escrowAbi = [
   "function refund(bytes32 orderKey) external",
@@ -41,14 +46,6 @@ serve(async (req) => {
   const SB_URL = envAny("SB_URL", "SUPABASE_URL");
   const SB_SERVICE = envAny("SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY");
   if (!SB_URL || !SB_SERVICE) return json(500, { ok: false, message: "Missing Supabase env vars" });
-
-  // Chain RPC + arbiter key (server-side only!)
-  const BASE_RPC_URL = envAny("BASE_RPC_URL"); // set this in supabase secrets
-  const ARBITER_PRIVATE_KEY = envAny("ARBITER_PRIVATE_KEY"); // set this in supabase secrets
-
-  if (!BASE_RPC_URL || !ARBITER_PRIVATE_KEY) {
-    return json(500, { ok: false, message: "Missing BASE_RPC_URL or ARBITER_PRIVATE_KEY in secrets" });
-  }
 
   const admin = createClient(SB_URL, SB_SERVICE, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -71,11 +68,24 @@ serve(async (req) => {
 
   const { data: esc } = await admin
     .from("market_crypto_escrows")
-    .select("order_id,order_key,escrow_address,buyer_wallet,seller_wallet,amount_units,amount_raw")
+    .select("order_id,order_key,escrow_address,buyer_wallet,seller_wallet,amount_units,amount_raw,chain")
     .eq("order_id", order_id)
     .maybeSingle();
 
   if (!esc?.order_key || !esc?.escrow_address) return json(404, { ok: false, message: "Crypto escrow mapping missing" });
+
+  const { data: cfg } = await admin
+    .from("market_chain_config")
+    .select("rpc_url,chain")
+    .eq("chain", esc.chain)
+    .maybeSingle();
+
+  const rpcUrl = cfg?.rpc_url || envAny("BASE_RPC_URL");
+  const arbiterKey = arbiterKeyForChain(esc.chain);
+
+  if (!rpcUrl || !arbiterKey) {
+    return json(500, { ok: false, message: "Missing RPC URL or ARBITER_PRIVATE_KEY in secrets" });
+  }
 
   // record intent (processing)
   await admin.rpc("market_set_crypto_intent", {
@@ -91,8 +101,8 @@ serve(async (req) => {
   });
 
   // Send on-chain tx from arbiter
-  const provider = new ethers.JsonRpcProvider(BASE_RPC_URL);
-  const wallet = new ethers.Wallet(ARBITER_PRIVATE_KEY, provider);
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const wallet = new ethers.Wallet(arbiterKey, provider);
 
   const contract = new ethers.Contract(esc.escrow_address, escrowAbi, wallet);
 

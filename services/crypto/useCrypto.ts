@@ -65,8 +65,6 @@ export function useCrypto() {
   };
 
   useEffect(() => {
-    // Ensure wallet exists on first open (safe even if already exists)
-    refreshWallet();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

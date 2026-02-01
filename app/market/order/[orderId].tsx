@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { callFn } from "@/services/functions";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
+import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import {
@@ -356,18 +357,22 @@ export default function OrderDetails() {
     }
   }
 
-  async function releaseFunds() {
-    if (!order) return;
-    setBusy(true);
-    setErr(null);
-    try {
+async function releaseFunds() {
+  if (!order) return;
+  setBusy(true);
+  setErr(null);
+  try {
+    if (order.currency === "USDC") {
+      await releaseUsdcForOrder(order.id);
+    } else {
       const auth = await requireLocalAuth("Release escrow to seller");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
       await callFn(FN_RELEASE_ESCROW, { order_id: order.id });
-      await load();
-    } catch (e: any) {
-      setErr(e?.message || "Release failed");
-    } finally {
+    }
+    await load();
+  } catch (e: any) {
+    setErr(e?.message || "Release failed");
+  } finally {
       setBusy(false);
     }
   }
