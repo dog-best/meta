@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
+import SocialFeed from "@/components/market/SocialFeed";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
@@ -644,6 +645,14 @@ export default function PublicSellerProfile() {
           </View>
 
           <View style={{ marginTop: 14 }}>
+            <View style={{ marginBottom: 14, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Social posts</Text>
+              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                All posts from this account are visible here.
+              </Text>
+              <SocialFeed profileUserId={seller.user_id} hideComposer={meId !== seller.user_id} />
+            </View>
+
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Listings</Text>
 

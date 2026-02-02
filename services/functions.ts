@@ -38,35 +38,45 @@ function extractErrorMessage(text: string | null | undefined, json: any, name: s
   );
 }
 
+async function invokeSdkWithTimeout<T>(name: string, body: any, token: string, timeoutMs = 12000) {
+  return await Promise.race([
+    supabase.functions.invoke(name, {
+      body: body ?? {},
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+    new Promise<{ data: null; error: Error }>((resolve) =>
+      setTimeout(() => resolve({ data: null, error: new Error(`Function ${name} timed out`) }), timeoutMs),
+    ),
+  ]) as { data: T | null; error: any };
+}
+
 export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Promise<T> {
   console.log(`[callFn] ${name} -> start`, body ?? {});
 
-  // Prefer SDK invoke first (it attaches current auth session correctly)
+  // First path: SDK invoke with explicit Authorization header.
   try {
-    const { data, error } = await supabase.functions.invoke(name, { body: body ?? {} });
-    if (!error && data) {
+    let token = await getSupabaseJwtOrThrow();
+    let first = await invokeSdkWithTimeout<T>(name, body, token);
+
+    if (!first.error && first.data) {
       console.log(`[callFn] ${name} -> ok (sdk invoke)`);
-      return data as T;
+      return first.data as T;
     }
-    if (error) {
-      const lower = String(error.message || "").toLowerCase();
-      if (lower.includes("invalid jwt") || lower.includes("jwt")) {
-        try {
-          const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-          if (!refreshErr && refreshed.session?.access_token) {
-            const retry = await supabase.functions.invoke(name, { body: body ?? {} });
-            if (!retry.error && retry.data) {
-              console.log(`[callFn] ${name} -> ok (sdk invoke retry)`);
-              return retry.data as T;
-            }
-          }
-        } catch {
-          // continue to manual fallback
+
+    const firstMsg = String(first.error?.message || "");
+    if (first.error && /jwt|unauthori/i.test(firstMsg)) {
+      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+      if (!refreshErr && refreshed.session?.access_token) {
+        token = refreshed.session.access_token;
+        first = await invokeSdkWithTimeout<T>(name, body, token);
+        if (!first.error && first.data) {
+          console.log(`[callFn] ${name} -> ok (sdk invoke retry)`);
+          return first.data as T;
         }
       }
     }
   } catch {
-    // continue to manual fallback
+    // Continue to manual fallback below.
   }
 
   // Manual fallback path
@@ -109,7 +119,8 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
 
     if (shouldInvokeFallback) {
       try {
-        const { data, error } = await supabase.functions.invoke(name, { body: body ?? {} });
+        const token = await getSupabaseJwtOrThrow();
+        const { data, error } = await invokeSdkWithTimeout<T>(name, body, token);
         if (!error && data) {
           return data as T;
         }

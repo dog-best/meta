@@ -8,7 +8,7 @@ import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem"
 
 import AppHeader from "@/components/common/AppHeader";
 import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } from "@/services/market/chainConfig";
-import { getMyWalletForChain, ensureSmartAccount } from "@/services/market/usdcCheckout";
+import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { getRpcUrlForChain, getWalletBackupSecret, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
@@ -129,6 +129,7 @@ function ActionBtn({
 }
 
 export default function MarketAccountTab() {
+  const [meId, setMeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<SellerProfile | null>(null);
   const [chains, setChains] = useState<any[]>([]);
@@ -155,9 +156,11 @@ export default function MarketAccountTab() {
       if (authErr) throw authErr;
       const user = auth?.user;
       if (!user) {
+        setMeId(null);
         setProfile(null);
         return;
       }
+      setMeId(user.id);
 
       const { data, error } = await supabase
         .from("market_seller_profiles")
@@ -191,7 +194,7 @@ export default function MarketAccountTab() {
 
   async function refreshWalletMeta(selected?: any | null) {
     const current = selected ?? chain;
-    const backed = await hasWalletBackup();
+    const backed = await hasWalletBackup(meId || undefined);
     setBackedUp(backed);
     if (!current) {
       setUsdcBalance("0");
@@ -245,7 +248,7 @@ export default function MarketAccountTab() {
     try {
       const auth = await requireLocalAuth("Backup wallet secret");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      const secret = await getWalletBackupSecret();
+      const secret = await getWalletBackupSecret(meId || undefined);
       setBackupType(secret.type);
       setBackupSecret(secret.value);
       setBackupOpen(true);
@@ -255,7 +258,7 @@ export default function MarketAccountTab() {
   }
 
   async function onConfirmBackupDone() {
-    await markWalletBackedUp();
+    await markWalletBackedUp(meId || undefined);
     setBackedUp(true);
     setBackupOpen(false);
   }
@@ -282,14 +285,40 @@ export default function MarketAccountTab() {
             ],
           );
         });
-        await regenerateWalletKey();
+        await regenerateWalletKey(meId || undefined);
       }
 
-      const res = await ensureSmartAccount(chain);
+      const res = await ensureWalletAddressOnChain(chain);
       setWallet({ address: res.address });
       await refreshWalletMeta(chain);
     } catch (e: any) {
       if (e?.message !== "Cancelled") setWalletErr(e?.message || "Could not generate wallet");
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function onSyncWalletAllNetworks() {
+    if (!chains.length) return;
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth("Sync wallet to active networks");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      const activeChains = chains.filter((c) => !!c?.active);
+      if (!activeChains.length) throw new Error("No active networks to sync.");
+
+      let baseAddress = "";
+      for (const c of activeChains) {
+        const res = await ensureWalletAddressOnChain(c);
+        if (!baseAddress) baseAddress = res.address;
+      }
+      if (baseAddress) setWallet({ address: baseAddress });
+      await refreshWalletMeta(chain);
+      Alert.alert("Synced", `Wallet synced to ${activeChains.length} active network(s).`);
+    } catch (e: any) {
+      setWalletErr(e?.message || "Failed to sync wallet");
     } finally {
       setWalletBusy(false);
     }
@@ -316,9 +345,14 @@ export default function MarketAccountTab() {
         functionName: "transfer",
         args: [to as `0x${string}`, amountRaw],
       });
-      await client.sendTransaction({
-        to: tokenAddress as `0x${string}`,
-        data,
+      await client.sendTransactions({
+        account: (client as any).account,
+        requests: [
+          {
+            to: tokenAddress as `0x${string}`,
+            data,
+          },
+        ] as any,
       });
       setSendOpen(false);
       setSendAmount("");
@@ -333,6 +367,12 @@ export default function MarketAccountTab() {
     load();
     loadChains();
   }, []);
+
+  useEffect(() => {
+    if (meId) {
+      refreshWalletMeta().catch(() => undefined);
+    }
+  }, [meId]);
 
   const handle = useMemo(() => (profile?.market_username ? `@${profile.market_username}` : "@yourstore"), [profile?.market_username]);
 
@@ -653,6 +693,23 @@ export default function MarketAccountTab() {
             <Text style={{ color: "#fff", fontWeight: "900" }}>
               {walletBusy ? "Working..." : wallet?.address ? "Regenerate wallet" : "Generate wallet"}
             </Text>
+          </Pressable>
+
+          <Pressable
+            disabled={walletBusy || !chains.some((c) => !!c?.active)}
+            onPress={onSyncWalletAllNetworks}
+            style={{
+              marginTop: 10,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              opacity: walletBusy ? 0.7 : 1,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Sync wallet to all active networks</Text>
           </Pressable>
         </CardBox>
 

@@ -24,8 +24,33 @@ export async function ensureCryptoWallet(chain = "base") {
 }
 
 export async function registerCryptoWallet(payload: { chain: string; address: string }) {
-  await requireAuth();
-  return await callFn("create-crypto-wallet", payload);
+  const user = await requireAuth();
+  const existing = await supabase
+    .from("crypto_wallets")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("chain", payload.chain)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+
+  if (existing.data?.id) {
+    const { data, error } = await supabase
+      .from("crypto_wallets")
+      .update({ address: payload.address, wallet_type: "aa" })
+      .eq("id", existing.data.id)
+      .select("user_id,chain,address")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await supabase
+    .from("crypto_wallets")
+    .insert({ user_id: user.id, chain: payload.chain, address: payload.address, wallet_type: "aa" })
+    .select("user_id,chain,address")
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 export async function getMyCryptoWallet(chain: string) {

@@ -20,6 +20,7 @@ const MENU_ITEMS: Array<{
   { title: "Sell", icon: "add-circle-outline", route: "/market/(tabs)/sell" },
   { title: "Orders", icon: "receipt-outline", route: "/market/(tabs)/orders" },
   { title: "Category", icon: "grid-outline", route: "/market/(tabs)/category" },
+  { title: "Social Feed", icon: "newspaper-outline", route: "/market/social" },
   { title: "Rewards", icon: "gift-outline", route: "/market/(tabs)/rewards" },
   { title: "Messages", icon: "chatbubble-ellipses-outline", route: "/market/(tabs)/messages" },
   { title: "Wallet", icon: "wallet-outline", route: "/market/wallet" },

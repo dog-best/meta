@@ -59,6 +59,12 @@ type OrderRow = {
   refunded_at: string | null;
   cancelled_at: string | null;
   delivery_address?: { geo?: any } | null;
+  buyer_contact?: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    note?: string;
+  } | null;
 };
 
 type ListingRow = {
@@ -232,15 +238,32 @@ export default function OrderDetails() {
       }
       setMe(user.id);
 
-      const { data: o, error: oErr } = await supabase
-        .from(ORDERS_TABLE)
-        .select(
-          "id,buyer_id,seller_id,listing_id,quantity,unit_price,amount,currency,status,created_at,in_escrow_at,out_for_delivery_at,delivered_at,released_at,refunded_at,cancelled_at,delivery_address"
-        )
-        .eq("id", oid)
-        .maybeSingle();
+      let o: any = null;
+      {
+        const first = await supabase
+          .from(ORDERS_TABLE)
+          .select(
+            "id,buyer_id,seller_id,listing_id,quantity,unit_price,amount,currency,status,created_at,in_escrow_at,out_for_delivery_at,delivered_at,released_at,refunded_at,cancelled_at,delivery_address,buyer_contact"
+          )
+          .eq("id", oid)
+          .maybeSingle();
+        if (!first.error) {
+          o = first.data;
+        } else if (String(first.error.message || "").includes("buyer_contact")) {
+          const fallback = await supabase
+            .from(ORDERS_TABLE)
+            .select(
+              "id,buyer_id,seller_id,listing_id,quantity,unit_price,amount,currency,status,created_at,in_escrow_at,out_for_delivery_at,delivered_at,released_at,refunded_at,cancelled_at,delivery_address"
+            )
+            .eq("id", oid)
+            .maybeSingle();
+          if (fallback.error) throw new Error(fallback.error.message);
+          o = fallback.data;
+        } else {
+          throw new Error(first.error.message);
+        }
+      }
 
-      if (oErr) throw new Error(oErr.message);
       if (!o) throw new Error("Order not found");
 
       if ((o as any).buyer_id !== user.id && (o as any).seller_id !== user.id) {
@@ -398,6 +421,21 @@ async function releaseFunds() {
     setBusy(true);
     setErr(null);
     try {
+      // Try direct DB path first to avoid JWT edge-function issues.
+      const direct = await supabase
+        .from("market_orders")
+        .update({ status: "CANCELLED", cancelled_at: new Date().toISOString() })
+        .eq("id", order.id)
+        .eq("buyer_id", me as string)
+        .eq("status", "CREATED")
+        .select("id")
+        .maybeSingle();
+
+      if (!direct.error && direct.data?.id) {
+        await load();
+        return;
+      }
+
       await callFn(FN_BUYER_CANCEL, { order_id: order.id }, 15000);
       await load();
     } catch (e: any) {
@@ -620,6 +658,33 @@ async function pickAndUpload(access: "preview" | "final") {
                   >
                     <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Open in Maps</Text>
                   </Pressable>
+                ) : null}
+              </Card>
+            ) : null}
+
+            {(isSeller || isBuyer) &&
+            (((order as any)?.buyer_contact?.phone || (order as any)?.buyer_contact?.email) ||
+              ((order as any)?.delivery_address?.contact?.phone || (order as any)?.delivery_address?.contact?.email)) ? (
+              <Card title={isSeller ? "Buyer contact" : "Your contact for seller"}>
+                {((order as any)?.buyer_contact?.name || (order as any)?.delivery_address?.contact?.name) ? (
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>
+                    {(order as any)?.buyer_contact?.name || (order as any)?.delivery_address?.contact?.name}
+                  </Text>
+                ) : null}
+                {((order as any)?.buyer_contact?.phone || (order as any)?.delivery_address?.contact?.phone) ? (
+                  <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", fontSize: 13 }}>
+                    Phone: {(order as any)?.buyer_contact?.phone || (order as any)?.delivery_address?.contact?.phone}
+                  </Text>
+                ) : null}
+                {((order as any)?.buyer_contact?.email || (order as any)?.delivery_address?.contact?.email) ? (
+                  <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.75)", fontSize: 13 }}>
+                    Email: {(order as any)?.buyer_contact?.email || (order as any)?.delivery_address?.contact?.email}
+                  </Text>
+                ) : null}
+                {((order as any)?.buyer_contact?.note || (order as any)?.delivery_address?.contact?.note) ? (
+                  <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                    Note: {(order as any)?.buyer_contact?.note || (order as any)?.delivery_address?.contact?.note}
+                  </Text>
                 ) : null}
               </Card>
             ) : null}

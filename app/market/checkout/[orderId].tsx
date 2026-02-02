@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
@@ -86,6 +86,11 @@ export default function Checkout() {
   const [listing, setListing] = useState<any>(null);
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [savingGeo, setSavingGeo] = useState(false);
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactNote, setContactNote] = useState("");
+  const [savingContact, setSavingContact] = useState(false);
   const [chain, setChain] = useState<{ chain: string } | null>(null);
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
@@ -108,12 +113,27 @@ export default function Checkout() {
       if (!oid) return;
       setLoading(true);
       try {
-        const { data: o, error: oErr } = await supabase
-          .from("market_orders")
-          .select("id,listing_id,delivery_address")
-          .eq("id", oid)
-          .maybeSingle();
-        if (oErr) throw oErr;
+        let o: any = null;
+        {
+          const first = await supabase
+            .from("market_orders")
+            .select("id,listing_id,delivery_address,buyer_contact")
+            .eq("id", oid)
+            .maybeSingle();
+          if (!first.error) {
+            o = first.data;
+          } else if (String(first.error.message || "").includes("buyer_contact")) {
+            const fallback = await supabase
+              .from("market_orders")
+              .select("id,listing_id,delivery_address")
+              .eq("id", oid)
+              .maybeSingle();
+            if (fallback.error) throw fallback.error;
+            o = fallback.data;
+          } else {
+            throw first.error;
+          }
+        }
 
         const listingId = (o as any)?.listing_id;
         let l: any = null;
@@ -132,6 +152,11 @@ export default function Checkout() {
           setListing(l);
           const geo = (o as any)?.delivery_address?.geo ?? null;
           setDeliveryGeo(geo && Object.keys(geo).length ? geo : null);
+          const contact = (o as any)?.buyer_contact ?? {};
+          setContactName(String(contact?.name ?? ""));
+          setContactPhone(String(contact?.phone ?? ""));
+          setContactEmail(String(contact?.email ?? ""));
+          setContactNote(String(contact?.note ?? ""));
         }
       } catch (e: any) {
         if (mounted) setErr(e?.message || "Failed to load order");
@@ -186,6 +211,42 @@ export default function Checkout() {
       setErr(e?.message || "Could not access location");
     } finally {
       setSavingGeo(false);
+    }
+  }
+
+  async function saveBuyerContact() {
+    if (!oid) return;
+    setErr(null);
+    setSavingContact(true);
+    try {
+      const payload = {
+        name: contactName.trim(),
+        phone: contactPhone.trim(),
+        email: contactEmail.trim(),
+        note: contactNote.trim(),
+      };
+      if (!payload.phone && !payload.email) {
+        throw new Error("Please add at least phone or email.");
+      }
+      const primary = await supabase
+        .from("market_orders")
+        .update({ buyer_contact: payload })
+        .eq("id", oid);
+      if (primary.error && String(primary.error.message || "").includes("buyer_contact")) {
+        const nextDelivery = { ...(order?.delivery_address ?? {}), contact: payload };
+        const fallback = await supabase
+          .from("market_orders")
+          .update({ delivery_address: nextDelivery })
+          .eq("id", oid);
+        if (fallback.error) throw fallback.error;
+      } else if (primary.error) {
+        throw primary.error;
+      }
+      setOrder((prev: any) => ({ ...(prev ?? {}), buyer_contact: payload }));
+    } catch (e: any) {
+      setErr(e?.message || "Failed to save contact");
+    } finally {
+      setSavingContact(false);
     }
   }
 
@@ -334,6 +395,118 @@ export default function Checkout() {
               No delivery location set yet.
             </Text>
           )}
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 22,
+            padding: 16,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Buyer contact for seller</Text>
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
+            Add contact details the seller can use for delivery/service updates.
+          </Text>
+
+          <View
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              backgroundColor: "rgba(255,255,255,0.04)",
+              paddingHorizontal: 12,
+            }}
+          >
+            <TextInput
+              value={contactName}
+              onChangeText={setContactName}
+              placeholder="Full name (optional)"
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              style={{ color: "#fff", paddingVertical: 12 }}
+            />
+          </View>
+
+          <View
+            style={{
+              marginTop: 8,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              backgroundColor: "rgba(255,255,255,0.04)",
+              paddingHorizontal: 12,
+            }}
+          >
+            <TextInput
+              value={contactPhone}
+              onChangeText={setContactPhone}
+              placeholder="Phone number"
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              keyboardType="phone-pad"
+              style={{ color: "#fff", paddingVertical: 12 }}
+            />
+          </View>
+
+          <View
+            style={{
+              marginTop: 8,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              backgroundColor: "rgba(255,255,255,0.04)",
+              paddingHorizontal: 12,
+            }}
+          >
+            <TextInput
+              value={contactEmail}
+              onChangeText={setContactEmail}
+              placeholder="Email address"
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              style={{ color: "#fff", paddingVertical: 12 }}
+            />
+          </View>
+
+          <View
+            style={{
+              marginTop: 8,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              backgroundColor: "rgba(255,255,255,0.04)",
+              paddingHorizontal: 12,
+            }}
+          >
+            <TextInput
+              value={contactNote}
+              onChangeText={setContactNote}
+              placeholder="Extra note (optional)"
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              style={{ color: "#fff", paddingVertical: 12 }}
+            />
+          </View>
+
+          <Pressable
+            onPress={saveBuyerContact}
+            disabled={savingContact}
+            style={{
+              marginTop: 10,
+              borderRadius: 16,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+              opacity: savingContact ? 0.7 : 1,
+            }}
+          >
+            {savingContact ? <ActivityIndicator /> : <Text style={{ color: "#fff", fontWeight: "900" }}>Save contact</Text>}
+          </Pressable>
         </View>
 
         <View

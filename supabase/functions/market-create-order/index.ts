@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
 
   const { data: listing, error: le } = await admin
     .from("market_listings")
-    .select("id,seller_id,price_amount,currency,is_active,stock_qty")
+    .select("id,seller_id,price_amount,currency,is_active,stock_qty,payment_options")
     .eq("id", listing_id)
     .maybeSingle();
 
@@ -31,7 +31,24 @@ Deno.serve(async (req) => {
     return bad("Not enough stock");
   }
 
-  const unit_price = Number(listing.price_amount);
+  const expiresAt = (listing as any)?.payment_options?.expires_at;
+  if (expiresAt) {
+    const exp = Date.parse(String(expiresAt));
+    if (Number.isFinite(exp) && exp <= Date.now()) {
+      return bad("This listing has expired");
+    }
+  }
+
+  let unit_price = Number(listing.price_amount);
+  const d = (listing as any)?.payment_options?.discount;
+  if (d?.enabled) {
+    const endsAt = d?.endsAt ? Date.parse(String(d.endsAt)) : null;
+    const stillValid = !endsAt || (Number.isFinite(endsAt) && endsAt > Date.now());
+    const discounted = Number(d?.discountedPrice);
+    if (stillValid && Number.isFinite(discounted) && discounted > 0) {
+      unit_price = discounted;
+    }
+  }
   const amount = Number((unit_price * quantity).toFixed(2));
 
   const { data: order, error } = await admin

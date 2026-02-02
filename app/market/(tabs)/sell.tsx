@@ -161,6 +161,11 @@ export default function SellTab() {
   const [priceBase, setPriceBase] = useState<"NGN" | "USD">("NGN");
   const [fxRate, setFxRate] = useState<number | null>(null);
   const [stockQty, setStockQty] = useState("");
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountOriginalPrice, setDiscountOriginalPrice] = useState("");
+  const [discountPrice, setDiscountPrice] = useState("");
+  const [discountEndsAt, setDiscountEndsAt] = useState("");
+  const [autoDeleteAt, setAutoDeleteAt] = useState("");
 
   const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("global");
   const [availabilityContinents, setAvailabilityContinents] = useState<string[]>([]);
@@ -378,6 +383,13 @@ export default function SellTab() {
 
     const p = safeNumber(price);
     if (!Number.isFinite(p) || p <= 0) return "Enter a valid price";
+    if (discountEnabled) {
+      const op = safeNumber(discountOriginalPrice);
+      const dp = safeNumber(discountPrice);
+      if (!Number.isFinite(op) || op <= 0) return "Discount original price must be valid";
+      if (!Number.isFinite(dp) || dp <= 0) return "Discounted price must be valid";
+      if (dp >= op) return "Discounted price must be lower than original price";
+    }
 
     if (category === "product") {
       const q = stockQty.trim() ? safeNumber(stockQty) : NaN;
@@ -432,6 +444,27 @@ export default function SellTab() {
       let unitPrice = enteredPrice;
       const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
       const listingCurrency: Currency = payMode === "ngn" ? "NGN" : "USDC";
+      if (priceBase === "USD" && listingCurrency === "NGN") {
+        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+        unitPrice = enteredPrice * fxRate;
+      }
+      if (priceBase === "NGN" && listingCurrency === "USDC") {
+        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+        unitPrice = enteredPrice / fxRate;
+      }
+      if (discountEnabled) {
+        const dp = safeNumber(discountPrice);
+        let effectiveDiscounted = dp;
+        if (priceBase === "USD" && listingCurrency === "NGN") {
+          if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+          effectiveDiscounted = dp * fxRate;
+        }
+        if (priceBase === "NGN" && listingCurrency === "USDC") {
+          if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+          effectiveDiscounted = dp / fxRate;
+        }
+        unitPrice = effectiveDiscounted;
+      }
       const paymentOptions = {
         allow_ngn: payMode === "ngn" || payMode === "all",
         allow_crypto: payMode === "crypto" || payMode === "all",
@@ -439,6 +472,16 @@ export default function SellTab() {
         allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
         chain_mode: cryptoNetworkMode,
         coin_mode: cryptoCoinMode,
+        discount: discountEnabled
+          ? {
+              enabled: true,
+              originalPrice: safeNumber(discountOriginalPrice),
+              discountedPrice: safeNumber(discountPrice),
+              startsAt: new Date().toISOString(),
+              endsAt: discountEndsAt.trim() ? new Date(discountEndsAt.trim()).toISOString() : null,
+            }
+          : { enabled: false },
+        expires_at: autoDeleteAt.trim() ? new Date(autoDeleteAt.trim()).toISOString() : null,
       };
 
       // Put website URL into description for now (until you add a DB column later)
@@ -819,6 +862,25 @@ export default function SellTab() {
             </Text>
           ) : null}
 
+          <Label>Enable discount</Label>
+          <Row>
+            <Pill active={discountEnabled} label="On" onPress={() => setDiscountEnabled(true)} />
+            <Pill active={!discountEnabled} label="Off" onPress={() => setDiscountEnabled(false)} />
+          </Row>
+          {discountEnabled ? (
+            <>
+              <Label>Original price</Label>
+              <Input value={discountOriginalPrice} onChangeText={setDiscountOriginalPrice} placeholder="e.g. 50000" keyboardType="numeric" />
+              <Label>Discounted price</Label>
+              <Input value={discountPrice} onChangeText={setDiscountPrice} placeholder="e.g. 35000" keyboardType="numeric" />
+              <Label>Discount end time (ISO/date)</Label>
+              <Input value={discountEndsAt} onChangeText={setDiscountEndsAt} placeholder="e.g. 2026-12-31T23:59:59Z" autoCapitalize="none" />
+            </>
+          ) : null}
+
+          <Label>Auto-delete listing at (optional)</Label>
+          <Input value={autoDeleteAt} onChangeText={setAutoDeleteAt} placeholder="e.g. 2026-12-31T23:59:59Z" autoCapitalize="none" />
+
           {category === "product" ? (
             <>
               <Label>Stock qty (optional)</Label>
@@ -912,11 +974,3 @@ export default function SellTab() {
     </LinearGradient>
   );
 }
-      if (priceBase === "USD" && listingCurrency === "NGN") {
-        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        unitPrice = enteredPrice * fxRate;
-      }
-      if (priceBase === "NGN" && listingCurrency === "USDC") {
-        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        unitPrice = enteredPrice / fxRate;
-      }

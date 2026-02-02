@@ -16,13 +16,15 @@ const KEY_CHAIN = "bc_market_chain_pref";
 
 export async function fetchMarketChains() {
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
     const base = getSupabaseFunctionsBaseUrl();
     const res = await fetch(`${base}/market-chain-list`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         apikey: getSupabaseAnonKeyOrThrow(),
-        Authorization: `Bearer ${getSupabaseAnonKeyOrThrow()}`,
+        Authorization: `Bearer ${accessToken || getSupabaseAnonKeyOrThrow()}`,
       },
       body: JSON.stringify({}),
     });
@@ -35,8 +37,20 @@ export async function fetchMarketChains() {
       .from("market_chain_config")
       .select("chain,chain_id,rpc_url,usdc_address,escrow_address,confirmations_required,active")
       .order("active", { ascending: false });
-    if (error) throw new Error(error.message);
-    return (data ?? []) as MarketChainConfig[];
+    if (!error && data && data.length) return data as MarketChainConfig[];
+
+    // Last fallback so UI is usable even if policies/functions are misconfigured.
+    return [
+      {
+        chain: "base_sepolia",
+        chain_id: 84532,
+        rpc_url: process.env.EXPO_PUBLIC_BASE_SEPOLIA_RPC_URL ?? null,
+        usdc_address: process.env.EXPO_PUBLIC_USDC_ADDRESS_BASE_SEPOLIA ?? "",
+        escrow_address: process.env.EXPO_PUBLIC_ESCROW_ADDRESS_BASE_SEPOLIA ?? "",
+        confirmations_required: 3,
+        active: true,
+      },
+    ] satisfies MarketChainConfig[];
   }
 }
 

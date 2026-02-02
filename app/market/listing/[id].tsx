@@ -50,6 +50,7 @@ type Listing = {
   stock_qty: number | null;
   created_at?: string | null;
   availability?: any;
+  payment_options?: any;
 };
 
 type ListingComment = {
@@ -135,7 +136,7 @@ export default function ListingDetails() {
 
         const { data: l, error: lErr } = await supabase
           .from(LISTINGS_TABLE)
-          .select("id,seller_id,title,description,price_amount,currency,delivery_type,category,sub_category,stock_qty,created_at,availability")
+          .select("id,seller_id,title,description,price_amount,currency,delivery_type,category,sub_category,stock_qty,created_at,availability,payment_options")
           .eq("id", listingId)
           .maybeSingle();
 
@@ -305,7 +306,12 @@ export default function ListingDetails() {
         return;
       }
 
-      const unit = Number(listing.price_amount ?? 0);
+      const discount = listing.payment_options?.discount;
+      const discountActive =
+        !!discount?.enabled && (!discount?.endsAt || new Date(String(discount.endsAt)).getTime() > Date.now());
+      const unit = discountActive
+        ? Number(discount?.discountedPrice ?? listing.price_amount ?? 0)
+        : Number(listing.price_amount ?? 0);
       const qty = 1;
       const amount = unit * qty;
 
@@ -483,8 +489,26 @@ export default function ListingDetails() {
           <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
             Price
           </Text>
+          {listing.payment_options?.discount?.enabled ? (
+            <Text
+              style={{
+                marginTop: 6,
+                color: "rgba(255,255,255,0.6)",
+                fontWeight: "800",
+                fontSize: 13,
+                textDecorationLine: "line-through",
+              }}
+            >
+              {money(listing.currency, listing.payment_options?.discount?.originalPrice || listing.price_amount)}
+            </Text>
+          ) : null}
           <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 28 }}>
-            {money(listing.currency, listing.price_amount)}
+            {money(
+              listing.currency,
+              listing.payment_options?.discount?.enabled
+                ? listing.payment_options?.discount?.discountedPrice
+                : listing.price_amount,
+            )}
           </Text>
 
           {listing.stock_qty !== null && listing.category === "product" ? (

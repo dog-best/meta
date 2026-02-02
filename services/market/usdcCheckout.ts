@@ -3,7 +3,7 @@ import { encodeFunctionData } from "viem";
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getSmartAccount } from "@/utils/aaWallet";
+import { getScopedWalletAddress, getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
 const FN_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent";
@@ -60,39 +60,60 @@ export async function getMyWalletForChain(chain: string) {
 }
 
 export async function registerWallet(chain: string, address: string) {
-  // Prefer direct table upsert so wallet creation does not depend on Edge Function JWT flow.
+  // Prefer direct table write so wallet creation does not depend on Edge Function JWT flow.
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
+  const existing = await supabase
+    .from("crypto_wallets")
+    .select("id,user_id,chain,address")
+    .eq("user_id", user.id)
+    .eq("chain", chain)
+    .maybeSingle();
+  if (existing.error) throw new Error(existing.error.message);
+
+  if (existing.data?.id) {
+    const { data, error } = await supabase
+      .from("crypto_wallets")
+      .update({ address, wallet_type: "aa" })
+      .eq("id", existing.data.id)
+      .select("user_id,chain,address")
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  }
+
   const { data, error } = await supabase
     .from("crypto_wallets")
-    .upsert(
-      {
-        user_id: user.id,
-        chain,
-        address,
-        wallet_type: "aa",
-      },
-      { onConflict: "user_id,chain" },
-    )
+    .insert({ user_id: user.id, chain, address, wallet_type: "aa" })
     .select("user_id,chain,address")
     .single();
-
-  if (!error && data) return data;
-
-  // Fallback to function for projects that still rely on server-side insertion.
-  return await callFn("create-crypto-wallet", { chain, address });
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 export async function ensureSmartAccount(chainConfig: MarketChainConfig) {
-  const { address, client } = await getSmartAccount(chainConfig);
-  const existing = await getMyWalletForChain(chainConfig.chain);
-  if (!existing || existing.address?.toLowerCase() !== address.toLowerCase()) {
-    await registerWallet(chainConfig.chain, address);
-  }
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  await ensureWalletAddressOnChain(chainConfig);
+  const { address, client } = await getSmartAccount(chainConfig, user.id);
   return { address, client };
+}
+
+export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig) {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const address = await getScopedWalletAddress(user.id);
+  await registerWallet(chainConfig.chain, address);
+  return { address };
 }
 
 export async function payUsdcForOrder(orderId: string) {
@@ -104,8 +125,8 @@ export async function payUsdcForOrder(orderId: string) {
     throw new Error("No wallet address found. Generate a wallet in Market Account first.");
   }
 
-  const auth = await requireLocalAuth("Confirm USDC deposit");
-  if (!auth.ok) throw new Error(auth.message || "Authentication required");
+  const localAuth = await requireLocalAuth("Confirm USDC deposit");
+  if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
   const intent = await callFn<{
     ok: boolean;
@@ -120,7 +141,12 @@ export async function payUsdcForOrder(orderId: string) {
     chain: string;
   }>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain });
 
-  const { client } = await getSmartAccount(chain);
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const { client } = await getSmartAccount(chain, user.id);
 
   const approveData = encodeFunctionData({
     abi: ERC20_ABI,
@@ -153,8 +179,8 @@ export async function releaseUsdcForOrder(orderId: string) {
     throw new Error("No wallet address found. Generate a wallet in Market Account first.");
   }
 
-  const auth = await requireLocalAuth("Release escrow to seller");
-  if (!auth.ok) throw new Error(auth.message || "Authentication required");
+  const localAuth = await requireLocalAuth("Release escrow to seller");
+  if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
   const intent = await callFn<{
     ok: boolean;
@@ -164,7 +190,12 @@ export async function releaseUsdcForOrder(orderId: string) {
     chain: string;
   }>(FN_USDC_RELEASE_INTENT, { order_id: orderId, chain: chain.chain });
 
-  const { client } = await getSmartAccount(chain);
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const { client } = await getSmartAccount(chain, user.id);
 
   const data = encodeFunctionData({
     abi: ESCROW_ABI,

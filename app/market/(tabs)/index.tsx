@@ -1,28 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
+import SocialFeed from "@/components/market/SocialFeed";
 import { CategoryItem, getCategoriesByMain, MarketMainCategory } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
-
 const CARD = "rgba(255,255,255,0.06)";
 const BORDER = "rgba(255,255,255,0.10)";
 const MUTED = "rgba(255,255,255,0.65)";
@@ -30,31 +20,46 @@ const MUTED = "rgba(255,255,255,0.65)";
 const LISTINGS_TABLE = "market_listings";
 const LISTING_IMAGES_BUCKET = "market-listings";
 
-type CoverImage = {
-  id: string;
-  public_url: string | null;
-  storage_path: string;
-};
+type SortBy = "newest" | "price_low" | "price_high";
+type FeedSection = "product" | "service" | "social";
+type DirectoryMode = "listings" | "featured" | "verified";
 
 type ListingRow = {
   id: string;
+  seller_id: string;
   title: string | null;
   price_amount: number | string | null;
   currency: string | null;
   delivery_type: string | null;
-  category: string | null; // "product" | "service"
+  category: string | null;
   sub_category: string | null;
   created_at: string | null;
-  is_active?: boolean | null;
-  cover?: CoverImage | null;
+  payment_options?: any;
+  cover?: { public_url?: string | null; storage_path?: string | null } | null;
 };
 
-type SortBy = "newest" | "price_low" | "price_high";
+type SellerCard = {
+  user_id: string;
+  market_username: string | null;
+  display_name: string | null;
+  business_name: string | null;
+  bio: string | null;
+  is_verified: boolean | null;
+  logo_path: string | null;
+  social_links?: any;
+  featured_enabled?: boolean | null;
+  featured_until?: string | null;
+};
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
-  if ((currency ?? "").toUpperCase() === "USDC") return `$${n.toLocaleString()}`;
-  return `₦${n.toLocaleString()}`;
+  if ((currency ?? "").toUpperCase() === "USDC" || (currency ?? "").toUpperCase() === "USDT") return `$${n.toLocaleString()}`;
+  return `?${n.toLocaleString()}`;
+}
+
+function publicSellerLogo(path?: string | null) {
+  if (!path) return null;
+  return supabase.storage.from("market-sellers").getPublicUrl(path).data.publicUrl;
 }
 
 function buildPublicFromStorage(supabaseUrl: string, storagePath?: string | null) {
@@ -62,57 +67,7 @@ function buildPublicFromStorage(supabaseUrl: string, storagePath?: string | null
   return `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${storagePath}`;
 }
 
-function useDebouncedValue<T>(value: T, delayMs: number) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(id);
-  }, [value, delayMs]);
-  return debounced;
-}
-
-function Pill({
-  label,
-  icon,
-  active,
-  onPress,
-}: {
-  label: string;
-  icon?: any;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={{
-        flex: 1,
-        height: 46,
-        borderRadius: 999,
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "row",
-        gap: 8,
-        backgroundColor: active ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.06)",
-        borderWidth: 1,
-        borderColor: active ? "rgba(124,58,237,0.55)" : BORDER,
-      }}
-    >
-      {icon ? <Ionicons name={icon} size={16} color="#fff" /> : null}
-      <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
+function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <Pressable
       onPress={onPress}
@@ -130,532 +85,329 @@ function Chip({
   );
 }
 
-function CategoryChip({
-  c,
-  active,
-  onPress,
-}: {
-  c: { slug: string | null; title: string; icon?: string };
-  active: boolean;
-  onPress: () => void;
-}) {
+function SectionPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <Pressable
       onPress={onPress}
       style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        flex: 1,
+        height: 46,
         borderRadius: 999,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: active ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.06)",
         borderWidth: 1,
-        borderColor: active ? "rgba(124,58,237,0.60)" : BORDER,
-        backgroundColor: active ? "rgba(124,58,237,0.18)" : "rgba(255,255,255,0.06)",
-        marginRight: 10,
+        borderColor: active ? "rgba(124,58,237,0.55)" : BORDER,
       }}
     >
-      <Ionicons name={(c.icon as any) ?? "pricetag-outline"} size={16} color="#fff" />
-      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>{c.title}</Text>
+      <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
     </Pressable>
   );
 }
 
-function ListingCard({ item, supabaseUrl }: { item: ListingRow; supabaseUrl: string }) {
-  const coverUrl =
-    item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
-
-  const isNew = useMemo(() => {
-    if (!item.created_at) return false;
-    const t = new Date(item.created_at).getTime();
-    if (!Number.isFinite(t)) return false;
-    return Date.now() - t < 1000 * 60 * 60 * 48; // 48h
-  }, [item.created_at]);
-
+function SellerMini({ seller }: { seller?: SellerCard | null }) {
+  if (!seller) return null;
+  const logo = publicSellerLogo(seller.logo_path);
   return (
-    <Pressable
-      onPress={() =>
-        router.push({ pathname: "/market/listing/[id]" as any, params: { id: item.id } })
-      }
-      style={{
-        width: "48%",
-        borderRadius: 22,
-        overflow: "hidden",
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.08)",
-        backgroundColor: CARD,
-      }}
-    >
-      <View style={{ height: 140, backgroundColor: "rgba(255,255,255,0.06)" }}>
-        {coverUrl ? (
-          <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-        ) : (
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-            <Ionicons name="image-outline" size={28} color="rgba(255,255,255,0.55)" />
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontWeight: "800", fontSize: 11 }}>
-              No photo
-            </Text>
-          </View>
-        )}
-
-        {/* Badges */}
-        <View style={{ position: "absolute", top: 10, left: 10, flexDirection: "row", gap: 8 }}>
-          <View
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-              borderRadius: 999,
-              backgroundColor: "rgba(16,185,129,0.18)",
-              borderWidth: 1,
-              borderColor: "rgba(16,185,129,0.35)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Active</Text>
-          </View>
-
-          {isNew ? (
-            <View
-              style={{
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                borderRadius: 999,
-                backgroundColor: "rgba(124,58,237,0.22)",
-                borderWidth: 1,
-                borderColor: "rgba(124,58,237,0.45)",
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>New</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {/* Price */}
-        <View style={{ position: "absolute", bottom: 10, left: 10 }}>
-          <View
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 8,
-              borderRadius: 14,
-              backgroundColor: "rgba(0,0,0,0.55)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-              {money(item.currency, item.price_amount)}
-            </Text>
-          </View>
-        </View>
+    <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <View style={{ width: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+        {logo ? <Image source={{ uri: logo }} style={{ width: 22, height: 22 }} /> : <Ionicons name="person-outline" size={12} color="#fff" />}
       </View>
-
-      <View style={{ padding: 12 }}>
-        <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
-          {item.title ?? "Untitled"}
-        </Text>
-
-        <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <View
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 7,
-              borderRadius: 999,
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: BORDER,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <Ionicons name="cube-outline" size={14} color="rgba(255,255,255,0.75)" />
-            <Text style={{ color: "rgba(255,255,255,0.78)", fontWeight: "900", fontSize: 11 }} numberOfLines={1}>
-              {item.delivery_type ?? "—"}
-            </Text>
-          </View>
-        </View>
-      </View>
-    </Pressable>
+      <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.78)", fontWeight: "800", fontSize: 11, flex: 1 }}>
+        @{seller.market_username || "store"} ? {seller.display_name || seller.business_name || "Business"}
+      </Text>
+    </View>
   );
 }
 
 export default function MarketHome() {
   const insets = useSafeAreaInsets();
-
-  const [main, setMain] = useState<MarketMainCategory>("product");
+  const [section, setSection] = useState<FeedSection>("product");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("newest");
-
+  const [directoryMode, setDirectoryMode] = useState<DirectoryMode>("listings");
   const [q, setQ] = useState("");
-  const debouncedQ = useDebouncedValue(q.trim(), 350);
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [rows, setRows] = useState<ListingRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [rows, setRows] = useState<ListingRow[]>([]);
+  const [sellersMap, setSellersMap] = useState<Record<string, SellerCard>>({});
+  const [statsMap, setStatsMap] = useState<Record<string, { completed: number; cancelled: number; failed: number }>>({});
+  const [featuredSellers, setFeaturedSellers] = useState<SellerCard[]>([]);
+  const [verifiedSellers, setVerifiedSellers] = useState<SellerCard[]>([]);
 
-  const pageSize = 20;
-  const pageRef = useRef(0);
-  const hasMoreRef = useRef(true);
-  const fetchingRef = useRef(false);
-  const reqIdRef = useRef(0);
+  const main = section === "service" ? "service" : "product";
+  const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main as MarketMainCategory), [main]);
+  const supabaseUrl = (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
 
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMoreUi, setHasMoreUi] = useState(true);
-
-  const listRef = useRef<FlatList<ListingRow>>(null);
-
-  const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main), [main]);
-
-  const supabaseUrl =
-    (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
-
-  const filterKey = useMemo(
-    () => `${main}|${selectedSlug ?? ""}|${sortBy}|${debouncedQ}`,
-    [main, selectedSlug, sortBy, debouncedQ],
-  );
-
-  const buildSort = useCallback(
-    (query: any) => {
-      if (sortBy === "price_low") return query.order("price_amount", { ascending: true });
-      if (sortBy === "price_high") return query.order("price_amount", { ascending: false });
-      return query.order("created_at", { ascending: false });
-    },
-    [sortBy],
-  );
-
-  const fetchListings = useCallback(
-    async (mode: "reset" | "more") => {
-      if (fetchingRef.current) return;
-
-      if (mode === "more" && !hasMoreRef.current) return;
-
-      fetchingRef.current = true;
-      const reqId = ++reqIdRef.current;
-
-      if (mode === "reset") {
-        setErr(null);
-        hasMoreRef.current = true;
-        setHasMoreUi(true);
-        pageRef.current = 0;
-
-        if (rows.length === 0) setLoading(true);
-        else setRefreshing(true);
-
-        listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-      } else {
-        setLoadingMore(true);
-      }
-
-      try {
-        const from = pageRef.current * pageSize;
-        const to = from + pageSize - 1;
-
-        let query = supabase
-          .from(LISTINGS_TABLE)
-          .select(
-            `
-            id,title,price_amount,currency,delivery_type,category,sub_category,created_at,is_active,
-            cover:market_listing_images!market_listings_cover_image_fk(id,public_url,storage_path)
-          `,
-          )
-          .eq("is_active", true)
-          .eq("category", main);
-
-        if (selectedSlug) query = query.eq("sub_category", selectedSlug);
-        if (debouncedQ) {
-          query = query.or([`title.ilike.%${debouncedQ}%`, `description.ilike.%${debouncedQ}%`].join(","));
-        }
-
-        query = buildSort(query).range(from, to);
-
-        const { data, error } = await query;
-        if (error) throw new Error(error.message);
-
-        // stale response guard
-        if (reqId !== reqIdRef.current) return;
-
-        const batch = ((data as any) ?? []) as ListingRow[];
-
-        if (mode === "reset") setRows(batch);
-        else setRows((prev) => [...prev, ...batch]);
-
-        const more = batch.length === pageSize;
-        hasMoreRef.current = more;
-        setHasMoreUi(more);
-
-        if (more) pageRef.current += 1;
-      } catch (e: any) {
-        if (reqId === reqIdRef.current) {
-          setErr(e?.message || "Failed to load listings");
-          if (mode === "reset") setRows([]);
-        }
-      } finally {
-        if (reqId === reqIdRef.current) {
-          setLoading(false);
-          setRefreshing(false);
-          setLoadingMore(false);
-        }
-        fetchingRef.current = false;
-      }
-    },
-    [buildSort, debouncedQ, main, rows.length, selectedSlug],
-  );
-
-  // reset fetch on filters change (stable: no page dependency loop)
-  useEffect(() => {
-    fetchListings("reset");
-  }, [filterKey, fetchListings]);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
+  async function loadDirectory() {
+    const nowIso = new Date().toISOString();
     try {
-      await fetchListings("reset");
+      const [featured, verified] = await Promise.all([
+        supabase
+          .from("market_seller_public_profiles")
+          .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links,featured_enabled,featured_until")
+          .eq("active", true)
+          .eq("featured_enabled", true)
+          .or(`featured_until.is.null,featured_until.gte.${nowIso}`)
+          .order("updated_at", { ascending: false })
+          .limit(200),
+        supabase
+          .from("market_seller_public_profiles")
+          .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links,featured_enabled,featured_until")
+          .eq("active", true)
+          .eq("is_verified", true)
+          .order("updated_at", { ascending: false })
+          .limit(200),
+      ]);
+      setFeaturedSellers((featured.data ?? []) as any);
+      setVerifiedSellers((verified.data ?? []) as any);
+    } catch {
+      const { data } = await supabase
+        .from("market_seller_public_profiles")
+        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links")
+        .eq("active", true)
+        .order("updated_at", { ascending: false })
+        .limit(200);
+      const rows = (data ?? []) as any[];
+      setFeaturedSellers([]);
+      setVerifiedSellers(rows.filter((r) => !!r.is_verified));
+    }
+  }
+
+  async function loadListings() {
+    setLoading(true);
+    setErr(null);
+    try {
+      let query = supabase
+        .from(LISTINGS_TABLE)
+        .select(`id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)`)
+        .eq("is_active", true)
+        .eq("category", main)
+        .order(sortBy === "newest" ? "created_at" : "price_amount", { ascending: sortBy === "price_low" })
+        .limit(120);
+
+      if (selectedSlug) query = query.eq("sub_category", selectedSlug);
+      if (q.trim()) query = query.or(`title.ilike.%${q.trim()}%,description.ilike.%${q.trim()}%`);
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const items = ((data ?? []) as ListingRow[]).filter((r) => {
+        const exp = r.payment_options?.expires_at;
+        if (!exp) return true;
+        const t = new Date(exp).getTime();
+        return Number.isFinite(t) ? t > Date.now() : true;
+      });
+      setRows(items);
+
+      const sellerIds = Array.from(new Set(items.map((r) => r.seller_id)));
+      const listingIds = items.map((r) => r.id);
+
+      const [sellerRes, ordersRes] = await Promise.all([
+        sellerIds.length
+          ? supabase
+              .from("market_seller_public_profiles")
+              .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links")
+              .in("user_id", sellerIds)
+          : Promise.resolve({ data: [] } as any),
+        listingIds.length
+          ? supabase
+              .from("market_orders")
+              .select("listing_id,status")
+              .in("listing_id", listingIds)
+              .in("status", ["DELIVERED", "RELEASED", "CANCELLED", "REFUNDED"])
+          : Promise.resolve({ data: [] } as any),
+      ]);
+
+      const sellerMap: Record<string, SellerCard> = {};
+      (sellerRes.data ?? []).forEach((s: any) => {
+        sellerMap[String(s.user_id)] = s;
+      });
+      setSellersMap(sellerMap);
+
+      const stats: Record<string, { completed: number; cancelled: number; failed: number }> = {};
+      for (const id of listingIds) stats[id] = { completed: 0, cancelled: 0, failed: 0 };
+      (ordersRes.data ?? []).forEach((o: any) => {
+        const id = String(o.listing_id);
+        if (!stats[id]) stats[id] = { completed: 0, cancelled: 0, failed: 0 };
+        if (o.status === "DELIVERED" || o.status === "RELEASED") stats[id].completed += 1;
+        else if (o.status === "CANCELLED") stats[id].cancelled += 1;
+        else if (o.status === "REFUNDED") stats[id].failed += 1;
+      });
+      setStatsMap(stats);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load listings");
+      setRows([]);
     } finally {
+      setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchListings]);
+  }
 
-  const onEndReached = useCallback(() => {
-    if (!loading && !err) fetchListings("more");
-  }, [fetchListings, loading, err]);
+  useEffect(() => {
+    loadDirectory();
+  }, []);
 
-  const subtitle = "Discover products and services from businesses around the world.";
+  useEffect(() => {
+    if (section !== "social") loadListings();
+  }, [section, selectedSlug, sortBy, q]);
+
+  const directoryRows = useMemo(() => (directoryMode === "featured" ? featuredSellers : verifiedSellers), [directoryMode, featuredSellers, verifiedSellers]);
+
+  const renderListing = ({ item }: { item: ListingRow }) => {
+    const coverUrl = item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
+    const seller = sellersMap[item.seller_id];
+    const stats = statsMap[item.id] ?? { completed: 0, cancelled: 0, failed: 0 };
+    const discount = item.payment_options?.discount ?? null;
+    const showDiscount = !!discount?.enabled && (!discount?.endsAt || new Date(discount.endsAt).getTime() > Date.now());
+    const original = Number(discount?.originalPrice ?? item.price_amount);
+    const discounted = Number(discount?.discountedPrice ?? item.price_amount);
+
+    return (
+      <Pressable
+        onPress={() => router.push({ pathname: "/market/listing/[id]" as any, params: { id: item.id } })}
+        style={{ width: "48%", borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: CARD }}
+      >
+        <View style={{ height: 140, backgroundColor: "rgba(255,255,255,0.06)" }}>
+          {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : null}
+          <View style={{ position: "absolute", bottom: 10, left: 10 }}>
+            <View style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: "rgba(0,0,0,0.6)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
+              {showDiscount ? (
+                <>
+                  <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 11 }}>{money(item.currency, original)}</Text>
+                  <Text style={{ color: "#FCA5A5", fontWeight: "900", fontSize: 12 }}>{money(item.currency, discounted)}</Text>
+                </>
+              ) : (
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{money(item.currency, item.price_amount)}</Text>
+              )}
+            </View>
+          </View>
+        </View>
+
+        <View style={{ padding: 12 }}>
+          <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>{item.title ?? "Untitled"}</Text>
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.75)", fontSize: 11 }}>
+            Sales {stats.completed} ? Cancelled {stats.cancelled} ? Failed {stats.failed}
+          </Text>
+          <SellerMini seller={seller} />
+        </View>
+      </Pressable>
+    );
+  };
+
+  const renderSellerCard = ({ item }: { item: SellerCard }) => {
+    const logo = publicSellerLogo(item.logo_path);
+    return (
+      <Pressable
+        onPress={() => router.push(`/market/profile/${item.market_username}` as any)}
+        style={{ borderRadius: 18, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, marginTop: 10 }}
+      >
+        <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
+          <View style={{ width: 46, height: 46, borderRadius: 23, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+            {logo ? <Image source={{ uri: logo }} style={{ width: 46, height: 46 }} /> : <Ionicons name="person-outline" size={22} color="#fff" />}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>
+              {item.business_name || item.display_name || "Business"} {item.is_verified ? "?" : ""}
+            </Text>
+            <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>@{item.market_username || "profile"}</Text>
+            <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }} numberOfLines={2}>{item.bio || "No description yet."}</Text>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
 
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
       <FlatList
-        ref={listRef}
-        data={rows}
-        keyExtractor={(it) => it.id}
-        numColumns={2}
-        columnWrapperStyle={{ paddingHorizontal: 16, justifyContent: "space-between", marginTop: 12 }}
+        data={section === "social" ? [] : (directoryMode === "listings" ? rows : directoryRows as any)}
+        key={section === "social" ? "social" : directoryMode}
+        keyExtractor={(it: any, idx) => String((it as any)?.id || (it as any)?.user_id || idx)}
+        numColumns={section === "social" || directoryMode !== "listings" ? 1 : 2}
+        columnWrapperStyle={section === "social" || directoryMode !== "listings" ? undefined : { paddingHorizontal: 16, justifyContent: "space-between", marginTop: 12 }}
         contentContainerStyle={{ paddingBottom: 28 }}
-        renderItem={({ item }) => <ListingCard item={item} supabaseUrl={supabaseUrl} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        onEndReachedThreshold={0.45}
-        onEndReached={onEndReached}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); if (section === "social") setRefreshing(false); else await loadListings(); }} />}
+        renderItem={section === "social" ? undefined : directoryMode === "listings" ? renderListing : renderSellerCard as any}
         ListHeaderComponent={
           <View style={{ paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
-            <AppHeader title="Marketplace" subtitle={subtitle} />
+            <AppHeader title="Marketplace" subtitle="Products, services, and social feed" />
 
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
-              <View>
-                <Text style={{ color: "#fff", fontSize: 28, fontWeight: "900" }}>Marketplace</Text>
-                <Text style={{ marginTop: 6, color: MUTED, fontSize: 13 }}>
-                  {main === "product" ? "Shop curated products" : "Book trusted services"}
-                  {rows.length ? ` • ${rows.length}${hasMoreUi ? "+" : ""} available` : ""}
-                </Text>
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
+              <SectionPill label="Products" active={section === "product"} onPress={() => { setSection("product"); setDirectoryMode("listings"); setSelectedSlug(null); }} />
+              <SectionPill label="Services" active={section === "service"} onPress={() => { setSection("service"); setDirectoryMode("listings"); setSelectedSlug(null); }} />
+              <SectionPill label="Social Feed" active={section === "social"} onPress={() => setSection("social")} />
+            </View>
+
+            {section === "social" ? (
+              <View style={{ marginTop: 10, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Followers feed</Text>
+                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>You only see posts from accounts you follow (and your own posts).</Text>
+                <SocialFeed />
               </View>
-
-              <Pressable
-                onPress={() => router.push("/market/(tabs)/account" as any)}
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 16,
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.08)",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Ionicons name="person-circle-outline" size={22} color="#fff" />
-              </Pressable>
-            </View>
-
-            {/* Search */}
-            <View
-              style={{
-                marginTop: 12,
-                flexDirection: "row",
-                gap: 10,
-                borderRadius: 20,
-                padding: 12,
-                borderWidth: 1,
-                borderColor: BORDER,
-                backgroundColor: "rgba(255,255,255,0.06)",
-                alignItems: "center",
-              }}
-            >
-              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.75)" />
-              <TextInput
-                value={q}
-                onChangeText={setQ}
-                placeholder="Search products, services, brands…"
-                placeholderTextColor="rgba(255,255,255,0.45)"
-                style={{ flex: 1, color: "#fff", fontWeight: "700" }}
-                returnKeyType="search"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {!!q && (
-                <Pressable
-                  onPress={() => setQ("")}
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 12,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.10)",
-                  }}
-                >
-                  <Ionicons name="close" size={16} color="#fff" />
-                </Pressable>
-              )}
-            </View>
-
-            {/* Product / Service */}
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-              <Pill
-                label="Products"
-                icon="cart-outline"
-                active={main === "product"}
-                onPress={() => {
-                  setSelectedSlug(null);
-                  setMain("product");
-                }}
-              />
-              <Pill
-                label="Services"
-                icon="briefcase-outline"
-                active={main === "service"}
-                onPress={() => {
-                  setSelectedSlug(null);
-                  setMain("service");
-                }}
-              />
-            </View>
-
-            {/* Categories */}
-            <View style={{ marginTop: 14 }}>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>
-                {main === "product" ? "Categories" : "Service types"}
-              </Text>
-              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                Filter results by category
-              </Text>
-
-              <View style={{ marginTop: 10 }}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <CategoryChip
-                    c={{ slug: null, title: "All", icon: "apps-outline" }}
-                    active={!selectedSlug}
-                    onPress={() => setSelectedSlug(null)}
+            ) : (
+              <>
+                <View style={{ marginTop: 12, flexDirection: "row", gap: 10, alignItems: "center", borderRadius: 20, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
+                  <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.75)" />
+                  <TextInput
+                    value={q}
+                    onChangeText={setQ}
+                    placeholder="Search listings or @username"
+                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    style={{ flex: 1, color: "#fff", fontWeight: "700" }}
                   />
-                  {categories.map((c) => (
-                    <CategoryChip
-                      key={c.slug}
-                      c={{ slug: c.slug, title: c.title, icon: c.icon }}
-                      active={selectedSlug === c.slug}
-                      onPress={() => setSelectedSlug(c.slug)}
-                    />
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
+                </View>
 
-            {/* Sort */}
-            <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-              <Chip label="Newest" active={sortBy === "newest"} onPress={() => setSortBy("newest")} />
-              <Chip label="Price ↑" active={sortBy === "price_low"} onPress={() => setSortBy("price_low")} />
-              <Chip label="Price ↓" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
-            </View>
+                <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+                  <Chip label="Listings" active={directoryMode === "listings"} onPress={() => setDirectoryMode("listings")} />
+                  <Chip label="Featured Accounts" active={directoryMode === "featured"} onPress={() => setDirectoryMode("featured")} />
+                  <Chip label="Verified Accounts" active={directoryMode === "verified"} onPress={() => setDirectoryMode("verified")} />
+                </View>
 
-            {/* States */}
-            {loading ? (
-              <View style={{ paddingVertical: 18, alignItems: "center" }}>
-                <ActivityIndicator />
-                <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
-                  Loading listings…
-                </Text>
-              </View>
-            ) : err ? (
-              <View
-                style={{
-                  marginTop: 14,
-                  borderRadius: 22,
-                  padding: 16,
-                  backgroundColor: "rgba(255,255,255,0.05)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.08)",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Could not load listings</Text>
-                <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>{err}</Text>
+                {directoryMode === "listings" ? (
+                  <>
+                    <View style={{ marginTop: 12 }}>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <Chip label="All" active={!selectedSlug} onPress={() => setSelectedSlug(null)} />
+                        {categories.map((c) => (
+                          <View key={c.slug} style={{ marginLeft: 10 }}>
+                            <Chip label={c.title} active={selectedSlug === c.slug} onPress={() => setSelectedSlug(c.slug)} />
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </View>
 
-                <Pressable
-                  onPress={() => fetchListings("reset")}
-                  style={{
-                    marginTop: 12,
-                    borderRadius: 16,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    backgroundColor: PURPLE,
-                    borderWidth: 1,
-                    borderColor: PURPLE,
-                  }}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>Retry</Text>
-                </Pressable>
-              </View>
-            ) : null}
+                    <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
+                      <Chip label="Newest" active={sortBy === "newest"} onPress={() => setSortBy("newest")} />
+                      <Chip label="Price ?" active={sortBy === "price_low"} onPress={() => setSortBy("price_low")} />
+                      <Chip label="Price ?" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
+                    </View>
+                  </>
+                ) : null}
+
+                {loading ? (
+                  <View style={{ paddingVertical: 18, alignItems: "center" }}>
+                    <ActivityIndicator />
+                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading?</Text>
+                  </View>
+                ) : err ? (
+                  <View style={{ marginTop: 14, borderRadius: 16, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Could not load data</Text>
+                    <Text style={{ marginTop: 6, color: MUTED }}>{err}</Text>
+                  </View>
+                ) : null}
+              </>
+            )}
           </View>
         }
         ListEmptyComponent={
-          loading || err ? null : (
-            <View
-              style={{
-                marginTop: 14,
-                marginHorizontal: 16,
-                borderRadius: 22,
-                padding: 16,
-                backgroundColor: "rgba(255,255,255,0.05)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.08)",
-              }}
-            >
+          !loading && section !== "social" ? (
+            <View style={{ marginTop: 14, marginHorizontal: 16, borderRadius: 16, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
               <Text style={{ color: "#fff", fontWeight: "900" }}>No results</Text>
-              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
-                Try adjusting your search, category, or sort.
-              </Text>
-              <Pressable
-                onPress={() => {
-                  setSelectedSlug(null);
-                  setQ("");
-                  setSortBy("newest");
-                }}
-                style={{
-                  marginTop: 12,
-                  borderRadius: 16,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                  backgroundColor: PURPLE,
-                  borderWidth: 1,
-                  borderColor: PURPLE,
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Reset</Text>
-              </Pressable>
+              <Text style={{ marginTop: 6, color: MUTED }}>Try another filter or search.</Text>
             </View>
-          )
-        }
-        ListFooterComponent={
-          <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 }}>
-            {loadingMore ? (
-              <View style={{ flexDirection: "row", gap: 10, alignItems: "center", justifyContent: "center" }}>
-                <ActivityIndicator />
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Loading more…</Text>
-              </View>
-            ) : !hasMoreUi && rows.length > 0 ? (
-              <Text style={{ color: "rgba(255,255,255,0.60)", fontWeight: "900", textAlign: "center" }}>
-                You’ve reached the end
-              </Text>
-            ) : null}
-          </View>
+          ) : null
         }
       />
     </LinearGradient>

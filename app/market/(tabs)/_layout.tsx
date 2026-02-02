@@ -42,7 +42,6 @@ function CenterTabButton({
         <Ionicons name="grid-outline" size={28} color="#fff" />
       </View>
 
-      {/* label under the big button */}
       <Text
         style={{
           marginTop: 6,
@@ -75,7 +74,6 @@ export default function MarketTabsLayout() {
         tabBarLabelStyle: { fontSize: 11, fontWeight: "800" as any },
       }}
     >
-      {/* Market */}
       <Tabs.Screen
         name="index"
         options={{
@@ -86,7 +84,6 @@ export default function MarketTabsLayout() {
         }}
       />
 
-      {/* Sell */}
       <Tabs.Screen
         name="sell"
         options={{
@@ -97,8 +94,15 @@ export default function MarketTabsLayout() {
         }}
       />
 
+      <Tabs.Screen
+        name="category"
+        options={{
+          title: "Category",
+          tabBarLabel: () => null,
+          tabBarButton: (props) => <CenterTabButton {...props} />,
+        }}
+      />
 
-      {/* Orders */}
       <Tabs.Screen
         name="orders"
         options={{
@@ -109,19 +113,16 @@ export default function MarketTabsLayout() {
         }}
       />
 
-      {/* BIG centered Category */}
       <Tabs.Screen
-        name="category"
+        name="account"
         options={{
-          // We draw our own label inside the custom button
-          title: "Category",
-          tabBarLabel: () => null,
-          tabBarButton: (props) => <CenterTabButton {...props} />,
+          title: "Account",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person-circle-outline" color={color} size={size} />
+          ),
         }}
       />
 
-
-      {/* Messages */}
       <Tabs.Screen
         name="messages"
         options={{
@@ -133,26 +134,13 @@ export default function MarketTabsLayout() {
         }}
       />
 
-
-
-      {/* Rewards */}
       <Tabs.Screen
         name="rewards"
         options={{
+          href: null,
           title: "Rewards",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="gift-outline" color={color} size={size} />
-          ),
-        }}
-      />
-
-      {/* Account */}
-      <Tabs.Screen
-        name="account"
-        options={{
-          title: "Account",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-circle-outline" color={color} size={size} />
           ),
         }}
       />

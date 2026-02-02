@@ -2,6 +2,7 @@
 import "react-native-url-polyfill/auto";
 import { createClient } from "@supabase/supabase-js";
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const SUPABASE_URL =
   (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ??
@@ -73,6 +74,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
+    storage: Platform.OS === "web" ? undefined : (AsyncStorage as any),
   },
   global: {
     fetch: supabaseFetch as any,
