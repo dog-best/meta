@@ -22,6 +22,7 @@ export async function fetchMarketChains() {
       headers: {
         "Content-Type": "application/json",
         apikey: getSupabaseAnonKeyOrThrow(),
+        Authorization: `Bearer ${getSupabaseAnonKeyOrThrow()}`,
       },
       body: JSON.stringify({}),
     });

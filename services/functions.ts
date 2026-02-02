@@ -41,6 +41,35 @@ function extractErrorMessage(text: string | null | undefined, json: any, name: s
 export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Promise<T> {
   console.log(`[callFn] ${name} -> start`, body ?? {});
 
+  // Prefer SDK invoke first (it attaches current auth session correctly)
+  try {
+    const { data, error } = await supabase.functions.invoke(name, { body: body ?? {} });
+    if (!error && data) {
+      console.log(`[callFn] ${name} -> ok (sdk invoke)`);
+      return data as T;
+    }
+    if (error) {
+      const lower = String(error.message || "").toLowerCase();
+      if (lower.includes("invalid jwt") || lower.includes("jwt")) {
+        try {
+          const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+          if (!refreshErr && refreshed.session?.access_token) {
+            const retry = await supabase.functions.invoke(name, { body: body ?? {} });
+            if (!retry.error && retry.data) {
+              console.log(`[callFn] ${name} -> ok (sdk invoke retry)`);
+              return retry.data as T;
+            }
+          }
+        } catch {
+          // continue to manual fallback
+        }
+      }
+    }
+  } catch {
+    // continue to manual fallback
+  }
+
+  // Manual fallback path
   let token = await getSupabaseJwtOrThrow();
   let { res, text, json } = await invokeFn<T>(name, body, timeoutMs, token);
 
