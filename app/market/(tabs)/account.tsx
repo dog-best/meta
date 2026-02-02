@@ -453,6 +453,21 @@ export default function MarketAccountTab() {
 
                 <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/market/wallet" as any)} variant="outline" />
               </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                <ActionBtn
+                  label="Messages"
+                  icon="chatbubble-ellipses-outline"
+                  onPress={() => router.push("/market/(tabs)/messages" as any)}
+                  variant="outline"
+                />
+                <ActionBtn
+                  label="Menu"
+                  icon="menu-outline"
+                  onPress={() => router.push("/market/menu" as any)}
+                  variant="outline"
+                />
+              </View>
             </View>
           </View>
         )}
