@@ -1,3 +1,4 @@
+import "react-native-get-random-values";
 // app/_layout.tsx
 // app/_layout.tsx
 import { supabase } from "@/services/supabase";
