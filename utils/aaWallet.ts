@@ -1,3 +1,4 @@
+import "react-native-get-random-values";
 import * as SecureStore from "expo-secure-store";
 import { AlchemyChainMap, LocalAccountSigner, getChain } from "@alchemy/aa-core";
 import { createAlchemySmartAccountClient } from "@alchemy/aa-alchemy";
@@ -66,4 +67,3 @@ export async function getSmartAccount(chainConfig: MarketChainConfig) {
     address: account.address,
   };
 }
-
