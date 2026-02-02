@@ -154,8 +154,12 @@ export default function SellTab() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [currency, setCurrency] = useState<Currency>("NGN");
+  const [payMode, setPayMode] = useState<"ngn" | "crypto" | "all">("ngn");
+  const [cryptoCoinMode, setCryptoCoinMode] = useState<"all" | "usdc" | "usdt">("all");
+  const [cryptoNetworkMode, setCryptoNetworkMode] = useState<"all" | "base_sepolia">("all");
   const [price, setPrice] = useState("");
+  const [priceBase, setPriceBase] = useState<"NGN" | "USD">("NGN");
+  const [fxRate, setFxRate] = useState<number | null>(null);
   const [stockQty, setStockQty] = useState("");
 
   const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("global");
@@ -271,6 +275,27 @@ export default function SellTab() {
 
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=tether,usd-coin&vs_currencies=ngn",
+        );
+        const json = await res.json();
+        const usdc = Number(json?.["usd-coin"]?.ngn ?? 0);
+        const usdt = Number(json?.tether?.ngn ?? 0);
+        const avg = (usdc + usdt) / 2;
+        if (mounted && Number.isFinite(avg) && avg > 0) setFxRate(avg);
+      } catch {
+        if (mounted) setFxRate(null);
+      }
+    })();
+    return () => {
+      mounted = false;
     };
   }, []);
 
@@ -403,8 +428,18 @@ export default function SellTab() {
       const user = auth?.user;
       if (!user) return router.replace("/(auth)/login" as any);
 
-      const unitPrice = safeNumber(price);
+      const enteredPrice = safeNumber(price);
+      let unitPrice = enteredPrice;
       const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
+      const listingCurrency: Currency = payMode === "ngn" ? "NGN" : "USDC";
+      const paymentOptions = {
+        allow_ngn: payMode === "ngn" || payMode === "all",
+        allow_crypto: payMode === "crypto" || payMode === "all",
+        allow_usdc: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
+        allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
+        chain_mode: cryptoNetworkMode,
+        coin_mode: cryptoCoinMode,
+      };
 
       // Put website URL into description for now (until you add a DB column later)
       // This keeps you moving without migrations.
@@ -426,9 +461,10 @@ export default function SellTab() {
         title: title.trim(),
         description: finalDesc,
         price_amount: unitPrice,
-        currency,
+        currency: listingCurrency,
         stock_qty: category === "product" ? qty : null,
         availability,
+        payment_options: paymentOptions,
       } as any);
       console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
 
@@ -745,14 +781,43 @@ export default function SellTab() {
           <Label>Description</Label>
           <Input value={description} onChangeText={setDescription} placeholder="What the buyer gets, requirements, timeline…" multiline />
 
-          <Label>Currency</Label>
+          <Label>Payment route</Label>
           <Row>
-            <Pill active={currency === "NGN"} label="NGN" onPress={() => setCurrency("NGN")} />
-            <Pill active={currency === "USDC"} label="USDC" onPress={() => setCurrency("USDC")} />
+            <Pill active={payMode === "ngn"} label="NGN only" onPress={() => setPayMode("ngn")} />
+            <Pill active={payMode === "crypto"} label="Crypto only" onPress={() => setPayMode("crypto")} />
+            <Pill active={payMode === "all"} label="All" onPress={() => setPayMode("all")} />
           </Row>
 
+          {(payMode === "crypto" || payMode === "all") ? (
+            <>
+              <Label>Crypto coin</Label>
+              <Row>
+                <Pill active={cryptoCoinMode === "all"} label="All (USDC/USDT)" onPress={() => setCryptoCoinMode("all")} />
+                <Pill active={cryptoCoinMode === "usdc"} label="USDC only" onPress={() => setCryptoCoinMode("usdc")} />
+                <Pill active={cryptoCoinMode === "usdt"} label="USDT only" onPress={() => setCryptoCoinMode("usdt")} />
+              </Row>
+
+              <Label>Network</Label>
+              <Row>
+                <Pill active={cryptoNetworkMode === "all"} label="All active networks" onPress={() => setCryptoNetworkMode("all")} />
+                <Pill active={cryptoNetworkMode === "base_sepolia"} label="Base Sepolia only" onPress={() => setCryptoNetworkMode("base_sepolia")} />
+              </Row>
+            </>
+          ) : null}
+
           <Label>Price *</Label>
+          <Row>
+            <Pill active={priceBase === "NGN"} label="I enter NGN" onPress={() => setPriceBase("NGN")} />
+            <Pill active={priceBase === "USD"} label="I enter USD" onPress={() => setPriceBase("USD")} />
+          </Row>
           <Input value={price} onChangeText={setPrice} placeholder="e.g. 250000" keyboardType="numeric" />
+          {Number.isFinite(safeNumber(price)) && safeNumber(price) > 0 ? (
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              {priceBase === "NGN"
+                ? `Approx USDC/USDT: ${fxRate ? (safeNumber(price) / fxRate).toFixed(2) : "..." }`
+                : `Approx NGN: ${fxRate ? (safeNumber(price) * fxRate).toFixed(0) : "..." }`}
+            </Text>
+          ) : null}
 
           {category === "product" ? (
             <>
@@ -847,3 +912,11 @@ export default function SellTab() {
     </LinearGradient>
   );
 }
+      if (priceBase === "USD" && listingCurrency === "NGN") {
+        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+        unitPrice = enteredPrice * fxRate;
+      }
+      if (priceBase === "NGN" && listingCurrency === "USDC") {
+        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
+        unitPrice = enteredPrice / fxRate;
+      }

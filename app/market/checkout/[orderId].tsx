@@ -87,6 +87,10 @@ export default function Checkout() {
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [savingGeo, setSavingGeo] = useState(false);
   const [chain, setChain] = useState<{ chain: string } | null>(null);
+  const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
+  const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
+  const allowNgn = paymentOptions?.allow_ngn !== false && listingCurrency !== "USDC" && listingCurrency !== "USDT";
+  const allowUsdc = paymentOptions?.allow_usdc !== false && (listingCurrency === "USDC" || listingCurrency === "" || !!paymentOptions?.allow_crypto);
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();
@@ -116,7 +120,7 @@ export default function Checkout() {
         if (listingId) {
           const { data: lRow, error: lErr } = await supabase
             .from("market_listings")
-            .select("id,title,delivery_type,availability")
+            .select("id,title,delivery_type,availability,currency,payment_options")
             .eq("id", listingId)
             .maybeSingle();
           if (lErr) throw lErr;
@@ -186,8 +190,10 @@ export default function Checkout() {
   }
 
   async function payWithWallet() {
+    if (busy) return;
     setErr(null);
     if (!oid) return setErr("Missing orderId");
+    if (!allowNgn) return setErr("This listing does not accept NGN payments.");
     const user = await requireAuth();
     if (!user) return;
 
@@ -208,8 +214,10 @@ export default function Checkout() {
   }
 
   async function payWithUsdc() {
+    if (busy) return;
     setErr(null);
     if (!oid) return setErr("Missing orderId");
+    if (!allowUsdc) return setErr("This listing does not accept USDC payments.");
     const user = await requireAuth();
     if (!user) return;
 
@@ -354,7 +362,7 @@ export default function Checkout() {
             title="Pay with NGN wallet"
             subtitle="Instant escrow lock from your in-app balance"
             onPress={payWithWallet}
-            disabled={busy}
+            disabled={busy || !allowNgn}
           />
 
           <Pill
@@ -362,8 +370,14 @@ export default function Checkout() {
             title="Pay with USDC"
             subtitle="Approve + deposit into escrow using your smart account"
             onPress={payWithUsdc}
-            disabled={busy}
+            disabled={busy || !allowUsdc}
           />
+
+          {!allowNgn || !allowUsdc ? (
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+              Seller payment setting: {allowNgn && allowUsdc ? "NGN + USDC" : allowNgn ? "NGN only" : "USDC only"}.
+            </Text>
+          ) : null}
 
           {busy ? (
             <View style={{ marginTop: 14, flexDirection: "row", alignItems: "center", gap: 10 }}>

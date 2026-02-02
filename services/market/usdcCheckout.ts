@@ -60,6 +60,29 @@ export async function getMyWalletForChain(chain: string) {
 }
 
 export async function registerWallet(chain: string, address: string) {
+  // Prefer direct table upsert so wallet creation does not depend on Edge Function JWT flow.
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const { data, error } = await supabase
+    .from("crypto_wallets")
+    .upsert(
+      {
+        user_id: user.id,
+        chain,
+        address,
+        wallet_type: "aa",
+      },
+      { onConflict: "user_id,chain" },
+    )
+    .select("user_id,chain,address")
+    .single();
+
+  if (!error && data) return data;
+
+  // Fallback to function for projects that still rely on server-side insertion.
   return await callFn("create-crypto-wallet", { chain, address });
 }
 
@@ -156,4 +179,3 @@ export async function releaseUsdcForOrder(orderId: string) {
 
   return intent;
 }
-

@@ -2,13 +2,16 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
 
 import AppHeader from "@/components/common/AppHeader";
 import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } from "@/services/market/chainConfig";
 import { getMyWalletForChain, ensureSmartAccount } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
+import { getRpcUrlForChain, getWalletBackupSecret, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
 
 type SellerProfile = {
   user_id: string;
@@ -29,10 +32,44 @@ const CARD = "rgba(255,255,255,0.05)";
 const BORDER = "rgba(255,255,255,0.09)";
 const MUTED = "rgba(255,255,255,0.62)";
 const BLUE = "#3B82F6";
+const USDT_BY_CHAIN: Record<string, string | undefined> = {
+  base_sepolia: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA,
+  base: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE,
+  arbitrum: process.env.EXPO_PUBLIC_USDT_ADDRESS_ARBITRUM,
+  polygon: process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON,
+  optimism: process.env.EXPO_PUBLIC_USDT_ADDRESS_OPTIMISM,
+  ethereum: process.env.EXPO_PUBLIC_USDT_ADDRESS_ETHEREUM,
+  bnb: process.env.EXPO_PUBLIC_USDT_ADDRESS_BNB,
+};
+
+const ERC20_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
 
 function publicUrl(bucket: string, path?: string | null) {
   if (!path) return null;
   return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+}
+
+function getUsdtAddress(chainName?: string | null) {
+  if (!chainName) return "";
+  return USDT_BY_CHAIN[chainName] ?? "";
 }
 
 function Badge({ text, tone }: { text: string; tone: "purple" | "green" | "gray" }) {
@@ -100,6 +137,16 @@ export default function MarketAccountTab() {
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletErr, setWalletErr] = useState<string | null>(null);
   const [chainErr, setChainErr] = useState<string | null>(null);
+  const [backedUp, setBackedUp] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupSecret, setBackupSecret] = useState("");
+  const [backupType, setBackupType] = useState<"mnemonic" | "privateKey">("privateKey");
+  const [usdcBalance, setUsdcBalance] = useState("0");
+  const [usdtBalance, setUsdtBalance] = useState("0");
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
+  const [sendTo, setSendTo] = useState("");
+  const [sendAmount, setSendAmount] = useState("");
 
   async function load() {
     setLoading(true);
@@ -133,15 +180,152 @@ export default function MarketAccountTab() {
       setChains(items);
       const preferred = await getPreferredMarketChain();
       setChain(preferred);
-      if (preferred) {
-        const w = await getMyWalletForChain(preferred.chain);
-        setWallet(w ? { address: w.address } : null);
-      }
+      await refreshWalletMeta(preferred);
     } catch (e: any) {
       setChains([]);
       setChain(null);
       setWallet(null);
       setChainErr(e?.message || "Unable to load network settings. Pull to refresh or try again.");
+    }
+  }
+
+  async function refreshWalletMeta(selected?: any | null) {
+    const current = selected ?? chain;
+    const backed = await hasWalletBackup();
+    setBackedUp(backed);
+    if (!current) {
+      setUsdcBalance("0");
+      setUsdtBalance("0");
+      return;
+    }
+    const w = await getMyWalletForChain(current.chain);
+    setWallet(w ? { address: w.address } : null);
+    if (!w?.address) {
+      setUsdcBalance("0");
+      setUsdtBalance("0");
+      return;
+    }
+    const rpcUrl = getRpcUrlForChain(current);
+    if (!rpcUrl) return;
+    const client = createPublicClient({
+      transport: http(rpcUrl),
+    });
+    try {
+      const usdcRaw = await client.readContract({
+        address: current.usdc_address as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [w.address as `0x${string}`],
+      });
+      setUsdcBalance(formatUnits(usdcRaw as bigint, 6));
+    } catch {
+      setUsdcBalance("0");
+    }
+
+    const usdt = getUsdtAddress(current.chain);
+    if (!usdt) {
+      setUsdtBalance("0");
+      return;
+    }
+    try {
+      const usdtRaw = await client.readContract({
+        address: usdt as `0x${string}`,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [w.address as `0x${string}`],
+      });
+      setUsdtBalance(formatUnits(usdtRaw as bigint, 6));
+    } catch {
+      setUsdtBalance("0");
+    }
+  }
+
+  async function onBackupWallet() {
+    setWalletErr(null);
+    try {
+      const auth = await requireLocalAuth("Backup wallet secret");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+      const secret = await getWalletBackupSecret();
+      setBackupType(secret.type);
+      setBackupSecret(secret.value);
+      setBackupOpen(true);
+    } catch (e: any) {
+      setWalletErr(e?.message || "Could not open wallet backup.");
+    }
+  }
+
+  async function onConfirmBackupDone() {
+    await markWalletBackedUp();
+    setBackedUp(true);
+    setBackupOpen(false);
+  }
+
+  async function onGenerateOrRegenerateWallet() {
+    if (!chain) return;
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth(wallet?.address ? "Regenerate smart wallet" : "Create smart wallet");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      if (wallet?.address) {
+        if (!backedUp) {
+          throw new Error("Back up your current wallet before regenerating.");
+        }
+        await new Promise<void>((resolve, reject) => {
+          Alert.alert(
+            "Regenerate wallet?",
+            "This will create a new wallet key. Ensure your current wallet backup is safely stored. Lost keys cannot be recovered.",
+            [
+              { text: "Cancel", style: "cancel", onPress: () => reject(new Error("Cancelled")) },
+              { text: "I understand, continue", style: "destructive", onPress: () => resolve() },
+            ],
+          );
+        });
+        await regenerateWalletKey();
+      }
+
+      const res = await ensureSmartAccount(chain);
+      setWallet({ address: res.address });
+      await refreshWalletMeta(chain);
+    } catch (e: any) {
+      if (e?.message !== "Cancelled") setWalletErr(e?.message || "Could not generate wallet");
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function onSendToken() {
+    if (!chain || !wallet?.address) return;
+    try {
+      const auth = await requireLocalAuth(`Send ${sendToken}`);
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      const to = sendTo.trim();
+      const amount = Number(sendAmount);
+      if (!/^0x[a-fA-F0-9]{40}$/.test(to)) throw new Error("Enter a valid wallet address.");
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid amount.");
+
+      const tokenAddress = sendToken === "USDC" ? chain.usdc_address : getUsdtAddress(chain.chain);
+      if (!tokenAddress) throw new Error(`${sendToken} is not configured for this network.`);
+
+      const amountRaw = BigInt(Math.round(amount * 1_000_000));
+      const { client } = await ensureSmartAccount(chain);
+      const data = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "transfer",
+        args: [to as `0x${string}`, amountRaw],
+      });
+      await client.sendTransaction({
+        to: tokenAddress as `0x${string}`,
+        data,
+      });
+      setSendOpen(false);
+      setSendAmount("");
+      setSendTo("");
+      await refreshWalletMeta(chain);
+    } catch (e: any) {
+      setWalletErr(e?.message || "Send failed.");
     }
   }
 
@@ -179,7 +363,10 @@ export default function MarketAccountTab() {
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text style={{ color: "#fff", fontSize: 24, fontWeight: "900" }}>Market Account</Text>
           <Pressable
-            onPress={load}
+            onPress={async () => {
+              await load();
+              await loadChains();
+            }}
             style={{ width: 44, height: 44, borderRadius: 16, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
           >
             <Ionicons name="refresh" size={18} color="#fff" />
@@ -332,8 +519,7 @@ export default function MarketAccountTab() {
                     onPress={async () => {
                       setChain(c);
                       await setPreferredMarketChain(c.chain);
-                      const w = await getMyWalletForChain(c.chain);
-                      setWallet(w ? { address: w.address } : null);
+                      await refreshWalletMeta(c);
                     }}
                     style={{
                       paddingHorizontal: 12,
@@ -366,29 +552,79 @@ export default function MarketAccountTab() {
             <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
               {wallet?.address ? wallet.address : "No wallet address generated"}
             </Text>
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              Backup status: {backedUp ? "Backed up" : "Not backed up"}
+            </Text>
+            <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 13 }}>
+              USDC: {Number(usdcBalance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            </Text>
+            <Text style={{ marginTop: 4, color: "#fff", fontWeight: "900", fontSize: 13 }}>
+              USDT: {Number(usdtBalance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            </Text>
           </View>
 
           {walletErr ? (
             <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{walletErr}</Text>
           ) : null}
 
+          <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
+            <Pressable
+              disabled={!wallet?.address}
+              onPress={onBackupWallet}
+              style={{
+                flex: 1,
+                borderRadius: 14,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                opacity: wallet?.address ? 1 : 0.6,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Backup</Text>
+            </Pressable>
+            <Pressable
+              disabled={!wallet?.address}
+              onPress={async () => {
+                if (!wallet?.address) return;
+                await Clipboard.setStringAsync(wallet.address);
+                Alert.alert("Copied", "Wallet address copied to clipboard.");
+              }}
+              style={{
+                flex: 1,
+                borderRadius: 14,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                opacity: wallet?.address ? 1 : 0.6,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Receive</Text>
+            </Pressable>
+            <Pressable
+              disabled={!wallet?.address}
+              onPress={() => setSendOpen(true)}
+              style={{
+                flex: 1,
+                borderRadius: 14,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                opacity: wallet?.address ? 1 : 0.6,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Send</Text>
+            </Pressable>
+          </View>
+
           <Pressable
             disabled={!chain?.active || walletBusy}
-            onPress={async () => {
-              if (!chain) return;
-              setWalletErr(null);
-              setWalletBusy(true);
-              try {
-                const auth = await requireLocalAuth("Create smart wallet");
-                if (!auth.ok) throw new Error(auth.message || "Authentication required");
-                const res = await ensureSmartAccount(chain);
-                setWallet({ address: res.address });
-              } catch (e: any) {
-                setWalletErr(e?.message || "Could not generate wallet");
-              } finally {
-                setWalletBusy(false);
-              }
-            }}
+            onPress={onGenerateOrRegenerateWallet}
             style={{
               marginTop: 12,
               borderRadius: 18,
@@ -400,7 +636,7 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {walletBusy ? "Generating..." : wallet?.address ? "Regenerate wallet" : "Generate wallet"}
+              {walletBusy ? "Working..." : wallet?.address ? "Regenerate wallet" : "Generate wallet"}
             </Text>
           </Pressable>
         </CardBox>
@@ -427,6 +663,94 @@ export default function MarketAccountTab() {
           </Pressable>
         </CardBox>
       </ScrollView>
+
+      <Modal visible={backupOpen} transparent animationType="slide" onRequestClose={() => setBackupOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
+          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+              Backup {backupType === "mnemonic" ? "Seed Phrase" : "Private Key"}
+            </Text>
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              Store this offline. Anyone with this can access your wallet.
+            </Text>
+            <Text selectable style={{ marginTop: 12, color: "#fff", fontWeight: "800", lineHeight: 22 }}>
+              {backupSecret}
+            </Text>
+            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
+              <Pressable
+                onPress={async () => {
+                  await Clipboard.setStringAsync(backupSecret);
+                  Alert.alert("Copied", "Backup secret copied.");
+                }}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Copy</Text>
+              </Pressable>
+              <Pressable
+                onPress={onConfirmBackupDone}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>I backed it up</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={sendOpen} transparent animationType="slide" onRequestClose={() => setSendOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
+          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Send Token</Text>
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+              {(["USDC", "USDT"] as const).map((t) => (
+                <Pressable
+                  key={t}
+                  onPress={() => setSendToken(t)}
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 999,
+                    backgroundColor: sendToken === t ? "rgba(59,130,246,0.30)" : "rgba(255,255,255,0.08)",
+                    borderWidth: 1,
+                    borderColor: sendToken === t ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>{t}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput
+              value={sendTo}
+              onChangeText={setSendTo}
+              placeholder="Recipient address (0x...)"
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
+            />
+            <TextInput
+              value={sendAmount}
+              onChangeText={setSendAmount}
+              placeholder={`Amount (${sendToken})`}
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              keyboardType="decimal-pad"
+              style={{ marginTop: 10, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
+            />
+            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
+              <Pressable
+                onPress={() => setSendOpen(false)}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={onSendToken}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Send</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }

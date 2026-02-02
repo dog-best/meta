@@ -58,6 +58,7 @@ type OrderRow = {
   released_at: string | null;
   refunded_at: string | null;
   cancelled_at: string | null;
+  delivery_address?: { geo?: any } | null;
 };
 
 type ListingRow = {
@@ -234,7 +235,7 @@ export default function OrderDetails() {
       const { data: o, error: oErr } = await supabase
         .from(ORDERS_TABLE)
         .select(
-          "id,buyer_id,seller_id,listing_id,quantity,unit_price,amount,currency,status,created_at,in_escrow_at,out_for_delivery_at,delivered_at,released_at,refunded_at,cancelled_at"
+          "id,buyer_id,seller_id,listing_id,quantity,unit_price,amount,currency,status,created_at,in_escrow_at,out_for_delivery_at,delivered_at,released_at,refunded_at,cancelled_at,delivery_address"
         )
         .eq("id", oid)
         .maybeSingle();
@@ -393,10 +394,11 @@ async function releaseFunds() {
 
   async function cancelOrder() {
     if (!order) return;
+    if (busy) return;
     setBusy(true);
     setErr(null);
     try {
-      await callFn(FN_BUYER_CANCEL, { order_id: order.id });
+      await callFn(FN_BUYER_CANCEL, { order_id: order.id }, 15000);
       await load();
     } catch (e: any) {
       setErr(e?.message || "Cancel failed");
@@ -586,6 +588,41 @@ async function pickAndUpload(access: "preview" | "final") {
                 </View>
               </View>
             </View>
+
+            {(isSeller || isBuyer) && (order as any)?.delivery_address?.geo ? (
+              <Card title={isSeller ? "Buyer delivery location" : "Your delivery location"}>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>
+                  {(order as any)?.delivery_address?.geo?.label || "Location set"}
+                </Text>
+                <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                  {(order as any)?.delivery_address?.geo?.city || "-"},{" "}
+                  {(order as any)?.delivery_address?.geo?.region || "-"},{" "}
+                  {(order as any)?.delivery_address?.geo?.country || "-"}
+                </Text>
+                {Number.isFinite(Number((order as any)?.delivery_address?.geo?.lat)) &&
+                Number.isFinite(Number((order as any)?.delivery_address?.geo?.lng)) ? (
+                  <Pressable
+                    onPress={() =>
+                      Linking.openURL(
+                        `https://maps.google.com/?q=${(order as any).delivery_address.geo.lat},${(order as any).delivery_address.geo.lng}`,
+                      )
+                    }
+                    style={{
+                      marginTop: 10,
+                      alignSelf: "flex-start",
+                      borderRadius: 12,
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      backgroundColor: "rgba(255,255,255,0.06)",
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.12)",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Open in Maps</Text>
+                  </Pressable>
+                ) : null}
+              </Card>
+            ) : null}
 
             {/* Deliverables & Previews (works for digital + physical; message adapts) */}
             <Card title="Deliverables & previews">
