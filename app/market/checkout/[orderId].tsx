@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
+import { fetchJsonWithTimeout, getSupabaseAnonKeyOrThrow, getSupabaseFunctionsBaseUrl, getSupabaseJwtOrThrow } from "@/services/net";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { payUsdcForOrder } from "@/services/market/usdcCheckout";
@@ -21,60 +22,43 @@ const PURPLE = "#7C3AED";
 const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
 
 async function invokeCheckoutWallet(orderId: string) {
-  const parseInvokeError = async (error: any) => {
-    try {
-      const response = error?.context;
-      if (response && typeof response?.json === "function") {
-        const j = await response.json();
-        const msg = String(j?.message || j?.error || j?.code || "").trim();
-        if (msg) return msg;
-      }
-      if (response && typeof response?.text === "function") {
-        const t = String(await response.text());
-        if (t) return t.slice(0, 400);
-      }
-    } catch {
-      // ignore parser errors and fallback to default message
-    }
-    return String(error?.message || "Wallet checkout failed");
-  };
-
-  const runWithTimeout = async () => {
-    const invokePromise = supabase.functions.invoke(FN_MARKET_CHECKOUT_WALLET, {
-      body: { order_id: orderId },
-    });
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000),
+  const run = async (token: string) => {
+    const { res, json, text } = await fetchJsonWithTimeout(
+      `${getSupabaseFunctionsBaseUrl()}/${FN_MARKET_CHECKOUT_WALLET}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          apikey: getSupabaseAnonKeyOrThrow(),
+        },
+        body: JSON.stringify({ order_id: orderId }),
+      },
+      20000,
     );
-    return (await Promise.race([invokePromise, timeoutPromise])) as Awaited<typeof invokePromise>;
+    return { res, json, text };
   };
 
-  let hasSession = !!(await supabase.auth.getSession()).data.session?.access_token;
-  if (!hasSession) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) throw refreshErr;
-    hasSession = !!refreshed.session?.access_token;
-  }
-  if (!hasSession) throw new Error("Session expired. Please sign in again.");
+  let token = await getSupabaseJwtOrThrow();
+  let out = await run(token);
 
-  let res = await runWithTimeout();
-  if (!res.error) return res;
-
-  const msg = String((res.error as any)?.message || "");
-  if (/jwt|unauthor|session/i.test(msg)) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) throw refreshErr;
-    const retryHasSession = !!refreshed.session?.access_token;
-    if (!retryHasSession) throw new Error("Session expired. Please sign in again.");
-    res = await runWithTimeout();
+  if (!out.res.ok) {
+    const errMsg = String((out.json as any)?.message || (out.json as any)?.error || out.text || "");
+    if (out.res.status === 401 || /jwt|session|unauthor/i.test(errMsg)) {
+      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+      if (refreshErr) throw refreshErr;
+      token = refreshed.session?.access_token || "";
+      if (!token) throw new Error("Session expired. Please sign in again.");
+      out = await run(token);
+    }
   }
 
-  if (res.error) {
-    const msg = await parseInvokeError(res.error);
-    throw new Error(msg);
+  if (!out.res.ok) {
+    const errMsg = String((out.json as any)?.message || (out.json as any)?.error || out.text || "Wallet checkout failed");
+    throw new Error(errMsg);
   }
 
-  return res;
+  return out.json;
 }
 
 function Pill({
