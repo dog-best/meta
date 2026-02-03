@@ -261,9 +261,21 @@ export default function Checkout() {
     console.log("[Checkout] payWithWallet start", { orderId: oid });
     setBusy(true);
     try {
+      // Force-refresh session right before secured function call to reduce Invalid JWT issues.
+      await supabase.auth.refreshSession().catch(() => null);
       const auth = await requireLocalAuth("Confirm wallet payment");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
+      try {
+        await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
+      } catch (e: any) {
+        const msg = String(e?.message || "");
+        if (/jwt|session expired|unauthor/i.test(msg)) {
+          await supabase.auth.refreshSession().catch(() => null);
+          await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
+        } else {
+          throw e;
+        }
+      }
 
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {

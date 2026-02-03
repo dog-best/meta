@@ -95,5 +95,15 @@ export async function getSupabaseJwtOrThrow() {
   }
 
   if (!token) throw new Error("No session. Please sign in again.");
+  if (token.split(".").length !== 3) {
+    throw new Error("Invalid auth token format. Please sign in again.");
+  }
+
+  // Final validation: do not return a token that Supabase Auth cannot verify.
+  const finalProbe = await supabase.auth.getUser(token);
+  if (finalProbe.error || !finalProbe.data.user) {
+    throw new Error("Session expired. Please sign in again.");
+  }
+
   return token;
 }
