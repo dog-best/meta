@@ -549,7 +549,7 @@ export default function MarketAccountTab() {
               borderColor: "rgba(255,255,255,0.12)",
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Open Fintech Tabs</Text>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Open Utility section</Text>
           </Pressable>
         </CardBox>
 

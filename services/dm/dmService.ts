@@ -214,16 +214,53 @@ export async function listInboxThreads(): Promise<InboxThread[]> {
 export async function fetchMessages(threadId: string, limit = 50) {
   const { data, error } = await supabase
     .from("dm_messages")
-    .select(
-      "id,thread_id,sender_id,body,created_at,meta,has_attachments,reply_to_message_id,dm_message_attachments(*),reply_to:dm_messages!dm_messages_reply_to_message_id_fkey(id,sender_id,body,created_at)",
-    )
+    .select("id,thread_id,sender_id,body,created_at,meta,has_attachments,reply_to_message_id")
     .eq("thread_id", threadId)
     .order("created_at", { ascending: true })
     .limit(limit);
 
   if (error) throw new Error(error.message);
-  const rows = (data ?? []) as DMMessage[];
+  const rows = ((data ?? []) as DMMessage[]).map((m) => ({
+    ...m,
+    dm_message_attachments: [],
+    reply_to: null,
+  }));
   const messageIds = rows.map((m) => m.id);
+  const replyIds = Array.from(
+    new Set(rows.map((m) => m.reply_to_message_id).filter(Boolean) as string[]),
+  );
+
+  if (messageIds.length) {
+    const { data: atts, error: attErr } = await supabase
+      .from("dm_message_attachments")
+      .select("id,message_id,kind,storage_bucket,storage_path,public_url,mime_type,duration_sec,meta,created_at")
+      .in("message_id", messageIds);
+    if (attErr) throw new Error(attErr.message);
+    const attMap = new Map<string, DMAttachment[]>();
+    (atts ?? []).forEach((a: any) => {
+      const list = attMap.get(a.message_id) ?? [];
+      list.push(a as DMAttachment);
+      attMap.set(a.message_id, list);
+    });
+    rows.forEach((m) => {
+      m.dm_message_attachments = attMap.get(m.id) ?? [];
+    });
+  }
+
+  if (replyIds.length) {
+    const { data: replies, error: repErr } = await supabase
+      .from("dm_messages")
+      .select("id,sender_id,body,created_at")
+      .in("id", replyIds);
+    if (repErr) throw new Error(repErr.message);
+    const repMap = new Map<string, any>();
+    (replies ?? []).forEach((r: any) => repMap.set(r.id, r));
+    rows.forEach((m) => {
+      const rid = m.reply_to_message_id ?? "";
+      m.reply_to = rid ? (repMap.get(rid) ?? null) : null;
+    });
+  }
+
   const reactionsMap = new Map<string, DMReaction[]>();
   if (messageIds.length) {
     const { data: reactions } = await supabase
