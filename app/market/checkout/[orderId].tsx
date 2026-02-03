@@ -6,7 +6,6 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
-import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
@@ -19,6 +18,44 @@ const PURPLE = "#7C3AED";
 
 // ✅ Real function names in your repo
 const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
+
+async function invokeCheckoutWallet(orderId: string) {
+  const runWithTimeout = async () => {
+    const invokePromise = supabase.functions.invoke(FN_MARKET_CHECKOUT_WALLET, {
+      body: { order_id: orderId },
+    });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000),
+    );
+    return (await Promise.race([invokePromise, timeoutPromise])) as Awaited<typeof invokePromise>;
+  };
+
+  let hasSession = !!(await supabase.auth.getSession()).data.session?.access_token;
+  if (!hasSession) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) throw refreshErr;
+    hasSession = !!refreshed.session?.access_token;
+  }
+  if (!hasSession) throw new Error("Session expired. Please sign in again.");
+
+  let res = await runWithTimeout();
+  if (!res.error) return res;
+
+  const msg = String((res.error as any)?.message || "");
+  if (/jwt|unauthor|session/i.test(msg)) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) throw refreshErr;
+    const retryHasSession = !!refreshed.session?.access_token;
+    if (!retryHasSession) throw new Error("Session expired. Please sign in again.");
+    res = await runWithTimeout();
+  }
+
+  if (res.error) {
+    throw new Error((res.error as any)?.message || "Wallet checkout failed");
+  }
+
+  return res;
+}
 
 function Pill({
   icon,
@@ -267,20 +304,13 @@ export default function Checkout() {
       console.log("[Checkout] payWithWallet auth ok");
       try {
         console.log("[Checkout] payWithWallet callFn start");
-        await Promise.race([
-          callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000)),
-        ]);
+        await invokeCheckoutWallet(oid);
         console.log("[Checkout] payWithWallet callFn ok");
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (/jwt|session expired|unauthor/i.test(msg)) {
           console.log("[Checkout] payWithWallet retry after session refresh");
-          await supabase.auth.refreshSession().catch(() => null);
-          await Promise.race([
-            callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000)),
-          ]);
+          await invokeCheckoutWallet(oid);
           console.log("[Checkout] payWithWallet retry ok");
         } else {
           throw e;
