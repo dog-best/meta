@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
-import { fetchJsonWithTimeout, getSupabaseAnonKeyOrThrow, getSupabaseFunctionsBaseUrl, getSupabaseJwtOrThrow } from "@/services/net";
+import { fetchJsonWithTimeout, getSupabaseAnonKeyOrThrow, getSupabaseFunctionsBaseUrl } from "@/services/net";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { payUsdcForOrder } from "@/services/market/usdcCheckout";
@@ -22,34 +22,56 @@ const PURPLE = "#7C3AED";
 const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
 
 async function invokeCheckoutWallet(orderId: string) {
-  const run = async (token: string) => {
-    const { res, json, text } = await fetchJsonWithTimeout(
-      `${getSupabaseFunctionsBaseUrl()}/${FN_MARKET_CHECKOUT_WALLET}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          apikey: getSupabaseAnonKeyOrThrow(),
-        },
-        body: JSON.stringify({ order_id: orderId }),
-      },
-      20000,
+  const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out. Please try again.`)), ms),
     );
-    return { res, json, text };
+    return await Promise.race([promise, timeout]);
   };
 
-  let token = await getSupabaseJwtOrThrow();
+  const getFunctionToken = async () => {
+    const sessionToken = (await withTimeout(supabase.auth.getSession(), 8000, "Session check") as any)?.data?.session?.access_token || "";
+    if (sessionToken) return sessionToken;
+    const refreshed = await withTimeout(supabase.auth.refreshSession(), 10000, "Session refresh") as any;
+    const token = refreshed?.data?.session?.access_token || "";
+    if (!token) throw new Error("Session expired. Please sign in again.");
+    return token;
+  };
+
+  const run = async (token: string) =>
+    await withTimeout(
+      fetchJsonWithTimeout(
+        `${getSupabaseFunctionsBaseUrl()}/${FN_MARKET_CHECKOUT_WALLET}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: getSupabaseAnonKeyOrThrow(),
+          },
+          body: JSON.stringify({ order_id: orderId }),
+        },
+        20000,
+      ),
+      25000,
+      "Checkout request",
+    );
+
+  console.log("[Checkout] invokeCheckoutWallet token start");
+  let token = await getFunctionToken();
+  console.log("[Checkout] invokeCheckoutWallet token ok");
   let out = await run(token);
+  console.log("[Checkout] invokeCheckoutWallet first response", { ok: out.res.ok, status: out.res.status });
 
   if (!out.res.ok) {
     const errMsg = String((out.json as any)?.message || (out.json as any)?.error || out.text || "");
     if (out.res.status === 401 || /jwt|session|unauthor/i.test(errMsg)) {
-      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-      if (refreshErr) throw refreshErr;
-      token = refreshed.session?.access_token || "";
+      console.log("[Checkout] invokeCheckoutWallet retry token refresh");
+      const refreshed = await withTimeout(supabase.auth.refreshSession(), 10000, "Session refresh") as any;
+      token = refreshed?.data?.session?.access_token || "";
       if (!token) throw new Error("Session expired. Please sign in again.");
       out = await run(token);
+      console.log("[Checkout] invokeCheckoutWallet retry response", { ok: out.res.ok, status: out.res.status });
     }
   }
 
