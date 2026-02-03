@@ -415,6 +415,24 @@ export default function MarketAccountTab() {
         <Text style={{ marginTop: 6, color: MUTED }}>
           Manage your store profile, listings, and marketplace wallet.
         </Text>
+        <Pressable
+          onPress={async () => {
+            await supabase.auth.signOut().catch(() => undefined);
+            router.replace("/(auth)/login" as any);
+          }}
+          style={{
+            marginTop: 10,
+            alignSelf: "flex-start",
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            backgroundColor: "rgba(124,58,237,0.20)",
+            borderWidth: 1,
+            borderColor: "rgba(124,58,237,0.45)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Sign out</Text>
+        </Pressable>
 
         {!profile ? (
           <CardBox>
@@ -826,4 +844,3 @@ export default function MarketAccountTab() {
     </LinearGradient>
   );
 }
-

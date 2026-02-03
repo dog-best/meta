@@ -67,6 +67,71 @@ function money(currency: string | null, amt: any) {
   return `NGN ${n.toLocaleString()}`;
 }
 
+function moneyByDisplay(currency: "NGN" | "USDC", amt: any) {
+  const n = Number(amt ?? 0);
+  if (!Number.isFinite(n)) return currency === "USDC" ? "$0" : "NGN 0";
+  return currency === "USDC" ? `$${n.toLocaleString()}` : `NGN ${n.toLocaleString()}`;
+}
+
+function isDiscountActive(discount: any) {
+  if (!discount?.enabled) return false;
+  if (!discount?.endsAt) return true;
+  const end = new Date(String(discount.endsAt)).getTime();
+  return Number.isFinite(end) ? end > Date.now() : true;
+}
+
+function resolveListingDisplayPrice(item: ListingRow) {
+  const po = (item.payment_options ?? {}) as any;
+  const discount = po?.discount ?? {};
+  const fx = Number(po?.fx_rate_ngn_per_usd ?? 0);
+  const baseCurrency: "NGN" | "USDC" = po?.base_currency === "USD" ? "USDC" : "NGN";
+  const pbNgn = Number(po?.price_book?.ngn ?? NaN);
+  const pbUsd = Number(po?.price_book?.usd ?? NaN);
+  const canonical = Number(item.price_amount ?? 0);
+  const itemCurrency = String(item.currency ?? "").toUpperCase() === "NGN" ? "NGN" : "USDC";
+  const discountOn = isDiscountActive(discount);
+
+  const nowBase =
+    baseCurrency === "NGN"
+      ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
+      : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
+  const wasBase =
+    baseCurrency === "NGN"
+      ? Number(discount?.originalPriceNgn)
+      : Number(discount?.originalPriceUsd);
+
+  const fallbackNowBase =
+    baseCurrency === "NGN"
+      ? itemCurrency === "NGN"
+        ? canonical
+        : Number.isFinite(fx) && fx > 0
+          ? canonical * fx
+          : NaN
+      : itemCurrency === "USDC"
+        ? canonical
+        : Number.isFinite(fx) && fx > 0
+          ? canonical / fx
+          : NaN;
+
+  const now = Number.isFinite(nowBase) && nowBase > 0 ? nowBase : fallbackNowBase;
+  const was = Number.isFinite(wasBase) && wasBase > 0 ? wasBase : NaN;
+
+  const altCurrency: "NGN" | "USDC" = baseCurrency === "NGN" ? "USDC" : "NGN";
+  const altNow =
+    altCurrency === "NGN"
+      ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
+      : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
+
+  return {
+    baseCurrency,
+    now,
+    was,
+    altCurrency,
+    altNow,
+    discountOn,
+  };
+}
+
 function publicSellerLogo(path?: string | null) {
   if (!path) return null;
   return supabase.storage.from("market-sellers").getPublicUrl(path).data.publicUrl;
@@ -170,27 +235,27 @@ export default function MarketHome() {
 
   async function loadDirectory() {
     const nowIso = new Date().toISOString();
+    const selectCols = "user_id,market_username,display_name,business_name,bio,is_verified,logo_path,featured_enabled,featured_until,active";
 
-    const [featuredRes, verifiedRes] = await Promise.all([
-      supabase
-        .from("market_seller_public_profiles")
-        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,featured_enabled,featured_until")
-        .eq("active", true)
-        .eq("featured_enabled", true)
-        .or(`featured_until.is.null,featured_until.gte.${nowIso}`)
-        .order("updated_at", { ascending: false })
-        .limit(300),
-      supabase
-        .from("market_seller_public_profiles")
-        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,featured_enabled,featured_until")
-        .eq("active", true)
-        .eq("is_verified", true)
-        .order("updated_at", { ascending: false })
-        .limit(300),
-    ]);
+    const fetchRows = async (table: string) => {
+      const res = await supabase.from(table).select(selectCols).order("updated_at", { ascending: false }).limit(400);
+      return (res.data ?? []) as SellerCard[];
+    };
 
-    setFeaturedSellers((featuredRes.data ?? []) as SellerCard[]);
-    setVerifiedSellers((verifiedRes.data ?? []) as SellerCard[]);
+    let rows = await fetchRows("market_seller_public_profiles");
+    if (!rows.length) rows = await fetchRows("market_seller_profiles");
+
+    const featured = rows.filter((r: any) => {
+      if (r?.active === false) return false;
+      if (!r?.featured_enabled) return false;
+      if (!r?.featured_until) return true;
+      const until = new Date(String(r.featured_until)).toISOString();
+      return until >= nowIso;
+    });
+    const verified = rows.filter((r: any) => r?.active !== false && !!r?.is_verified);
+
+    setFeaturedSellers(featured);
+    setVerifiedSellers(verified);
   }
 
   async function loadListings() {
@@ -292,10 +357,8 @@ export default function MarketHome() {
     const coverUrl = item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
     const seller = sellersMap[item.seller_id];
     const stats = statsMap[item.id] ?? { completed: 0, cancelled: 0, failed: 0 };
-    const discount = item.payment_options?.discount ?? null;
-    const showDiscount = !!discount?.enabled && (!discount?.endsAt || new Date(discount.endsAt).getTime() > Date.now());
-    const original = Number(discount?.originalPrice ?? item.price_amount);
-    const discounted = Number(discount?.discountedPrice ?? item.price_amount);
+    const displayPrice = resolveListingDisplayPrice(item);
+    const showDiscount = displayPrice.discountOn && Number.isFinite(displayPrice.was) && displayPrice.was > displayPrice.now;
 
     return (
       <Pressable
@@ -308,11 +371,31 @@ export default function MarketHome() {
             <View style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: "rgba(0,0,0,0.6)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
               {showDiscount ? (
                 <>
-                  <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 11 }}>{money(item.currency, original)}</Text>
-                  <Text style={{ color: "#FCA5A5", fontWeight: "900", fontSize: 12 }}>{money(item.currency, discounted)}</Text>
+                  <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 11 }}>
+                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.was)}
+                  </Text>
+                  <Text style={{ color: "#FCA5A5", fontWeight: "900", fontSize: 12 }}>
+                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.now)}
+                  </Text>
+                  {Number.isFinite(displayPrice.altNow) && (
+                    <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                      {displayPrice.altCurrency === "USDC" ? "Approx " : ""}
+                      {moneyByDisplay(displayPrice.altCurrency, displayPrice.altNow)}
+                    </Text>
+                  )}
                 </>
               ) : (
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{money(item.currency, item.price_amount)}</Text>
+                <>
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.now)}
+                  </Text>
+                  {Number.isFinite(displayPrice.altNow) && (
+                    <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                      {displayPrice.altCurrency === "USDC" ? "Approx " : ""}
+                      {moneyByDisplay(displayPrice.altCurrency, displayPrice.altNow)}
+                    </Text>
+                  )}
+                </>
               )}
             </View>
           </View>

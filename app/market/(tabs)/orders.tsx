@@ -220,6 +220,7 @@ export default function MarketOrdersTab() {
   const [err, setErr] = useState<string | null>(null);
 
   const [mode, setMode] = useState<"all" | "buying" | "selling">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "completed" | "cancelled">("all");
   const [items, setItems] = useState<FnItem[]>([]);
 
   // Prevent state updates after unmount
@@ -341,6 +342,17 @@ export default function MarketOrdersTab() {
     router.push(`/market/order/${id}` as any);
   }
 
+  const visibleItems = useMemo(() => {
+    if (statusFilter === "all") return items;
+    if (statusFilter === "pending") {
+      return items.filter((o) => ["CREATED", "IN_ESCROW", "OUT_FOR_DELIVERY", "DELIVERED"].includes((o.status || "").toUpperCase()));
+    }
+    if (statusFilter === "completed") {
+      return items.filter((o) => ["RELEASED"].includes((o.status || "").toUpperCase()));
+    }
+    return items.filter((o) => ["CANCELLED", "REFUNDED"].includes((o.status || "").toUpperCase()));
+  }, [items, statusFilter]);
+
   return (
     <LinearGradient
       colors={[BG1, BG0]}
@@ -400,6 +412,13 @@ export default function MarketOrdersTab() {
           <SegButton label="Selling" active={mode === "selling"} onPress={() => setMode("selling")} />
         </View>
 
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+          <SegButton label="All" active={statusFilter === "all"} onPress={() => setStatusFilter("all")} />
+          <SegButton label="Pending" active={statusFilter === "pending"} onPress={() => setStatusFilter("pending")} />
+          <SegButton label="Completed" active={statusFilter === "completed"} onPress={() => setStatusFilter("completed")} />
+          <SegButton label="Cancelled" active={statusFilter === "cancelled"} onPress={() => setStatusFilter("cancelled")} />
+        </View>
+
         {!!err ? <ErrorCard title="Couldn’t load orders" message={err} onRetry={() => load()} /> : null}
 
         {loading ? (
@@ -407,11 +426,11 @@ export default function MarketOrdersTab() {
             <ActivityIndicator />
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
           </View>
-        ) : items.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <EmptyState onGoMarket={() => router.push("/market/(tabs)" as any)} />
         ) : (
           <View style={{ marginTop: 12, gap: 10 }}>
-            {items.map((o) => {
+            {visibleItems.map((o) => {
               const title = o.listing?.title ?? "Order";
               const meta = `${o.listing?.category ?? "—"} • ${o.listing?.delivery_type ?? "—"}`;
               const img = o.cover_image?.public_url ?? null;

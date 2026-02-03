@@ -2,7 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking, Alert } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { callFn } from "@/services/functions";
@@ -623,8 +624,28 @@ async function pickAndUpload(access: "preview" | "final") {
                   <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                     Qty: {order.quantity}
                   </Text>
+                  <Pressable
+                    onPress={async () => {
+                      await Clipboard.setStringAsync(order.id);
+                      Alert.alert("Copied", "Order ID copied. Share it with support/admin when needed.");
+                    }}
+                    style={{
+                      marginTop: 8,
+                      borderRadius: 10,
+                      paddingVertical: 6,
+                      paddingHorizontal: 10,
+                      backgroundColor: "rgba(124,58,237,0.18)",
+                      borderWidth: 1,
+                      borderColor: "rgba(124,58,237,0.35)",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Copy Order ID</Text>
+                  </Pressable>
                 </View>
               </View>
+              <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.6)", fontSize: 11 }}>
+                Order ID: {order.id}
+              </Text>
             </View>
 
             {(isSeller || isBuyer) && (order as any)?.delivery_address?.geo ? (

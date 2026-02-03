@@ -20,6 +20,24 @@ const PURPLE = "#7C3AED";
 const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
 
 async function invokeCheckoutWallet(orderId: string) {
+  const parseInvokeError = async (error: any) => {
+    try {
+      const response = error?.context;
+      if (response && typeof response?.json === "function") {
+        const j = await response.json();
+        const msg = String(j?.message || j?.error || j?.code || "").trim();
+        if (msg) return msg;
+      }
+      if (response && typeof response?.text === "function") {
+        const t = String(await response.text());
+        if (t) return t.slice(0, 400);
+      }
+    } catch {
+      // ignore parser errors and fallback to default message
+    }
+    return String(error?.message || "Wallet checkout failed");
+  };
+
   const runWithTimeout = async () => {
     const invokePromise = supabase.functions.invoke(FN_MARKET_CHECKOUT_WALLET, {
       body: { order_id: orderId },
@@ -51,7 +69,8 @@ async function invokeCheckoutWallet(orderId: string) {
   }
 
   if (res.error) {
-    throw new Error((res.error as any)?.message || "Wallet checkout failed");
+    const msg = await parseInvokeError(res.error);
+    throw new Error(msg);
   }
 
   return res;

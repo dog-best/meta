@@ -467,26 +467,69 @@ export default function SellTab() {
       let unitPrice = enteredPrice;
       const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
       const listingCurrency: Currency = payMode === "ngn" ? "NGN" : "USDC";
-      if (priceBase === "USD" && listingCurrency === "NGN") {
+      const toNgn = (value: number) => {
+        if (priceBase === "NGN") return value;
         if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        unitPrice = enteredPrice * fxRate;
-      }
-      if (priceBase === "NGN" && listingCurrency === "USDC") {
+        return value * fxRate;
+      };
+      const toUsd = (value: number) => {
+        if (priceBase === "USD") return value;
         if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        unitPrice = enteredPrice / fxRate;
-      }
+        return value / fxRate;
+      };
+      const enteredPriceNgn = toNgn(enteredPrice);
+      const enteredPriceUsd = toUsd(enteredPrice);
+      unitPrice = listingCurrency === "NGN" ? enteredPriceNgn : enteredPriceUsd;
       if (discountEnabled) {
+        const op = safeNumber(discountOriginalPrice);
         const dp = safeNumber(discountPrice);
-        let effectiveDiscounted = dp;
-        if (priceBase === "USD" && listingCurrency === "NGN") {
-          if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-          effectiveDiscounted = dp * fxRate;
-        }
-        if (priceBase === "NGN" && listingCurrency === "USDC") {
-          if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-          effectiveDiscounted = dp / fxRate;
-        }
+        const effectiveDiscountedNgn = toNgn(dp);
+        const effectiveDiscountedUsd = toUsd(dp);
+        const effectiveDiscounted = listingCurrency === "NGN" ? effectiveDiscountedNgn : effectiveDiscountedUsd;
         unitPrice = effectiveDiscounted;
+        const effectiveOriginalNgn = toNgn(op);
+        const effectiveOriginalUsd = toUsd(op);
+        const effectiveOriginal = listingCurrency === "NGN" ? effectiveOriginalNgn : effectiveOriginalUsd;
+
+        const paymentOptions = {
+          allow_ngn: payMode === "ngn" || payMode === "all",
+          allow_crypto: payMode === "crypto" || payMode === "all",
+          allow_usdc: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
+          allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
+          chain_mode: cryptoNetworkMode,
+          coin_mode: cryptoCoinMode,
+          base_currency: priceBase,
+          fx_rate_ngn_per_usd: fxRate ?? null,
+          price_book: {
+            ngn: Number(enteredPriceNgn.toFixed(2)),
+            usd: Number(enteredPriceUsd.toFixed(6)),
+          },
+          discount: {
+            enabled: true,
+            // canonical values for checkout math (same unit as listing currency)
+            originalPrice: Number(effectiveOriginal.toFixed(6)),
+            discountedPrice: Number(effectiveDiscounted.toFixed(6)),
+            // display + analytics
+            baseCurrency: priceBase,
+            originalPriceBase: op,
+            discountedPriceBase: dp,
+            originalPriceNgn: Number(effectiveOriginalNgn.toFixed(2)),
+            discountedPriceNgn: Number(effectiveDiscountedNgn.toFixed(2)),
+            originalPriceUsd: Number(effectiveOriginalUsd.toFixed(6)),
+            discountedPriceUsd: Number(effectiveDiscountedUsd.toFixed(6)),
+            startsAt: new Date().toISOString(),
+            endsAt: discountEndsAt.trim() ? new Date(discountEndsAt.trim()).toISOString() : null,
+          },
+          expires_at: autoDeleteAt.trim() ? new Date(autoDeleteAt.trim()).toISOString() : null,
+        };
+        await submitListing({
+          user,
+          listingCurrency,
+          qty,
+          unitPrice,
+          paymentOptions,
+        });
+        return;
       }
       const paymentOptions = {
         allow_ngn: payMode === "ngn" || payMode === "all",
@@ -495,43 +538,76 @@ export default function SellTab() {
         allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
         chain_mode: cryptoNetworkMode,
         coin_mode: cryptoCoinMode,
-        discount: discountEnabled
-          ? {
-              enabled: true,
-              originalPrice: safeNumber(discountOriginalPrice),
-              discountedPrice: safeNumber(discountPrice),
-              startsAt: new Date().toISOString(),
-              endsAt: discountEndsAt.trim() ? new Date(discountEndsAt.trim()).toISOString() : null,
-            }
-          : { enabled: false },
+        base_currency: priceBase,
+        fx_rate_ngn_per_usd: fxRate ?? null,
+        price_book: {
+          ngn: Number(enteredPriceNgn.toFixed(2)),
+          usd: Number(enteredPriceUsd.toFixed(6)),
+        },
+        discount: { enabled: false },
         expires_at: autoDeleteAt.trim() ? new Date(autoDeleteAt.trim()).toISOString() : null,
       };
+      await submitListing({
+        user,
+        listingCurrency,
+        qty,
+        unitPrice,
+        paymentOptions,
+      });
+      return;
+    } catch (e: any) {
+      const msg = e?.message ?? "Could not create listing";
+      // Helpful hint for the exact error you're seeing
+      if (String(msg).toLowerCase().includes("row-level security")) {
+        Alert.alert("RLS blocked", "Your RLS policies for market_listings or market_listing_images are blocking inserts.\n\nRun the SQL policy fix I sent and try again.");
+      } else {
+        Alert.alert("Failed", msg);
+      }
+    } finally {
+      setSubmitting(false);
+      setStage(null);
+      console.log("[SellTab] submit end");
+    }
+  }
 
-      // Put website URL into description for now (until you add a DB column later)
-      // This keeps you moving without migrations.
-      const descBase = description.trim() || "";
-      const extra =
-        category === "service" && deliveryType === "digital" && websiteUrl.trim()
-          ? `\n\n---\nWebsite preview link: ${websiteUrl.trim()}\n(Note: preview/watermark coming soon.)`
-          : "";
-      const finalDesc = (descBase + extra).trim() || null;
-      const availability = buildAvailability();
+  async function submitListing({
+    user,
+    listingCurrency,
+    qty,
+    unitPrice,
+    paymentOptions,
+  }: {
+    user: any;
+    listingCurrency: Currency;
+    qty: number | null;
+    unitPrice: number;
+    paymentOptions: any;
+  }) {
+    // Put website URL into description for now (until you add a DB column later)
+    // This keeps you moving without migrations.
+    const descBase = description.trim() || "";
+    const extra =
+      category === "service" && deliveryType === "digital" && websiteUrl.trim()
+        ? `\n\n---\nWebsite preview link: ${websiteUrl.trim()}\n(Note: preview/watermark coming soon.)`
+        : "";
+    const finalDesc = (descBase + extra).trim() || null;
+    const availability = buildAvailability();
 
-      console.log("[SellTab] createListing -> start");
-      setStage("Creating listing...");
-      const listing = await createListing({
-        seller_id: user.id,
-        category,
-        sub_category: finalSubCategory(),
-        delivery_type: deliveryType,
-        title: title.trim(),
-        description: finalDesc,
-        price_amount: unitPrice,
-        currency: listingCurrency,
-        stock_qty: category === "product" ? qty : null,
-        availability,
-        payment_options: paymentOptions,
-      } as any);
+    console.log("[SellTab] createListing -> start");
+    setStage("Creating listing...");
+    const listing = await createListing({
+      seller_id: user.id,
+      category,
+      sub_category: finalSubCategory(),
+      delivery_type: deliveryType,
+      title: title.trim(),
+      description: finalDesc,
+      price_amount: unitPrice,
+      currency: listingCurrency,
+      stock_qty: category === "product" ? qty : null,
+      availability,
+      payment_options: paymentOptions,
+    } as any);
       console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
 
       if (!listing?.id) throw new Error("Listing creation failed (missing id)");
@@ -585,40 +661,27 @@ export default function SellTab() {
         }
       }
 
-      Alert.alert("Posted", "Your listing is live.");
-      setTitle("");
-      setDescription("");
-      setWebsiteUrl("");
-      setPrice("");
-      setStockQty("");
-      setImages([]);
-      setUseCustomSub(false);
-      setCustomSub("");
-      setAvailabilityScope("global");
-      setAvailabilityContinents([]);
-      setAvailabilityCountryName("");
-      setAvailabilityCountryCode("");
-      setAvailabilityState("");
-      setAvailabilityCity("");
-      setAvailabilityRadiusKm("");
-      setAvailabilityCenter(null);
-      setAvailabilityNote("");
-      setStage(null);
+    Alert.alert("Posted", "Your listing is live.");
+    setTitle("");
+    setDescription("");
+    setWebsiteUrl("");
+    setPrice("");
+    setStockQty("");
+    setImages([]);
+    setUseCustomSub(false);
+    setCustomSub("");
+    setAvailabilityScope("global");
+    setAvailabilityContinents([]);
+    setAvailabilityCountryName("");
+    setAvailabilityCountryCode("");
+    setAvailabilityState("");
+    setAvailabilityCity("");
+    setAvailabilityRadiusKm("");
+    setAvailabilityCenter(null);
+    setAvailabilityNote("");
+    setStage(null);
 
-      router.push("/market/(tabs)" as any);
-    } catch (e: any) {
-      const msg = e?.message ?? "Could not create listing";
-      // Helpful hint for the exact error you're seeing
-      if (String(msg).toLowerCase().includes("row-level security")) {
-        Alert.alert("RLS blocked", "Your RLS policies for market_listings or market_listing_images are blocking inserts.\n\nRun the SQL policy fix I sent and try again.");
-      } else {
-        Alert.alert("Failed", msg);
-      }
-    } finally {
-      setSubmitting(false);
-      setStage(null);
-      console.log("[SellTab] submit end");
-    }
+    router.push("/market/(tabs)" as any);
   }
 
   if (checkingSeller) {
