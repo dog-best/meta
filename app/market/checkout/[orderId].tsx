@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
-import { fetchJsonWithTimeout, getSupabaseAnonKeyOrThrow, getSupabaseFunctionsBaseUrl } from "@/services/net";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { payUsdcForOrder } from "@/services/market/usdcCheckout";
@@ -19,7 +18,7 @@ const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
 // ✅ Real function names in your repo
-const FN_MARKET_CHECKOUT_WALLET = "market-checkout-wallet"; // NGN wallet escrow lock
+const RPC_CHECKOUT_WALLET = "market_checkout_wallet_rpc"; // NGN wallet escrow lock (SQL RPC)
 
 async function invokeCheckoutWallet(orderId: string) {
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
@@ -29,58 +28,42 @@ async function invokeCheckoutWallet(orderId: string) {
     return await Promise.race([promise, timeout]);
   };
 
-  const getFunctionToken = async () => {
+  const ensureSession = async () => {
     const sessionToken = (await withTimeout(supabase.auth.getSession(), 8000, "Session check") as any)?.data?.session?.access_token || "";
-    if (sessionToken) return sessionToken;
+    if (sessionToken) return;
     const refreshed = await withTimeout(supabase.auth.refreshSession(), 10000, "Session refresh") as any;
     const token = refreshed?.data?.session?.access_token || "";
     if (!token) throw new Error("Session expired. Please sign in again.");
-    return token;
   };
 
-  const run = async (token: string) =>
+  const run = async () =>
     await withTimeout(
-      fetchJsonWithTimeout(
-        `${getSupabaseFunctionsBaseUrl()}/${FN_MARKET_CHECKOUT_WALLET}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-            apikey: getSupabaseAnonKeyOrThrow(),
-          },
-          body: JSON.stringify({ order_id: orderId }),
-        },
-        20000,
-      ),
+      supabase.rpc(RPC_CHECKOUT_WALLET, { p_order_id: orderId }),
       25000,
       "Checkout request",
     );
 
   console.log("[Checkout] invokeCheckoutWallet token start");
-  let token = await getFunctionToken();
+  await ensureSession();
   console.log("[Checkout] invokeCheckoutWallet token ok");
-  let out = await run(token);
-  console.log("[Checkout] invokeCheckoutWallet first response", { ok: out.res.ok, status: out.res.status });
+  let out = (await run()) as any;
+  console.log("[Checkout] invokeCheckoutWallet first response", { ok: !out.error });
 
-  if (!out.res.ok) {
-    const errMsg = String((out.json as any)?.message || (out.json as any)?.error || out.text || "");
-    if (out.res.status === 401 || /jwt|session|unauthor/i.test(errMsg)) {
+  if (out.error) {
+    const errMsg = String(out.error?.message || "");
+    if (/jwt|session|unauthor/i.test(errMsg)) {
       console.log("[Checkout] invokeCheckoutWallet retry token refresh");
-      const refreshed = await withTimeout(supabase.auth.refreshSession(), 10000, "Session refresh") as any;
-      token = refreshed?.data?.session?.access_token || "";
-      if (!token) throw new Error("Session expired. Please sign in again.");
-      out = await run(token);
-      console.log("[Checkout] invokeCheckoutWallet retry response", { ok: out.res.ok, status: out.res.status });
+      await withTimeout(supabase.auth.refreshSession(), 10000, "Session refresh");
+      out = (await run()) as any;
+      console.log("[Checkout] invokeCheckoutWallet retry response", { ok: !out.error });
     }
   }
 
-  if (!out.res.ok) {
-    const errMsg = String((out.json as any)?.message || (out.json as any)?.error || out.text || "Wallet checkout failed");
-    throw new Error(errMsg);
+  if (out.error) {
+    throw new Error(out.error?.message || "Wallet checkout failed");
   }
 
-  return out.json;
+  return out.data;
 }
 
 function Pill({
