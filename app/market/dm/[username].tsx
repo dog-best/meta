@@ -1,5 +1,4 @@
 ﻿import { Ionicons } from "@expo/vector-icons";
-import { Audio, ResizeMode, Video } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
@@ -8,6 +7,7 @@ import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -43,6 +43,18 @@ const MUTED = "rgba(255,255,255,0.62)";
 
 const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
+function getExpoAv() {
+  try {
+    return require("expo-av");
+  } catch {
+    return null;
+  }
+}
+const ExpoAV = getExpoAv();
+const Audio = ExpoAV?.Audio;
+const Video = ExpoAV?.Video;
+const ResizeMode = ExpoAV?.ResizeMode ?? { CONTAIN: "contain" };
+
 type PendingMedia = {
   kind: "image" | "video" | "audio";
   uri: string;
@@ -73,7 +85,7 @@ export default function DMChat() {
   const [messages, setMessages] = useState<DMMessage[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState<any>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [pendingMedia, setPendingMedia] = useState<PendingMedia | null>(null);
   const [replyTo, setReplyTo] = useState<DMMessage | null>(null);
@@ -82,7 +94,7 @@ export default function DMChat() {
   const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [videoViewer, setVideoViewer] = useState<string | null>(null);
   const [audioViewer, setAudioViewer] = useState<string | null>(null);
-  const [audioSound, setAudioSound] = useState<Audio.Sound | null>(null);
+  const [audioSound, setAudioSound] = useState<any>(null);
   const [audioPlaying, setAudioPlaying] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
@@ -262,6 +274,10 @@ export default function DMChat() {
 
   async function toggleRecord() {
     if (!threadId) return;
+    if (!Audio) {
+      setErr("Audio recording needs a dev build with expo-av.");
+      return;
+    }
     if (recording) {
       setRecordingBusy(true);
       try {
@@ -301,6 +317,10 @@ export default function DMChat() {
   }
 
   async function onOpenAudio(url: string) {
+    if (!Audio) {
+      setErr("Audio playback needs a dev build with expo-av.");
+      return;
+    }
     try {
       if (audioSound) {
         await audioSound.unloadAsync();
@@ -594,12 +614,24 @@ export default function DMChat() {
             <Ionicons name="close" size={26} color="#fff" />
           </Pressable>
           {videoViewer ? (
-            <Video
-              source={{ uri: videoViewer }}
-              style={{ width: "100%", height: "60%" }}
-              useNativeControls
-              resizeMode={ResizeMode.CONTAIN}
-            />
+            Video ? (
+              <Video
+                source={{ uri: videoViewer }}
+                style={{ width: "100%", height: "60%" }}
+                useNativeControls
+                resizeMode={ResizeMode.CONTAIN}
+              />
+            ) : (
+              <View style={{ padding: 20, alignItems: "center", gap: 12 }}>
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Video player needs a dev build with expo-av.</Text>
+                <Pressable
+                  onPress={() => Linking.openURL(videoViewer)}
+                  style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: "rgba(124,58,237,0.35)" }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>Open video URL</Text>
+                </Pressable>
+              </View>
+            )
           ) : null}
         </View>
       </Modal>

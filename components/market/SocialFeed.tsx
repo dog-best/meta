@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Pressable, Text, TextInput, View } from "react-native";
@@ -27,6 +26,14 @@ type Stats = { likes: number; comments: number; reshares: number; myLiked: boole
 function logoUrl(path?: string | null) {
   if (!path) return null;
   return supabase.storage.from("market-sellers").getPublicUrl(path).data.publicUrl;
+}
+
+function getDocumentPicker() {
+  try {
+    return require("expo-document-picker");
+  } catch {
+    return null;
+  }
 }
 
 export default function SocialFeed({ profileUserId, hideComposer = false }: { profileUserId?: string; hideComposer?: boolean }) {
@@ -179,7 +186,12 @@ export default function SocialFeed({ profileUserId, hideComposer = false }: { pr
   }
 
   async function pickAudio() {
-    const picked = await DocumentPicker.getDocumentAsync({ type: "audio/*", copyToCacheDirectory: true });
+    const picker = getDocumentPicker();
+    if (!picker?.getDocumentAsync) {
+      setErr("Audio picker needs a dev build with expo-document-picker.");
+      return;
+    }
+    const picked = await picker.getDocumentAsync({ type: "audio/*", copyToCacheDirectory: true });
     if (picked.canceled) return;
     const a = picked.assets?.[0];
     if (!a?.uri) return;
