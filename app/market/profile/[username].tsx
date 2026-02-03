@@ -1,4 +1,4 @@
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+﻿import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
@@ -121,6 +121,7 @@ export default function PublicSellerProfile() {
   const [myComment, setMyComment] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [canReview, setCanReview] = useState(false);
+  const [contentTab, setContentTab] = useState<"listings" | "social">("listings");
 
   useEffect(() => {
     let mounted = true;
@@ -456,11 +457,7 @@ export default function PublicSellerProfile() {
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }}>
                     {seller.business_name || seller.display_name || "Store"}
                   </Text>
-                  {seller.is_verified ? (
-                    <View style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(59,130,246,0.15)", borderWidth: 1, borderColor: "rgba(59,130,246,0.35)" }}>
-                      <Ionicons name="checkmark-circle" size={14} color="#3B82F6" />
-                    </View>
-                  ) : null}
+                  {seller.is_verified ? <Ionicons name="checkmark-circle" size={18} color="#3B82F6" /> : null}
                 </View>
 
                 <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontWeight: "800" }}>
@@ -644,73 +641,107 @@ export default function PublicSellerProfile() {
             </View>
           </View>
 
-          <View style={{ marginTop: 14 }}>
-            <View style={{ marginBottom: 14, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Social posts</Text>
-              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                All posts from this account are visible here.
-              </Text>
-              <SocialFeed profileUserId={seller.user_id} hideComposer={meId !== seller.user_id} />
+          <View style={{ marginTop: 14, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Pressable
+                onPress={() => setContentTab("listings")}
+                style={{
+                  flex: 1,
+                  height: 42,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: contentTab === "listings" ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: contentTab === "listings" ? "rgba(124,58,237,0.45)" : "rgba(255,255,255,0.10)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Listings</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setContentTab("social")}
+                style={{
+                  flex: 1,
+                  height: 42,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: contentTab === "social" ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.06)",
+                  borderWidth: 1,
+                  borderColor: contentTab === "social" ? "rgba(124,58,237,0.45)" : "rgba(255,255,255,0.10)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Social Feed</Text>
+              </Pressable>
             </View>
 
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Listings</Text>
-
-  <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
-    <Pressable onPress={() => router.push(`/market/listings?seller_id=${seller.user_id}` as any)}>
-      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>See all</Text>
-    </Pressable>
-
-    <Pressable onPress={() => router.push("/market/(tabs)" as any)}>
-      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>Back to Market</Text>
-    </Pressable>
-  </View>
-</View> 
-
-
-            {listings.length === 0 ? (
-              <View style={{ marginTop: 10, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
-                <Text style={{ color: "#fff", fontWeight: "900" }}>No listings yet</Text>
-                <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>This seller hasn’t posted anything yet.</Text>
+            {contentTab === "social" ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Social posts</Text>
+                <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                  All posts from this account are visible here.
+                </Text>
+                <SocialFeed profileUserId={seller.user_id} hideComposer={meId !== seller.user_id} />
               </View>
             ) : (
-              <View style={{ marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-                {listings.map((l) => (
-                  <Pressable
-                    key={l.id}
-                    onPress={() => router.push(`/market/listing/${l.id}` as any)}
-                    style={{ width: "48%", borderRadius: 22, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}
-                  >
-                    <View style={{ height: 120, backgroundColor: "rgba(255,255,255,0.06)" }}>
-                      {l.cover_url ? (
-                        <Image source={{ uri: l.cover_url }} style={{ width: "100%", height: 120 }} />
-                      ) : (
-                        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                          <Ionicons name="image-outline" size={26} color="rgba(255,255,255,0.55)" />
+              <View style={{ marginTop: 12 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Listings</Text>
+                  <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
+                    <Pressable onPress={() => router.push(`/market/listings?seller_id=${seller.user_id}` as any)}>
+                      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>See all</Text>
+                    </Pressable>
+                    <Pressable onPress={() => router.push("/market/(tabs)" as any)}>
+                      <Text style={{ color: "#C4B5FD", fontWeight: "900" }}>Back to Market</Text>
+                    </Pressable>
+                  </View>
+                </View>
+
+                {listings.length === 0 ? (
+                  <View style={{ marginTop: 10, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>No listings yet</Text>
+                    <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>This seller has not posted anything yet.</Text>
+                  </View>
+                ) : (
+                  <View style={{ marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+                    {listings.map((l) => (
+                      <Pressable
+                        key={l.id}
+                        onPress={() => router.push(`/market/listing/${l.id}` as any)}
+                        style={{ width: "48%", borderRadius: 22, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}
+                      >
+                        <View style={{ height: 120, backgroundColor: "rgba(255,255,255,0.06)" }}>
+                          {l.cover_url ? (
+                            <Image source={{ uri: l.cover_url }} style={{ width: "100%", height: 120 }} />
+                          ) : (
+                            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                              <Ionicons name="image-outline" size={26} color="rgba(255,255,255,0.55)" />
+                            </View>
+                          )}
                         </View>
-                      )}
-                    </View>
 
-                    <View style={{ padding: 12 }}>
-                      <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900" }}>{l.title || "Untitled"}</Text>
-                      <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                        {l.currency || "NGN"}{" "}
-                        <Text style={{ color: "#fff", fontWeight: "900" }}>{Number(l.price_amount || 0).toLocaleString()}</Text>
-                      </Text>
+                        <View style={{ padding: 12 }}>
+                          <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900" }}>{l.title || "Untitled"}</Text>
+                          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+                            {l.currency || "NGN"}{" "}
+                            <Text style={{ color: "#fff", fontWeight: "900" }}>{Number(l.price_amount || 0).toLocaleString()}</Text>
+                          </Text>
 
-                      <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        <MaterialCommunityIcons
-                          name={l.category === "service" ? "briefcase-outline" : "shopping-outline"}
-                          size={14}
-                          color="rgba(255,255,255,0.6)"
-                        />
-                        <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                          {l.category === "service" ? "Service" : "Product"} • {l.delivery_type || "—"}
-                        </Text>
-                      </View>
-                    </View>
-                  </Pressable>
-                ))}
+                          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <MaterialCommunityIcons
+                              name={l.category === "service" ? "briefcase-outline" : "shopping-outline"}
+                              size={14}
+                              color="rgba(255,255,255,0.6)"
+                            />
+                            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                              {l.category === "service" ? "Service" : "Product"} - {l.delivery_type || "N/A"}
+                            </Text>
+                          </View>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
               </View>
             )}
           </View>

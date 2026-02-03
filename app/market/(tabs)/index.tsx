@@ -1,8 +1,18 @@
-import { Ionicons } from "@expo/vector-icons";
+﻿import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
@@ -46,15 +56,15 @@ type SellerCard = {
   bio: string | null;
   is_verified: boolean | null;
   logo_path: string | null;
-  social_links?: any;
   featured_enabled?: boolean | null;
   featured_until?: string | null;
 };
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
-  if ((currency ?? "").toUpperCase() === "USDC" || (currency ?? "").toUpperCase() === "USDT") return `$${n.toLocaleString()}`;
-  return `?${n.toLocaleString()}`;
+  const c = (currency ?? "NGN").toUpperCase();
+  if (c === "USDC" || c === "USDT") return `$${n.toLocaleString()}`;
+  return `NGN ${n.toLocaleString()}`;
 }
 
 function publicSellerLogo(path?: string | null) {
@@ -65,6 +75,11 @@ function publicSellerLogo(path?: string | null) {
 function buildPublicFromStorage(supabaseUrl: string, storagePath?: string | null) {
   if (!storagePath) return null;
   return `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${storagePath}`;
+}
+
+function VerifiedTick({ verified }: { verified?: boolean | null }) {
+  if (!verified) return null;
+  return <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />;
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
@@ -110,12 +125,25 @@ function SellerMini({ seller }: { seller?: SellerCard | null }) {
   const logo = publicSellerLogo(seller.logo_path);
   return (
     <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 8 }}>
-      <View style={{ width: 22, height: 22, borderRadius: 11, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
+      <View
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 11,
+          overflow: "hidden",
+          backgroundColor: "rgba(255,255,255,0.08)",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         {logo ? <Image source={{ uri: logo }} style={{ width: 22, height: 22 }} /> : <Ionicons name="person-outline" size={12} color="#fff" />}
       </View>
-      <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.78)", fontWeight: "800", fontSize: 11, flex: 1 }}>
-        @{seller.market_username || "store"} ? {seller.display_name || seller.business_name || "Business"}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
+        <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.78)", fontWeight: "800", fontSize: 11, flex: 1 }}>
+          @{seller.market_username || "store"} - {seller.display_name || seller.business_name || "Business"}
+        </Text>
+        <VerifiedTick verified={seller.is_verified} />
+      </View>
     </View>
   );
 }
@@ -142,37 +170,27 @@ export default function MarketHome() {
 
   async function loadDirectory() {
     const nowIso = new Date().toISOString();
-    try {
-      const [featured, verified] = await Promise.all([
-        supabase
-          .from("market_seller_public_profiles")
-          .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links,featured_enabled,featured_until")
-          .eq("active", true)
-          .eq("featured_enabled", true)
-          .or(`featured_until.is.null,featured_until.gte.${nowIso}`)
-          .order("updated_at", { ascending: false })
-          .limit(200),
-        supabase
-          .from("market_seller_public_profiles")
-          .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links,featured_enabled,featured_until")
-          .eq("active", true)
-          .eq("is_verified", true)
-          .order("updated_at", { ascending: false })
-          .limit(200),
-      ]);
-      setFeaturedSellers((featured.data ?? []) as any);
-      setVerifiedSellers((verified.data ?? []) as any);
-    } catch {
-      const { data } = await supabase
+
+    const [featuredRes, verifiedRes] = await Promise.all([
+      supabase
         .from("market_seller_public_profiles")
-        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links")
+        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,featured_enabled,featured_until")
         .eq("active", true)
+        .eq("featured_enabled", true)
+        .or(`featured_until.is.null,featured_until.gte.${nowIso}`)
         .order("updated_at", { ascending: false })
-        .limit(200);
-      const rows = (data ?? []) as any[];
-      setFeaturedSellers([]);
-      setVerifiedSellers(rows.filter((r) => !!r.is_verified));
-    }
+        .limit(300),
+      supabase
+        .from("market_seller_public_profiles")
+        .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,featured_enabled,featured_until")
+        .eq("active", true)
+        .eq("is_verified", true)
+        .order("updated_at", { ascending: false })
+        .limit(300),
+    ]);
+
+    setFeaturedSellers((featuredRes.data ?? []) as SellerCard[]);
+    setVerifiedSellers((verifiedRes.data ?? []) as SellerCard[]);
   }
 
   async function loadListings() {
@@ -181,14 +199,18 @@ export default function MarketHome() {
     try {
       let query = supabase
         .from(LISTINGS_TABLE)
-        .select(`id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)`)
+        .select(
+          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)"
+        )
         .eq("is_active", true)
         .eq("category", main)
         .order(sortBy === "newest" ? "created_at" : "price_amount", { ascending: sortBy === "price_low" })
         .limit(120);
 
       if (selectedSlug) query = query.eq("sub_category", selectedSlug);
-      if (q.trim()) query = query.or(`title.ilike.%${q.trim()}%,description.ilike.%${q.trim()}%`);
+      if (q.trim() && directoryMode === "listings") {
+        query = query.or(`title.ilike.%${q.trim()}%,description.ilike.%${q.trim()}%`);
+      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -208,7 +230,7 @@ export default function MarketHome() {
         sellerIds.length
           ? supabase
               .from("market_seller_public_profiles")
-              .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path,social_links")
+              .select("user_id,market_username,display_name,business_name,bio,is_verified,logo_path")
               .in("user_id", sellerIds)
           : Promise.resolve({ data: [] } as any),
         listingIds.length
@@ -251,9 +273,20 @@ export default function MarketHome() {
 
   useEffect(() => {
     if (section !== "social") loadListings();
-  }, [section, selectedSlug, sortBy, q]);
+  }, [section, selectedSlug, sortBy, q, directoryMode]);
 
-  const directoryRows = useMemo(() => (directoryMode === "featured" ? featuredSellers : verifiedSellers), [directoryMode, featuredSellers, verifiedSellers]);
+  const directoryRows = useMemo(() => {
+    const source = directoryMode === "featured" ? featuredSellers : verifiedSellers;
+    const query = q.trim().toLowerCase();
+    if (!query) return source;
+    return source.filter((s) => {
+      const text = `${s.market_username || ""} ${s.display_name || ""} ${s.business_name || ""} ${s.bio || ""}`.toLowerCase();
+      if (query.startsWith("@")) {
+        return (s.market_username || "").toLowerCase().includes(query.slice(1));
+      }
+      return text.includes(query);
+    });
+  }, [directoryMode, featuredSellers, verifiedSellers, q]);
 
   const renderListing = ({ item }: { item: ListingRow }) => {
     const coverUrl = item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
@@ -288,7 +321,7 @@ export default function MarketHome() {
         <View style={{ padding: 12 }}>
           <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>{item.title ?? "Untitled"}</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.75)", fontSize: 11 }}>
-            Sales {stats.completed} ? Cancelled {stats.cancelled} ? Failed {stats.failed}
+            Sales {stats.completed} - Cancelled {stats.cancelled} - Failed {stats.failed}
           </Text>
           <SellerMini seller={seller} />
         </View>
@@ -308,9 +341,10 @@ export default function MarketHome() {
             {logo ? <Image source={{ uri: logo }} style={{ width: 46, height: 46 }} /> : <Ionicons name="person-outline" size={22} color="#fff" />}
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {item.business_name || item.display_name || "Business"} {item.is_verified ? "?" : ""}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={{ color: "#fff", fontWeight: "900", flexShrink: 1 }} numberOfLines={1}>{item.business_name || item.display_name || "Business"}</Text>
+              <VerifiedTick verified={item.is_verified} />
+            </View>
             <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>@{item.market_username || "profile"}</Text>
             <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }} numberOfLines={2}>{item.bio || "No description yet."}</Text>
           </View>
@@ -322,14 +356,28 @@ export default function MarketHome() {
   return (
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
       <FlatList
-        data={section === "social" ? [] : (directoryMode === "listings" ? rows : directoryRows as any)}
+        data={section === "social" ? [] : (directoryMode === "listings" ? rows : (directoryRows as any))}
         key={section === "social" ? "social" : directoryMode}
         keyExtractor={(it: any, idx) => String((it as any)?.id || (it as any)?.user_id || idx)}
         numColumns={section === "social" || directoryMode !== "listings" ? 1 : 2}
         columnWrapperStyle={section === "social" || directoryMode !== "listings" ? undefined : { paddingHorizontal: 16, justifyContent: "space-between", marginTop: 12 }}
         contentContainerStyle={{ paddingBottom: 28 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); if (section === "social") setRefreshing(false); else await loadListings(); }} />}
-        renderItem={section === "social" ? undefined : directoryMode === "listings" ? renderListing : renderSellerCard as any}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={async () => {
+              setRefreshing(true);
+              if (section === "social") {
+                setRefreshing(false);
+                return;
+              }
+              if (directoryMode === "listings") await loadListings();
+              else await loadDirectory();
+              setRefreshing(false);
+            }}
+          />
+        }
+        renderItem={section === "social" ? undefined : directoryMode === "listings" ? renderListing : (renderSellerCard as any)}
         ListHeaderComponent={
           <View style={{ paddingTop: Math.max(insets.top, 14), paddingHorizontal: 16 }}>
             <AppHeader title="Marketplace" subtitle="Products, services, and social feed" />
@@ -343,7 +391,7 @@ export default function MarketHome() {
             {section === "social" ? (
               <View style={{ marginTop: 10, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
                 <Text style={{ color: "#fff", fontWeight: "900" }}>Followers feed</Text>
-                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>You only see posts from accounts you follow (and your own posts).</Text>
+                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>You only see posts from accounts you follow and your own posts.</Text>
                 <SocialFeed />
               </View>
             ) : (
@@ -380,8 +428,8 @@ export default function MarketHome() {
 
                     <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
                       <Chip label="Newest" active={sortBy === "newest"} onPress={() => setSortBy("newest")} />
-                      <Chip label="Price ?" active={sortBy === "price_low"} onPress={() => setSortBy("price_low")} />
-                      <Chip label="Price ?" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
+                      <Chip label="Price Low" active={sortBy === "price_low"} onPress={() => setSortBy("price_low")} />
+                      <Chip label="Price High" active={sortBy === "price_high"} onPress={() => setSortBy("price_high")} />
                     </View>
                   </>
                 ) : null}
@@ -389,7 +437,7 @@ export default function MarketHome() {
                 {loading ? (
                   <View style={{ paddingVertical: 18, alignItems: "center" }}>
                     <ActivityIndicator />
-                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading?</Text>
+                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading...</Text>
                   </View>
                 ) : err ? (
                   <View style={{ marginTop: 14, borderRadius: 16, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
@@ -413,3 +461,4 @@ export default function MarketHome() {
     </LinearGradient>
   );
 }
+

@@ -1,425 +1,646 @@
-import { Ionicons } from "@expo/vector-icons";
+﻿import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, Text, TextInput, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 
-type PostRow = {
+type FeedProfile = {
+  user_id: string;
+  market_username: string | null;
+  display_name: string | null;
+  business_name: string | null;
+  logo_path: string | null;
+  is_verified: boolean | null;
+};
+
+type FeedPost = {
   id: string;
   author_id: string;
   body: string | null;
-  media: any;
   created_at: string;
-  seller?: {
-    market_username?: string | null;
-    display_name?: string | null;
-    business_name?: string | null;
-    logo_path?: string | null;
-    is_verified?: boolean | null;
-  } | null;
 };
 
-type Stats = { likes: number; comments: number; reshares: number; myLiked: boolean };
+type FeedMedia = {
+  id: string;
+  post_id: string;
+  kind: "image" | "video" | "audio" | "file";
+  storage_path: string;
+  public_url: string | null;
+  mime_type: string | null;
+  sort_order: number | null;
+};
 
-function logoUrl(path?: string | null) {
-  if (!path) return null;
-  return supabase.storage.from("market-sellers").getPublicUrl(path).data.publicUrl;
+type FeedComment = {
+  id: string;
+  post_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  profiles?: { username?: string | null; full_name?: string | null } | null;
+};
+
+type LocalAsset = {
+  uri: string;
+  mimeType: string;
+  kind: "image" | "video";
+};
+
+type Props = {
+  profileUserId?: string;
+  hideComposer?: boolean;
+};
+
+const CARD = "rgba(255,255,255,0.05)";
+const BORDER = "rgba(255,255,255,0.10)";
+const MUTED = "rgba(255,255,255,0.65)";
+const SOCIAL_BUCKET = "market-social";
+
+function fileExtFromMime(mime: string) {
+  const m = mime.toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic")) return "heic";
+  if (m.includes("mp4")) return "mp4";
+  if (m.includes("quicktime")) return "mov";
+  if (m.includes("mpeg")) return "mp3";
+  if (m.includes("wav")) return "wav";
+  return "bin";
 }
 
-function getDocumentPicker() {
-  try {
-    return require("expo-document-picker");
-  } catch {
-    return null;
-  }
+function pickKind(mime: string): "image" | "video" | "audio" | "file" {
+  const m = mime.toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "audio";
+  return "file";
 }
 
-export default function SocialFeed({ profileUserId, hideComposer = false }: { profileUserId?: string; hideComposer?: boolean }) {
+function safePublicUrl(bucket: string, storagePath: string | null, publicUrl: string | null) {
+  if (publicUrl) return publicUrl;
+  if (!storagePath) return null;
+  return supabase.storage.from(bucket).getPublicUrl(storagePath).data.publicUrl;
+}
+
+function SellerBadge({ verified }: { verified?: boolean | null }) {
+  if (!verified) return null;
+  return <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />;
+}
+
+export default function SocialFeed({ profileUserId, hideComposer = false }: Props) {
   const [meId, setMeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState(false);
-  const [posts, setPosts] = useState<PostRow[]>([]);
-  const [stats, setStats] = useState<Record<string, Stats>>({});
-  const [q, setQ] = useState("");
-  const [commentDraft, setCommentDraft] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
   const [body, setBody] = useState("");
-  const [media, setMedia] = useState<{ kind: "image" | "video" | "audio"; url: string } | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [assets, setAssets] = useState<LocalAsset[]>([]);
+  const [previewAsset, setPreviewAsset] = useState<LocalAsset | null>(null);
 
-  const isHandleSearch = q.trim().startsWith("@");
+  const [posts, setPosts] = useState<FeedPost[]>([]);
+  const [mediaMap, setMediaMap] = useState<Record<string, FeedMedia[]>>({});
+  const [profileMap, setProfileMap] = useState<Record<string, FeedProfile>>({});
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
+  const [myLikes, setMyLikes] = useState<Record<string, boolean>>({});
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
 
-  async function load() {
+  const [commentsOpenPost, setCommentsOpenPost] = useState<FeedPost | null>(null);
+  const [comments, setComments] = useState<FeedComment[]>([]);
+  const [commentText, setCommentText] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      setMeId(data?.user?.id ?? null);
+    })();
+  }, []);
+
+  async function fetchPosts() {
     setLoading(true);
-    setErr(null);
+    setError(null);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const uid = auth?.user?.id ?? null;
-      setMeId(uid);
+      const targetAuthorIds = new Set<string>();
 
-      let authorIds: string[] | null = null;
       if (profileUserId) {
-        authorIds = [profileUserId];
-      } else if (uid) {
-        const { data: follows } = await supabase
-          .from("market_profile_follows")
-          .select("followed_id")
-          .eq("follower_id", uid);
-        const ids = (follows ?? []).map((f: any) => String(f.followed_id));
-        authorIds = Array.from(new Set([uid, ...ids]));
+        targetAuthorIds.add(profileUserId);
       } else {
-        authorIds = [];
+        const { data: auth } = await supabase.auth.getUser();
+        const uid = auth?.user?.id;
+        if (uid) {
+          targetAuthorIds.add(uid);
+          const { data: follows } = await supabase
+            .from("market_profile_follows")
+            .select("followed_id")
+            .eq("follower_id", uid);
+          (follows ?? []).forEach((r: any) => targetAuthorIds.add(String(r.followed_id)));
+        }
       }
 
-      if (isHandleSearch) {
-        const uname = q.trim().replace(/^@/, "").toLowerCase();
-        const { data: seller } = await supabase
-          .from("market_seller_public_profiles")
-          .select("user_id")
-          .eq("market_username", uname)
-          .maybeSingle();
-        authorIds = seller?.user_id ? [String(seller.user_id)] : [];
-      }
-
-      if (!authorIds?.length) {
+      if (!targetAuthorIds.size) {
         setPosts([]);
-        setStats({});
+        setMediaMap({});
+        setProfileMap({});
+        setReactionCounts({});
+        setMyLikes({});
+        setCommentCounts({});
         return;
       }
 
-      let query = supabase
+      const authorIds = Array.from(targetAuthorIds);
+
+      const { data: postRows, error: postErr } = await supabase
         .from("market_social_posts")
-        .select("id,author_id,body,media,created_at")
+        .select("id,author_id,body,created_at")
         .in("author_id", authorIds)
-        .eq("is_deleted", false)
         .order("created_at", { ascending: false })
-        .limit(60);
+        .limit(120);
 
-      if (q.trim() && !isHandleSearch) {
-        query = query.ilike("body", `%${q.trim()}%`);
+      if (postErr) throw postErr;
+
+      const feedPosts = (postRows ?? []) as FeedPost[];
+      setPosts(feedPosts);
+
+      const postIds = feedPosts.map((p) => p.id);
+      const authorSet = Array.from(new Set(feedPosts.map((p) => p.author_id)));
+
+      const [mediaRes, profilesRes] = await Promise.all([
+        postIds.length
+          ? supabase
+              .from("market_social_media")
+              .select("id,post_id,kind,storage_path,public_url,mime_type,sort_order")
+              .in("post_id", postIds)
+              .order("sort_order", { ascending: true })
+          : Promise.resolve({ data: [] } as any),
+        authorSet.length
+          ? supabase
+              .from("market_seller_public_profiles")
+              .select("user_id,market_username,display_name,business_name,logo_path,is_verified")
+              .in("user_id", authorSet)
+          : Promise.resolve({ data: [] } as any),
+      ]);
+
+      const mm: Record<string, FeedMedia[]> = {};
+      (mediaRes.data ?? []).forEach((m: FeedMedia) => {
+        if (!mm[m.post_id]) mm[m.post_id] = [];
+        mm[m.post_id].push(m);
+      });
+      setMediaMap(mm);
+
+      const pm: Record<string, FeedProfile> = {};
+      (profilesRes.data ?? []).forEach((p: FeedProfile) => {
+        pm[p.user_id] = p;
+      });
+      setProfileMap(pm);
+
+      if (postIds.length) {
+        const [rcRes, myRes, ccRes] = await Promise.all([
+          supabase.from("market_social_reactions").select("post_id").in("post_id", postIds),
+          meId
+            ? supabase.from("market_social_reactions").select("post_id").eq("user_id", meId).in("post_id", postIds)
+            : Promise.resolve({ data: [] } as any),
+          supabase.from("market_social_comments").select("post_id").in("post_id", postIds),
+        ]);
+
+        const rc: Record<string, number> = {};
+        (rcRes.data ?? []).forEach((r: any) => {
+          const id = String(r.post_id);
+          rc[id] = (rc[id] ?? 0) + 1;
+        });
+        setReactionCounts(rc);
+
+        const ml: Record<string, boolean> = {};
+        (myRes.data ?? []).forEach((r: any) => {
+          ml[String(r.post_id)] = true;
+        });
+        setMyLikes(ml);
+
+        const cc: Record<string, number> = {};
+        (ccRes.data ?? []).forEach((r: any) => {
+          const id = String(r.post_id);
+          cc[id] = (cc[id] ?? 0) + 1;
+        });
+        setCommentCounts(cc);
       }
-
-      const { data, error } = await query;
-      if (error) throw error;
-
-      const rows = (data ?? []) as PostRow[];
-      const authorSet = Array.from(new Set(rows.map((r) => r.author_id)));
-      const { data: sellers } = await supabase
-        .from("market_seller_public_profiles")
-        .select("user_id,market_username,display_name,business_name,logo_path,is_verified")
-        .in("user_id", authorSet);
-      const sellerMap = new Map((sellers ?? []).map((s: any) => [String(s.user_id), s]));
-      const merged = rows.map((r) => ({ ...r, seller: sellerMap.get(r.author_id) ?? null }));
-      setPosts(merged);
-
-      const nextStats: Record<string, Stats> = {};
-      await Promise.all(
-        merged.map(async (row) => {
-          const [{ count: likes }, { count: comments }, { count: reshares }, my] = await Promise.all([
-            supabase.from("market_social_post_reactions").select("id", { count: "exact", head: true }).eq("post_id", row.id),
-            supabase.from("market_social_post_comments").select("id", { count: "exact", head: true }).eq("post_id", row.id),
-            supabase.from("market_social_post_reshares").select("id", { count: "exact", head: true }).eq("post_id", row.id),
-            uid
-              ? supabase.from("market_social_post_reactions").select("id").eq("post_id", row.id).eq("user_id", uid).maybeSingle()
-              : Promise.resolve({ data: null } as any),
-          ]);
-          nextStats[row.id] = {
-            likes: likes ?? 0,
-            comments: comments ?? 0,
-            reshares: reshares ?? 0,
-            myLiked: !!my?.data?.id,
-          };
-        }),
-      );
-      setStats(nextStats);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load social feed");
+      setError(e?.message || "Could not load social feed");
+      setPosts([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
-  }, [profileUserId]);
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      load();
-    }, 350);
-    return () => clearTimeout(t);
-  }, [q]);
+    fetchPosts();
+  }, [profileUserId, meId]);
 
   useEffect(() => {
     const ch = supabase
-      .channel(`social-feed-${profileUserId || "home"}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_posts" }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_post_reactions" }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_post_comments" }, () => load())
+      .channel(`market-social-feed-${profileUserId || "home"}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_posts" }, (payload) => {
+        const row = payload.new as any;
+        const oldRow = payload.old as any;
+        if (payload.eventType === "INSERT" && row?.id) {
+          setPosts((prev) => {
+            if (prev.some((p) => p.id === row.id)) return prev;
+            if (profileUserId && row.author_id !== profileUserId) return prev;
+            return [row as FeedPost, ...prev];
+          });
+        } else if (payload.eventType === "DELETE" && oldRow?.id) {
+          setPosts((prev) => prev.filter((p) => p.id !== oldRow.id));
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_reactions" }, (payload) => {
+        const row = (payload.new ?? payload.old) as any;
+        const pid = String(row?.post_id || "");
+        if (!pid) return;
+        setReactionCounts((prev) => {
+          const next = { ...prev };
+          if (payload.eventType === "INSERT") next[pid] = (next[pid] ?? 0) + 1;
+          else if (payload.eventType === "DELETE") next[pid] = Math.max(0, (next[pid] ?? 0) - 1);
+          return next;
+        });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "market_social_comments" }, (payload) => {
+        const row = (payload.new ?? payload.old) as any;
+        const pid = String(row?.post_id || "");
+        if (!pid) return;
+        setCommentCounts((prev) => {
+          const next = { ...prev };
+          if (payload.eventType === "INSERT") next[pid] = (next[pid] ?? 0) + 1;
+          else if (payload.eventType === "DELETE") next[pid] = Math.max(0, (next[pid] ?? 0) - 1);
+          return next;
+        });
+        if (commentsOpenPost?.id === pid) {
+          loadComments(pid);
+        }
+      })
       .subscribe();
+
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [profileUserId, meId]);
+  }, [profileUserId, commentsOpenPost?.id]);
 
-  async function pickImageOrVideo() {
-    const picked = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.85,
-      allowsEditing: false,
-    });
-    if (picked.canceled) return;
-    const a = picked.assets?.[0];
-    if (!a?.uri) return;
-    const kind: "image" | "video" = a.type === "video" ? "video" : "image";
-    const ext = kind === "video" ? "mp4" : "jpg";
-    const path = `posts/${meId}/${Date.now()}.${ext}`;
-    const up = await uploadToSupabaseStorage({
-      bucket: "market-social",
-      path,
-      localUri: a.uri,
-      contentType: kind === "video" ? "video/mp4" : "image/jpeg",
-      upsert: false,
-    });
-    setMedia({ kind, url: up.publicUrl || "" });
-  }
-
-  async function pickAudio() {
-    const picker = getDocumentPicker();
-    if (!picker?.getDocumentAsync) {
-      setErr("Audio picker needs a dev build with expo-document-picker.");
+  async function chooseMedia() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setError("Photo/video permission is required.");
       return;
     }
-    const picked = await picker.getDocumentAsync({ type: "audio/*", copyToCacheDirectory: true });
-    if (picked.canceled) return;
-    const a = picked.assets?.[0];
-    if (!a?.uri) return;
-    const path = `posts/${meId}/${Date.now()}.m4a`;
-    const up = await uploadToSupabaseStorage({
-      bucket: "market-social",
-      path,
-      localUri: a.uri,
-      contentType: a.mimeType || "audio/m4a",
-      upsert: false,
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection: true,
+      selectionLimit: 4,
+      quality: 0.9,
     });
-    setMedia({ kind: "audio", url: up.publicUrl || "" });
+
+    if (result.canceled) return;
+
+    const next = (result.assets ?? [])
+      .filter((a) => !!a.uri)
+      .map((a) => {
+        const mime = a.mimeType || (a.type === "video" ? "video/mp4" : "image/jpeg");
+        return {
+          uri: a.uri,
+          mimeType: mime,
+          kind: a.type === "video" ? "video" : "image",
+        } as LocalAsset;
+      });
+
+    setAssets((prev) => [...prev, ...next].slice(0, 4));
   }
 
-  async function createPost() {
-    if (!meId) return setErr("Please sign in first.");
-    if (!body.trim() && !media) return setErr("Write something or attach media.");
+  async function uploadAsset(userId: string, postId: string, asset: LocalAsset, idx: number): Promise<FeedMedia> {
+    const blob = await (await fetch(asset.uri)).blob();
+    const ext = fileExtFromMime(asset.mimeType);
+    const path = `${userId}/${postId}/${Date.now()}-${idx}.${ext}`;
+
+    const { error: uploadErr } = await supabase.storage.from(SOCIAL_BUCKET).upload(path, blob, {
+      contentType: asset.mimeType,
+      upsert: false,
+    });
+    if (uploadErr) throw uploadErr;
+
+    const { data: inserted, error: mediaErr } = await supabase
+      .from("market_social_media")
+      .insert({
+        post_id: postId,
+        kind: pickKind(asset.mimeType),
+        storage_path: path,
+        public_url: null,
+        mime_type: asset.mimeType,
+        sort_order: idx,
+      })
+      .select("id,post_id,kind,storage_path,public_url,mime_type,sort_order")
+      .single();
+    if (mediaErr) throw mediaErr;
+
+    return inserted as FeedMedia;
+  }
+
+  async function submitPost() {
+    const cleanBody = body.trim();
+    if (!cleanBody && assets.length === 0) return;
+    if (!meId) {
+      setError("Please sign in to post.");
+      return;
+    }
+
     setPosting(true);
-    setErr(null);
+    setError(null);
     try {
-      const { error } = await supabase.from("market_social_posts").insert({
-        author_id: meId,
-        body: body.trim() || null,
-        media: media ? [media] : [],
-        visibility: "followers",
-      });
-      if (error) throw error;
+      const { data: inserted, error: postErr } = await supabase
+        .from("market_social_posts")
+        .insert({ author_id: meId, body: cleanBody || null })
+        .select("id,author_id,body,created_at")
+        .single();
+      if (postErr) throw postErr;
+
+      const created = inserted as FeedPost;
+      const createdMedia: FeedMedia[] = [];
+      for (let i = 0; i < assets.length; i += 1) {
+        createdMedia.push(await uploadAsset(meId, created.id, assets[i], i));
+      }
+
+      setPosts((prev) => [created, ...prev]);
+      if (createdMedia.length) {
+        setMediaMap((prev) => ({ ...prev, [created.id]: createdMedia }));
+      }
+
       setBody("");
-      setMedia(null);
-      await load();
+      setAssets([]);
     } catch (e: any) {
-      setErr(e?.message || "Post failed");
+      const msg = String(e?.message || "Could not publish post");
+      if (msg.toLowerCase().includes("row-level security")) {
+        setError("Upload blocked by storage/table policy. Add insert policy for your user on bucket: market-social.");
+      } else {
+        setError(msg);
+      }
     } finally {
       setPosting(false);
     }
   }
 
   async function toggleLike(postId: string) {
-    if (!meId) return;
-    const st = stats[postId];
+    if (!meId) {
+      setError("Please sign in to react.");
+      return;
+    }
+
+    const liked = !!myLikes[postId];
+    setMyLikes((prev) => ({ ...prev, [postId]: !liked }));
+    setReactionCounts((prev) => ({ ...prev, [postId]: Math.max(0, (prev[postId] ?? 0) + (liked ? -1 : 1)) }));
+
     try {
-      if (st?.myLiked) {
-        await supabase.from("market_social_post_reactions").delete().eq("post_id", postId).eq("user_id", meId);
+      if (liked) {
+        await supabase.from("market_social_reactions").delete().eq("post_id", postId).eq("user_id", meId);
       } else {
-        await supabase.from("market_social_post_reactions").insert({ post_id: postId, user_id: meId, reaction: "like" });
+        await supabase
+          .from("market_social_reactions")
+          .upsert({ post_id: postId, user_id: meId, reaction: "like" }, { onConflict: "post_id,user_id" });
       }
-      await load();
-    } catch (e: any) {
-      setErr(e?.message || "Could not react");
+    } catch {
+      setMyLikes((prev) => ({ ...prev, [postId]: liked }));
+      setReactionCounts((prev) => ({ ...prev, [postId]: Math.max(0, (prev[postId] ?? 0) + (liked ? 1 : -1)) }));
     }
   }
 
-  async function reshare(postId: string) {
-    if (!meId) return;
+  async function loadComments(postId: string) {
+    const { data } = await supabase
+      .from("market_social_comments")
+      .select("id,post_id,user_id,body,created_at,profiles(username,full_name)")
+      .eq("post_id", postId)
+      .order("created_at", { ascending: false })
+      .limit(120);
+    setComments((data ?? []) as FeedComment[]);
+  }
+
+  async function openComments(post: FeedPost) {
+    setCommentsOpenPost(post);
+    setCommentText("");
+    await loadComments(post.id);
+  }
+
+  async function submitComment() {
+    if (!commentsOpenPost || !meId) return;
+    const txt = commentText.trim();
+    if (!txt) return;
+
+    setCommentBusy(true);
     try {
-      await supabase.from("market_social_post_reshares").insert({ post_id: postId, user_id: meId });
-      await load();
-    } catch (e: any) {
-      setErr(e?.message || "Could not reshare");
+      const { data: ins } = await supabase
+        .from("market_social_comments")
+        .insert({ post_id: commentsOpenPost.id, user_id: meId, body: txt })
+        .select("id,post_id,user_id,body,created_at")
+        .single();
+
+      if (ins) setComments((prev) => [ins as FeedComment, ...prev]);
+      setCommentText("");
+    } finally {
+      setCommentBusy(false);
     }
   }
 
-  async function addComment(postId: string) {
-    if (!meId) return;
-    const text = String(commentDraft[postId] ?? "").trim();
-    if (!text) return;
-    try {
-      const { error } = await supabase.from("market_social_post_comments").insert({ post_id: postId, user_id: meId, body: text });
-      if (error) throw error;
-      setCommentDraft((prev) => ({ ...prev, [postId]: "" }));
-      await load();
-    } catch (e: any) {
-      setErr(e?.message || "Could not comment");
-    }
-  }
+  function renderPost(p: FeedPost) {
+    const author = profileMap[p.author_id];
+    const media = mediaMap[p.id] ?? [];
+    const avatar = author?.logo_path
+      ? supabase.storage.from("market-sellers").getPublicUrl(author.logo_path).data.publicUrl
+      : null;
 
-  const emptyText = useMemo(() => {
-    if (profileUserId) return "No posts from this profile yet.";
-    return "Follow business accounts to see their posts in your feed.";
-  }, [profileUserId]);
+    return (
+      <View key={p.id} style={{ marginTop: 12, borderRadius: 18, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, overflow: "hidden" }}>
+        <View style={{ padding: 12, flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <View style={{ width: 38, height: 38, borderRadius: 19, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.09)", alignItems: "center", justifyContent: "center" }}>
+            {avatar ? <Image source={{ uri: avatar }} style={{ width: 38, height: 38 }} /> : <Ionicons name="person-outline" size={18} color="#fff" />}
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>{author?.business_name || author?.display_name || "Business"}</Text>
+              <SellerBadge verified={author?.is_verified} />
+            </View>
+            <Text style={{ color: MUTED, fontSize: 12 }}>@{author?.market_username || "store"} - {new Date(p.created_at).toLocaleString()}</Text>
+          </View>
+        </View>
+
+        {p.body ? <Text style={{ color: "rgba(255,255,255,0.88)", lineHeight: 20, paddingHorizontal: 12, paddingBottom: 10 }}>{p.body}</Text> : null}
+
+        {media.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12, gap: 10 }}>
+            {media.map((m) => {
+              const uri = safePublicUrl(SOCIAL_BUCKET, m.storage_path, m.public_url);
+              const isImage = m.kind === "image";
+              return (
+                <Pressable key={m.id} onPress={() => uri && setPreviewAsset({ uri, kind: isImage ? "image" : "video", mimeType: m.mime_type || "" })}>
+                  <View style={{ width: 168, height: 168, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: BORDER, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>
+                    {isImage && uri ? (
+                      <Image source={{ uri }} style={{ width: 168, height: 168 }} />
+                    ) : (
+                      <>
+                        <Ionicons name={m.kind === "video" ? "videocam-outline" : m.kind === "audio" ? "musical-notes-outline" : "document-outline"} size={28} color="#fff" />
+                        <Text style={{ marginTop: 8, color: MUTED, fontWeight: "800", fontSize: 12 }}>{m.kind.toUpperCase()}</Text>
+                        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.45)", fontSize: 10 }}>Tap to preview</Text>
+                      </>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+
+        <View style={{ borderTopWidth: 1, borderTopColor: BORDER, paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", gap: 16 }}>
+          <Pressable onPress={() => toggleLike(p.id)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Ionicons name={myLikes[p.id] ? "heart" : "heart-outline"} size={18} color={myLikes[p.id] ? "#EF4444" : "#fff"} />
+            <Text style={{ color: "#fff", fontWeight: "800" }}>{reactionCounts[p.id] ?? 0}</Text>
+          </Pressable>
+
+          <Pressable onPress={() => openComments(p)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+            <Text style={{ color: "#fff", fontWeight: "800" }}>{commentCounts[p.id] ?? 0}</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
-    <View style={{ marginTop: 12 }}>
-      <View
-        style={{
-          borderRadius: 16,
-          paddingHorizontal: 12,
-          paddingVertical: 10,
-          backgroundColor: "rgba(255,255,255,0.06)",
-          borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.12)",
-          flexDirection: "row",
-          gap: 8,
-          alignItems: "center",
-        }}
-      >
-        <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.75)" />
-        <TextInput
-          value={q}
-          onChangeText={setQ}
-          placeholder='Search posts... use "@username" for accounts'
-          placeholderTextColor="rgba(255,255,255,0.45)"
-          style={{ flex: 1, color: "#fff", fontWeight: "700" }}
-        />
-      </View>
-
+    <View>
       {!hideComposer ? (
-        <View
-          style={{
-            marginTop: 10,
-            borderRadius: 16,
-            padding: 12,
-            backgroundColor: "rgba(255,255,255,0.06)",
-            borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.12)",
-          }}
-        >
+        <View style={{ borderRadius: 18, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, padding: 12, marginBottom: 10 }}>
           <TextInput
             value={body}
             onChangeText={setBody}
-            placeholder="Share update with your followers..."
-            placeholderTextColor="rgba(255,255,255,0.45)"
             multiline
-            style={{ color: "#fff", minHeight: 70, textAlignVertical: "top" }}
+            placeholder="Share update with your followers..."
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            style={{ minHeight: 72, borderRadius: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: "rgba(255,255,255,0.04)", padding: 10, color: "#fff", textAlignVertical: "top" }}
           />
 
-          {media ? (
-            <View style={{ marginTop: 8, padding: 8, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" }}>
-              <Text style={{ color: "#fff", fontWeight: "800" }}>Attached: {media.kind}</Text>
-              <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }} numberOfLines={1}>{media.url}</Text>
-            </View>
+          {assets.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 10 }}>
+              {assets.map((a, idx) => (
+                <Pressable key={`${a.uri}-${idx}`} onPress={() => setPreviewAsset(a)}>
+                  <View style={{ width: 86, height: 86, borderRadius: 12, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: BORDER }}>
+                    {a.kind === "image" ? (
+                      <Image source={{ uri: a.uri }} style={{ width: 86, height: 86 }} />
+                    ) : (
+                      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                        <Ionicons name="videocam-outline" color="#fff" size={22} />
+                      </View>
+                    )}
+                    <Pressable
+                      onPress={() => setAssets((prev) => prev.filter((_, i) => i !== idx))}
+                      style={{ position: "absolute", right: 4, top: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center" }}
+                    >
+                      <Ionicons name="close" size={12} color="#fff" />
+                    </Pressable>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
           ) : null}
 
-          <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
-            <Pressable onPress={pickImageOrVideo} style={{ flex: 1, borderRadius: 12, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Image / Video</Text>
+          <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
+            <Pressable onPress={chooseMedia} style={{ flex: 1, height: 42, borderRadius: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: "rgba(255,255,255,0.06)", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 }}>
+              <Ionicons name="images-outline" size={16} color="#fff" />
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Add media</Text>
             </Pressable>
-            <Pressable onPress={pickAudio} style={{ flex: 1, borderRadius: 12, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Audio</Text>
-            </Pressable>
-            <Pressable disabled={posting} onPress={createPost} style={{ flex: 1, borderRadius: 12, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(124,58,237,0.25)", borderWidth: 1, borderColor: "rgba(124,58,237,0.5)", opacity: posting ? 0.7 : 1 }}>
-              {posting ? <ActivityIndicator /> : <Text style={{ color: "#fff", fontWeight: "900" }}>Post</Text>}
+            <Pressable onPress={submitPost} disabled={posting} style={{ flex: 1, height: 42, borderRadius: 12, borderWidth: 1, borderColor: "rgba(124,58,237,0.45)", backgroundColor: "rgba(124,58,237,0.25)", alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ color: "#fff", fontWeight: "900" }}>{posting ? "Posting..." : "Post"}</Text>
             </Pressable>
           </View>
+
+          {error ? <Text style={{ marginTop: 8, color: "#FCA5A5", fontSize: 12 }}>{error}</Text> : null}
         </View>
       ) : null}
 
-      {!!err ? <Text style={{ marginTop: 8, color: "#FCA5A5", fontWeight: "800" }}>{err}</Text> : null}
-
       {loading ? (
-        <View style={{ paddingVertical: 20, alignItems: "center" }}>
-          <ActivityIndicator />
+        <View style={{ paddingVertical: 18, alignItems: "center" }}>
+          <ActivityIndicator color="#fff" />
+          <Text style={{ marginTop: 8, color: MUTED }}>Loading feed...</Text>
         </View>
       ) : posts.length === 0 ? (
-        <Text style={{ marginTop: 12, color: "rgba(255,255,255,0.65)" }}>{emptyText}</Text>
+        <View style={{ borderRadius: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, padding: 14 }}>
+          <Text style={{ color: "#fff", fontWeight: "900" }}>No posts yet</Text>
+          <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>Follow businesses to see their updates.</Text>
+        </View>
       ) : (
-        <FlatList
-          data={posts}
-          scrollEnabled={false}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ paddingTop: 10, gap: 10 }}
-          renderItem={({ item }) => {
-            const st = stats[item.id] ?? { likes: 0, comments: 0, reshares: 0, myLiked: false };
-            const mediaItems: any[] = Array.isArray(item.media) ? item.media : [];
-            const pic = logoUrl(item.seller?.logo_path);
-            return (
-              <View style={{ borderRadius: 16, padding: 12, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
-                <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-                  <View style={{ width: 36, height: 36, borderRadius: 18, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }}>
-                    {pic ? <Image source={{ uri: pic }} style={{ width: 36, height: 36 }} /> : <Ionicons name="person-outline" size={18} color="#fff" />}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: "#fff", fontWeight: "900" }}>
-                      {item.seller?.business_name || item.seller?.display_name || "Business"}
-                      {item.seller?.is_verified ? " ✓" : ""}
-                    </Text>
-                    <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>@{item.seller?.market_username || "profile"} ? {new Date(item.created_at).toLocaleString()}</Text>
-                  </View>
-                </View>
-
-                {!!item.body ? <Text style={{ marginTop: 10, color: "#fff", lineHeight: 20 }}>{item.body}</Text> : null}
-
-                {mediaItems.length > 0 ? (
-                  <View style={{ marginTop: 10, gap: 8 }}>
-                    {mediaItems.map((m, idx) => (
-                      <View key={`${item.id}-${idx}`} style={{ borderRadius: 12, padding: 10, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" }}>
-                        {m.kind === "image" || m.kind === "video" ? (
-                          <Image source={{ uri: m.url }} style={{ width: "100%", height: 220, borderRadius: 10 }} resizeMode="cover" />
-                        ) : (
-                          <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800" }}>Audio attached</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                <View style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 18 }}>
-                  <Pressable onPress={() => toggleLike(item.id)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Ionicons name={st.myLiked ? "heart" : "heart-outline"} size={18} color={st.myLiked ? "#F87171" : "#fff"} />
-                    <Text style={{ color: "#fff", fontWeight: "800" }}>{st.likes}</Text>
-                  </Pressable>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Ionicons name="chatbubble-outline" size={18} color="#fff" />
-                    <Text style={{ color: "#fff", fontWeight: "800" }}>{st.comments}</Text>
-                  </View>
-                  <Pressable onPress={() => reshare(item.id)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Ionicons name="repeat-outline" size={18} color="#fff" />
-                    <Text style={{ color: "#fff", fontWeight: "800" }}>{st.reshares}</Text>
-                  </Pressable>
-                </View>
-
-                <View style={{ marginTop: 10, flexDirection: "row", gap: 8, alignItems: "center" }}>
-                  <TextInput
-                    value={commentDraft[item.id] || ""}
-                    onChangeText={(v) => setCommentDraft((prev) => ({ ...prev, [item.id]: v }))}
-                    placeholder="Write comment..."
-                    placeholderTextColor="rgba(255,255,255,0.45)"
-                    style={{ flex: 1, color: "#fff", borderRadius: 10, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", paddingHorizontal: 10, paddingVertical: 8 }}
-                  />
-                  <Pressable onPress={() => addComment(item.id)} style={{ borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: "rgba(124,58,237,0.25)", borderWidth: 1, borderColor: "rgba(124,58,237,0.5)" }}>
-                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Comment</Text>
-                  </Pressable>
-                </View>
-              </View>
-            );
-          }}
-        />
+        <View>{posts.map(renderPost)}</View>
       )}
+
+      <Modal visible={!!previewAsset} transparent animationType="fade" onRequestClose={() => setPreviewAsset(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.92)", padding: 16, justifyContent: "center" }}>
+          <Pressable onPress={() => setPreviewAsset(null)} style={{ position: "absolute", right: 16, top: 48, zIndex: 5 }}>
+            <Ionicons name="close-circle" size={36} color="#fff" />
+          </Pressable>
+          {previewAsset?.kind === "image" ? (
+            <Image source={{ uri: previewAsset.uri }} style={{ width: "100%", height: "70%", borderRadius: 16 }} resizeMode="contain" />
+          ) : (
+            <View style={{ borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, padding: 18 }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Media preview</Text>
+              <Text style={{ marginTop: 8, color: MUTED }}>
+                Video/audio preview is limited on this build. You can still upload and play after native media modules are included.
+              </Text>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      <Modal visible={!!commentsOpenPost} transparent animationType="slide" onRequestClose={() => setCommentsOpenPost(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}>
+          <View style={{ maxHeight: "82%", borderTopLeftRadius: 20, borderTopRightRadius: 20, backgroundColor: "#0B0915", borderTopWidth: 1, borderColor: BORDER, padding: 14 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Comments</Text>
+              <Pressable onPress={() => setCommentsOpenPost(null)}>
+                <Ionicons name="close" size={24} color="#fff" />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ marginTop: 10 }} contentContainerStyle={{ paddingBottom: 14 }}>
+              {comments.length === 0 ? (
+                <Text style={{ color: MUTED }}>No comments yet.</Text>
+              ) : (
+                comments.map((c) => (
+                  <View key={c.id} style={{ borderRadius: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, padding: 10, marginBottom: 8 }}>
+                    <Text style={{ color: "#fff", fontWeight: "800" }}>@{c.profiles?.username || c.profiles?.full_name || "user"}</Text>
+                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)" }}>{c.body}</Text>
+                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.45)", fontSize: 11 }}>{new Date(c.created_at).toLocaleString()}</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TextInput
+                value={commentText}
+                onChangeText={setCommentText}
+                placeholder="Write a comment..."
+                placeholderTextColor="rgba(255,255,255,0.35)"
+                style={{ flex: 1, borderRadius: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: "rgba(255,255,255,0.05)", color: "#fff", paddingHorizontal: 10, paddingVertical: 10 }}
+              />
+              <Pressable
+                disabled={commentBusy}
+                onPress={submitComment}
+                style={{ width: 56, borderRadius: 12, borderWidth: 1, borderColor: "rgba(124,58,237,0.45)", backgroundColor: "rgba(124,58,237,0.25)", alignItems: "center", justifyContent: "center" }}
+              >
+                <Ionicons name="send" size={18} color="#fff" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

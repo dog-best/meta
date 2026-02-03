@@ -25,6 +25,7 @@ type DeliveryType = "physical" | "digital" | "in_person";
 type Currency = "NGN" | "USDC";
 type MainCategory = "product" | "service";
 type AvailabilityScope = "global" | "continent" | "country" | "state" | "city" | "radius";
+type DurationPreset = "none" | "24h" | "3d" | "7d" | "30d" | "90d" | "custom";
 
 function safeNumber(input: string) {
   const n = Number(String(input).replace(/,/g, "").trim());
@@ -41,6 +42,16 @@ function ensureExtFromMime(mime: string) {
 
 function isValidUrl(u: string) {
   return /^https?:\/\/.+/i.test(u.trim());
+}
+
+function isoFromPreset(preset: DurationPreset) {
+  const now = Date.now();
+  if (preset === "24h") return new Date(now + 24 * 60 * 60 * 1000).toISOString();
+  if (preset === "3d") return new Date(now + 3 * 24 * 60 * 60 * 1000).toISOString();
+  if (preset === "7d") return new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+  if (preset === "30d") return new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+  if (preset === "90d") return new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString();
+  return "";
 }
 
 function CardBox({ children }: any) {
@@ -165,7 +176,9 @@ export default function SellTab() {
   const [discountOriginalPrice, setDiscountOriginalPrice] = useState("");
   const [discountPrice, setDiscountPrice] = useState("");
   const [discountEndsAt, setDiscountEndsAt] = useState("");
+  const [discountPreset, setDiscountPreset] = useState<DurationPreset>("none");
   const [autoDeleteAt, setAutoDeleteAt] = useState("");
+  const [autoDeletePreset, setAutoDeletePreset] = useState<DurationPreset>("none");
 
   const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("global");
   const [availabilityContinents, setAvailabilityContinents] = useState<string[]>([]);
@@ -359,6 +372,16 @@ export default function SellTab() {
     }
   }
 
+  function applyDiscountPreset(preset: DurationPreset) {
+    setDiscountPreset(preset);
+    setDiscountEndsAt(preset === "custom" ? discountEndsAt : isoFromPreset(preset));
+  }
+
+  function applyAutoDeletePreset(preset: DurationPreset) {
+    setAutoDeletePreset(preset);
+    setAutoDeleteAt(preset === "custom" ? autoDeleteAt : isoFromPreset(preset));
+  }
+
   function buildAvailability() {
     const radius = availabilityScope === "radius" ? safeNumber(availabilityRadiusKm) : NaN;
     const center = availabilityCenter ?? { lat: 0, lng: 0, label: "" };
@@ -495,7 +518,7 @@ export default function SellTab() {
       const availability = buildAvailability();
 
       console.log("[SellTab] createListing -> start");
-      setStage("Creating listing…");
+      setStage("Creating listing...");
       const listing = await createListing({
         seller_id: user.id,
         category,
@@ -516,7 +539,7 @@ export default function SellTab() {
       // If no images (allowed for digital service with website URL), skip images flow
       if (images.length > 0) {
         console.log("[SellTab] upload images -> start", { count: images.length });
-        setStage("Uploading images…");
+        setStage("Uploading images...");
         const inserts: any[] = [];
 
         for (let i = 0; i < images.length; i++) {
@@ -822,7 +845,7 @@ export default function SellTab() {
           <Input value={title} onChangeText={setTitle} placeholder={category === "product" ? "e.g. iPhone 12 Pro Max" : "e.g. Landing page design"} />
 
           <Label>Description</Label>
-          <Input value={description} onChangeText={setDescription} placeholder="What the buyer gets, requirements, timeline…" multiline />
+          <Input value={description} onChangeText={setDescription} placeholder="What the buyer gets, requirements, timeline..." multiline />
 
           <Label>Payment route</Label>
           <Row>
@@ -873,13 +896,40 @@ export default function SellTab() {
               <Input value={discountOriginalPrice} onChangeText={setDiscountOriginalPrice} placeholder="e.g. 50000" keyboardType="numeric" />
               <Label>Discounted price</Label>
               <Input value={discountPrice} onChangeText={setDiscountPrice} placeholder="e.g. 35000" keyboardType="numeric" />
-              <Label>Discount end time (ISO/date)</Label>
-              <Input value={discountEndsAt} onChangeText={setDiscountEndsAt} placeholder="e.g. 2026-12-31T23:59:59Z" autoCapitalize="none" />
+              <Label>Discount duration</Label>
+              <View style={{ marginTop: 8, flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                <Chip label="No end" active={discountPreset === "none"} onPress={() => applyDiscountPreset("none")} />
+                <Chip label="24h" active={discountPreset === "24h"} onPress={() => applyDiscountPreset("24h")} />
+                <Chip label="3d" active={discountPreset === "3d"} onPress={() => applyDiscountPreset("3d")} />
+                <Chip label="7d" active={discountPreset === "7d"} onPress={() => applyDiscountPreset("7d")} />
+                <Chip label="30d" active={discountPreset === "30d"} onPress={() => applyDiscountPreset("30d")} />
+                <Chip label="Custom" active={discountPreset === "custom"} onPress={() => applyDiscountPreset("custom")} />
+              </View>
+              {discountPreset === "custom" ? (
+                <Input value={discountEndsAt} onChangeText={setDiscountEndsAt} placeholder="2026-12-31T23:59:59Z" autoCapitalize="none" />
+              ) : discountEndsAt ? (
+                <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Ends: {new Date(discountEndsAt).toLocaleString()}</Text>
+              ) : (
+                <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>No discount end time.</Text>
+              )}
             </>
           ) : null}
 
-          <Label>Auto-delete listing at (optional)</Label>
-          <Input value={autoDeleteAt} onChangeText={setAutoDeleteAt} placeholder="e.g. 2026-12-31T23:59:59Z" autoCapitalize="none" />
+          <Label>Listing auto-delete</Label>
+          <View style={{ marginTop: 8, flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+            <Chip label="No auto-delete" active={autoDeletePreset === "none"} onPress={() => applyAutoDeletePreset("none")} />
+            <Chip label="7d" active={autoDeletePreset === "7d"} onPress={() => applyAutoDeletePreset("7d")} />
+            <Chip label="30d" active={autoDeletePreset === "30d"} onPress={() => applyAutoDeletePreset("30d")} />
+            <Chip label="90d" active={autoDeletePreset === "90d"} onPress={() => applyAutoDeletePreset("90d")} />
+            <Chip label="Custom" active={autoDeletePreset === "custom"} onPress={() => applyAutoDeletePreset("custom")} />
+          </View>
+          {autoDeletePreset === "custom" ? (
+            <Input value={autoDeleteAt} onChangeText={setAutoDeleteAt} placeholder="2026-12-31T23:59:59Z" autoCapitalize="none" />
+          ) : autoDeleteAt ? (
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Deletes at: {new Date(autoDeleteAt).toLocaleString()}</Text>
+          ) : (
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Listing stays active until you disable it.</Text>
+          )}
 
           {category === "product" ? (
             <>
