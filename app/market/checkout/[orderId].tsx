@@ -11,6 +11,7 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { payUsdcForOrder } from "@/services/market/usdcCheckout";
 import { getPreferredMarketChain } from "@/services/market/chainConfig";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -215,7 +216,7 @@ export default function Checkout() {
           setContactNote(String(contact?.note ?? ""));
         }
       } catch (e: any) {
-        if (mounted) setErr(e?.message || "Failed to load order");
+        if (mounted) setErr(friendlyMarketError(e, "We couldn't load this checkout right now."));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -242,7 +243,7 @@ export default function Checkout() {
       setOrder((prev: any) => ({ ...(prev ?? {}), delivery_address: next }));
       setDeliveryGeo(geo);
     } catch (e: any) {
-      setErr(e?.message || "Failed to save location");
+      setErr(friendlyMarketError(e, "We couldn't save your location."));
     } finally {
       setSavingGeo(false);
     }
@@ -264,7 +265,7 @@ export default function Checkout() {
       };
       await saveDeliveryGeo(geo);
     } catch (e: any) {
-      setErr(e?.message || "Could not access location");
+      setErr(friendlyMarketError(e, "We couldn't access your location."));
     } finally {
       setSavingGeo(false);
     }
@@ -300,7 +301,7 @@ export default function Checkout() {
       }
       setOrder((prev: any) => ({ ...(prev ?? {}), buyer_contact: payload }));
     } catch (e: any) {
-      setErr(e?.message || "Failed to save contact");
+      setErr(friendlyMarketError(e, "We couldn't save your contact details."));
     } finally {
       setSavingContact(false);
     }
@@ -338,7 +339,7 @@ export default function Checkout() {
 
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {
-      setErr(e?.message || "Wallet checkout failed");
+      setErr(friendlyMarketError(e, "We couldn't complete NGN payment."));
     } finally {
       setBusy(false);
       console.log("[Checkout] payWithWallet end");
@@ -361,7 +362,7 @@ export default function Checkout() {
       // We route back to order screen where you can show deposit instructions/intents history
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {
-      setErr(e?.message || "USDC deposit intent failed");
+      setErr(friendlyMarketError(e, "We couldn't start crypto checkout."));
     } finally {
       setBusy(false);
       console.log("[Checkout] payWithUsdc end");

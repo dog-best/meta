@@ -12,6 +12,7 @@ import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain } f
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { getRpcUrlForChain, getWalletBackupSecret, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 type SellerProfile = {
   user_id: string;
@@ -253,7 +254,7 @@ export default function MarketAccountTab() {
       setBackupSecret(secret.value);
       setBackupOpen(true);
     } catch (e: any) {
-      setWalletErr(e?.message || "Could not open wallet backup.");
+      setWalletErr(friendlyMarketError(e, "We couldn't open wallet backup right now."));
     }
   }
 
@@ -292,7 +293,7 @@ export default function MarketAccountTab() {
       setWallet({ address: res.address });
       await refreshWalletMeta(chain);
     } catch (e: any) {
-      if (e?.message !== "Cancelled") setWalletErr(e?.message || "Could not generate wallet");
+      if (e?.message !== "Cancelled") setWalletErr(friendlyMarketError(e, "We couldn't generate your wallet right now."));
     } finally {
       setWalletBusy(false);
     }
@@ -318,7 +319,7 @@ export default function MarketAccountTab() {
       await refreshWalletMeta(chain);
       Alert.alert("Synced", `Wallet synced to ${activeChains.length} active network(s).`);
     } catch (e: any) {
-      setWalletErr(e?.message || "Failed to sync wallet");
+      setWalletErr(friendlyMarketError(e, "We couldn't sync wallet to active networks."));
     } finally {
       setWalletBusy(false);
     }
@@ -359,7 +360,7 @@ export default function MarketAccountTab() {
       setSendTo("");
       await refreshWalletMeta(chain);
     } catch (e: any) {
-      setWalletErr(e?.message || "Send failed.");
+      setWalletErr(friendlyMarketError(e, "We couldn't send token right now."));
     }
   }
 

@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -219,7 +220,7 @@ export default function ListingDetails() {
         }
       } catch (e: any) {
         if (mounted) {
-          setErr(e?.message || "Failed to load listing");
+          setErr(friendlyMarketError(e, "We couldn't load this listing."));
           setListing(null);
           setImages([]);
           setSeller(null);
@@ -312,7 +313,7 @@ export default function ListingDetails() {
       }
       await loadReactions();
     } catch (e: any) {
-      Alert.alert("Failed", e?.message ?? "Could not update reaction");
+      Alert.alert("Try again", friendlyMarketError(e, "We couldn't save your reaction."));
     }
   }
 
@@ -330,7 +331,7 @@ export default function ListingDetails() {
       setCommentInput("");
       await loadComments();
     } catch (e: any) {
-      Alert.alert("Failed", e?.message ?? "Could not post comment");
+      Alert.alert("Try again", friendlyMarketError(e, "We couldn't post your comment."));
     } finally {
       setCommentBusy(false);
     }
@@ -384,7 +385,7 @@ export default function ListingDetails() {
 
       router.push(`/market/checkout/${order.id}` as any);
     } catch (e: any) {
-      setErr(e?.message || "Could not create order");
+      setErr(friendlyMarketError(e, "We couldn't start checkout for this listing."));
     }
   }
 
@@ -404,7 +405,7 @@ export default function ListingDetails() {
       setDeliveryGeo(geo);
       setDeliveryLabel(res.label);
     } catch (e: any) {
-      Alert.alert("Location error", e?.message || "Could not access location.");
+      Alert.alert("Location issue", friendlyMarketError(e, "We couldn't access your location."));
     } finally {
       setLocatingDelivery(false);
     }

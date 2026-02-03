@@ -10,6 +10,7 @@ import { callFn } from "@/services/functions";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import {
@@ -307,7 +308,7 @@ export default function OrderDetails() {
       setOtp((otpRow as any) ?? null);
       setIntents(((ints as any) ?? []) as any);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load order");
+      setErr(friendlyMarketError(e, "We couldn't load this order."));
       setOrder(null);
       setListing(null);
       setSeller(null);
@@ -344,7 +345,7 @@ export default function OrderDetails() {
       await callFn(FN_SELLER_OUT_FOR_DELIVERY, { order_id: order.id });
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Could not mark out for delivery");
+      setErr(friendlyMarketError(e, "We couldn't update delivery status."));
     } finally {
       setBusy(false);
     }
@@ -358,7 +359,7 @@ export default function OrderDetails() {
       await callFn(FN_OTP_GENERATE, { order_id: order.id });
       await load();
     } catch (e: any) {
-      setErr(e?.message || "OTP request failed");
+      setErr(friendlyMarketError(e, "We couldn't send OTP yet. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -376,7 +377,7 @@ export default function OrderDetails() {
       setOtpInput("");
       await load();
     } catch (e: any) {
-      setErr(e?.message || "OTP verify failed");
+      setErr(friendlyMarketError(e, "OTP verification failed. Please check the code and try again."));
     } finally {
       setBusy(false);
     }
@@ -396,7 +397,7 @@ async function releaseFunds() {
     }
     await load();
   } catch (e: any) {
-    setErr(e?.message || "Release failed");
+    setErr(friendlyMarketError(e, "We couldn't release funds yet."));
   } finally {
       setBusy(false);
     }
@@ -410,7 +411,7 @@ async function releaseFunds() {
       await callFn(FN_DISPUTE_OPEN, { order_id: order.id, reason: "Buyer requested refund / issue with delivery" });
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Could not open dispute");
+      setErr(friendlyMarketError(e, "We couldn't open a dispute right now."));
     } finally {
       setBusy(false);
     }
@@ -440,7 +441,7 @@ async function releaseFunds() {
       await callFn(FN_BUYER_CANCEL, { order_id: order.id }, 15000);
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Cancel failed");
+      setErr(friendlyMarketError(e, "We couldn't cancel this order right now."));
     } finally {
       setBusy(false);
     }
@@ -475,7 +476,7 @@ async function releaseFunds() {
       if (!url) throw new Error("No download URL");
       await Linking.openURL(url);
     } catch (e: any) {
-      setErr(e?.message || "Download failed");
+      setErr(friendlyMarketError(e, "We couldn't open this file right now."));
     }
   }
 

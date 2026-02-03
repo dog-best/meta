@@ -11,6 +11,7 @@ import { getAllCategories } from "@/services/market/categories";
 import { createListing, getMySellerProfile, insertListingImages, setListingCoverImage, uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -339,7 +340,7 @@ export default function SellTab() {
 
       setImages((prev) => [...prev, ...picked].slice(0, 8));
     } catch (e: any) {
-      Alert.alert("Error", e?.message ?? "Could not pick images");
+      Alert.alert("Try again", friendlyMarketError(e, "We couldn't add your selected images."));
     }
   }
 
@@ -365,7 +366,7 @@ export default function SellTab() {
         setAvailabilityRadiusKm("10");
       }
     } catch (e: any) {
-      const msg = e?.message || "Could not access location";
+      const msg = friendlyMarketError(e, "We couldn't access your location.");
       Alert.alert("Location error", msg);
     } finally {
       setLocatingAvailability(false);
@@ -556,7 +557,7 @@ export default function SellTab() {
       });
       return;
     } catch (e: any) {
-      const msg = e?.message ?? "Could not create listing";
+      const msg = friendlyMarketError(e, "We couldn't publish your listing right now.");
       // Helpful hint for the exact error you're seeing
       if (String(msg).toLowerCase().includes("row-level security")) {
         Alert.alert("RLS blocked", "Your RLS policies for market_listings or market_listing_images are blocking inserts.\n\nRun the SQL policy fix I sent and try again.");

@@ -21,6 +21,7 @@ import {
   getSupabaseFunctionsBaseUrl,
   getSupabaseJwtOrThrow,
 } from "@/services/net";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -295,7 +296,7 @@ export default function MarketOrdersTab() {
             return;
           }
 
-          throw new Error(msg);
+          throw new Error(friendlyMarketError({ message: msg }, "We couldn't load orders right now."));
         }
 
         const payload = json as FnResponse;
@@ -307,7 +308,7 @@ export default function MarketOrdersTab() {
         console.log("[MarketOrdersTab] edge call -> ok", res.status);
       } catch (e: any) {
         if (!aliveRef.current) return;
-        setErr(e?.message || "Failed to load orders");
+        setErr(friendlyMarketError(e, "We couldn't load orders right now."));
         setItems([]);
       } finally {
         if (!aliveRef.current) return;

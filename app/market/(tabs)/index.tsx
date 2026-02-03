@@ -19,6 +19,7 @@ import AppHeader from "@/components/common/AppHeader";
 import SocialFeed from "@/components/market/SocialFeed";
 import { CategoryItem, getCategoriesByMain, MarketMainCategory } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
+import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -324,7 +325,7 @@ export default function MarketHome() {
       });
       setStatsMap(stats);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load listings");
+      setErr(friendlyMarketError(e, "We couldn't load marketplace listings."));
       setRows([]);
     } finally {
       setLoading(false);
@@ -524,7 +525,7 @@ export default function MarketHome() {
                   </View>
                 ) : err ? (
                   <View style={{ marginTop: 14, borderRadius: 16, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
-                    <Text style={{ color: "#fff", fontWeight: "900" }}>Could not load data</Text>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Couldn't load data</Text>
                     <Text style={{ marginTop: 6, color: MUTED }}>{err}</Text>
                   </View>
                 ) : null}
