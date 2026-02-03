@@ -56,6 +56,7 @@ type TxItem = {
   amount: number | string;
   created_at: string | number | Date;
   reference?: string | null;
+  counterpartyName?: string;
 };
 
 function safeNumber(v: unknown) {
