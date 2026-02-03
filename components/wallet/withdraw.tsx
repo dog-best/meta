@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import ConfirmPurchase from "@/components/common/confirmpurchase";
+import { WALLET_THEME as T } from "@/components/wallet/theme";
 import { filterBanks, useBanks } from "@/hooks/wallet/useBanks";
 import { callFn } from "@/services/functions";
 import { requireLocalAuth } from "@/utils/secureAuth";
@@ -32,19 +33,18 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
     const auth = await requireLocalAuth("Confirm withdrawal");
     if (!auth.ok) throw new Error(auth.message || "Authentication required");
 
-    const res = await callFn("paystack-withdraw-init", {
+    return callFn("paystack-withdraw-init", {
       amount: a,
       bank_code: bank.code,
       account_number: accountNumber,
       account_name: accountName,
     });
-    return res;
   }
 
   return (
     <View style={styles.card}>
       <Text style={styles.h}>Withdraw</Text>
-      <Text style={styles.sub}>Fee: NGN 20 flat - Any amount</Text>
+      <Text style={styles.sub}>Fee: NGN 20 flat</Text>
 
       <Text style={styles.label}>Amount (NGN)</Text>
       <TextInput
@@ -72,8 +72,8 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
         keyExtractor={(i) => i.code}
         renderItem={({ item }) => (
           <TouchableOpacity onPress={() => setBank(item)} style={styles.bankRow}>
-            <Text style={{ color: "white", fontWeight: "800" }}>{item.name}</Text>
-            <Text style={{ color: "rgba(255,255,255,0.55)", marginTop: 2 }}>{item.code}</Text>
+            <Text style={styles.bankName}>{item.name}</Text>
+            <Text style={styles.bankCode}>{item.code}</Text>
           </TouchableOpacity>
         )}
       />
@@ -98,7 +98,7 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
       />
 
       <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} onPress={() => setConfirm(true)} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review and Withdraw</Text>}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review and withdraw</Text>}
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}
@@ -130,24 +130,24 @@ export default function Withdraw({ onSuccess }: { onSuccess: () => void }) {
 const styles = StyleSheet.create({
   card: {
     marginHorizontal: 16,
-    marginTop: 10,
-    backgroundColor: "#0B0F17",
-    borderRadius: 18,
+    marginTop: 12,
+    backgroundColor: T.card,
+    borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
   },
-  h: { color: "white", fontWeight: "900", fontSize: 16 },
-  sub: { color: "rgba(255,255,255,0.6)", marginTop: 4, marginBottom: 14, fontSize: 12 },
-  label: { color: "rgba(255,255,255,0.7)", fontWeight: "700", marginBottom: 8 },
+  h: { color: T.text, fontWeight: "900", fontSize: 16 },
+  sub: { color: T.textMuted, marginTop: 4, marginBottom: 14, fontSize: 12 },
+  label: { color: T.textMuted, fontWeight: "700", marginBottom: 8 },
   input: {
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
-    color: "white",
+    borderColor: T.border,
+    color: T.text,
   },
   selected: { marginTop: 8, color: "rgba(255,255,255,0.75)" },
   bankList: {
@@ -155,16 +155,18 @@ const styles = StyleSheet.create({
     maxHeight: 160,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
     overflow: "hidden",
   },
   bankRow: {
     padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.06)",
-    backgroundColor: "rgba(255,255,255,0.02)",
+    backgroundColor: "rgba(255,255,255,0.03)",
   },
-  btn: { marginTop: 12, backgroundColor: "#2563EB", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
+  bankName: { color: T.text, fontWeight: "800" },
+  bankCode: { color: T.textMuted, marginTop: 2 },
+  btn: { marginTop: 12, backgroundColor: T.primary, paddingVertical: 14, borderRadius: 14, alignItems: "center" },
   btnDisabled: { opacity: 0.6 },
   btnText: { color: "white", fontWeight: "900" },
   msg: { color: "rgba(255,255,255,0.75)", marginTop: 12 },

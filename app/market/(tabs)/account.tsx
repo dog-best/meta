@@ -513,9 +513,9 @@ export default function MarketAccountTab() {
         )}
 
         <CardBox>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Fintech</Text>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Utility</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Go back to your main finance tabs.
+            Fund, Withdraw, Recieve, and Pay bills with 🆖NGN
           </Text>
 
           <Pressable

@@ -1,6 +1,8 @@
-import type { WalletTx } from "@/hooks/wallet/useWalletSimple";
+import type { WalletTx } from "@/hooks/wallet/useWalletTxPaginated";
 import React from "react";
 import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native";
+
+import { WALLET_THEME as T } from "@/components/wallet/theme";
 
 function badge(type: WalletTx["type"]) {
   switch (type) {
@@ -22,7 +24,7 @@ function badge(type: WalletTx["type"]) {
 export default function WalletActivity({ items, loading }: { items: WalletTx[]; loading?: boolean }) {
   return (
     <View style={styles.section}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+      <View style={styles.headRow}>
         <Text style={styles.h}>Activity</Text>
         <View style={styles.countPill}>
           <Text style={styles.countText}>{items.length}</Text>
@@ -50,8 +52,8 @@ export default function WalletActivity({ items, loading }: { items: WalletTx[]; 
                   <View style={{ flex: 1 }}>
                     <Text style={styles.amount}>NGN {Number(item.amount).toLocaleString()}</Text>
                     <Text style={styles.meta}>
+                      {item.counterpartyName ? `${item.counterpartyName} - ` : ""}
                       {new Date(item.created_at).toLocaleString()}
-                      {item.reference ? ` - ${item.reference}` : ""}
                     </Text>
                   </View>
                 </View>
@@ -66,6 +68,7 @@ export default function WalletActivity({ items, loading }: { items: WalletTx[]; 
 
 const styles = StyleSheet.create({
   section: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 20 },
+  headRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   h: { color: "white", fontWeight: "900", fontSize: 16, marginBottom: 10 },
   countPill: {
     paddingHorizontal: 8,
@@ -73,22 +76,22 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: T.border,
   },
   countText: { color: "#fff", fontWeight: "900", fontSize: 11 },
   card: {
-    backgroundColor: "#0B0F17",
+    backgroundColor: T.card,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
     overflow: "hidden",
   },
   row: { flexDirection: "row", gap: 12, padding: 14, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)" },
   pill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, alignSelf: "flex-start" },
   pillText: { fontWeight: "900", fontSize: 12 },
   amount: { color: "white", fontWeight: "900" },
-  meta: { color: "rgba(255,255,255,0.5)", marginTop: 3, fontSize: 12 },
-  empty: { color: "rgba(255,255,255,0.6)", padding: 14 },
+  meta: { color: T.textMuted, marginTop: 3, fontSize: 12 },
+  empty: { color: T.textMuted, padding: 14 },
   loading: { padding: 16, alignItems: "center", gap: 8 },
-  loadingText: { color: "rgba(255,255,255,0.6)", fontSize: 12 },
+  loadingText: { color: T.textMuted, fontSize: 12 },
 });

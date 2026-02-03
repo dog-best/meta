@@ -2,6 +2,7 @@ import * as Clipboard from "expo-clipboard";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { WALLET_THEME as T } from "@/components/wallet/theme";
 import { supabase } from "@/services/supabase";
 
 type Props = {
@@ -37,11 +38,9 @@ export default function ProfileModal({ visible, onClose }: Props) {
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.h}>Profile</Text>
+          <Text style={styles.h}>Quick profile</Text>
           <Text style={styles.label}>Your UID (share to receive money)</Text>
-          <View style={styles.uidBox}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.uid}>{uid || "-"}</Text>}
-          </View>
+          <View style={styles.uidBox}>{loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.uid}>{uid || "-"}</Text>}</View>
           {msg ? <Text style={styles.msg}>{msg}</Text> : null}
 
           <View style={{ height: 12 }} />
@@ -82,26 +81,26 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 420,
     backgroundColor: "#0B0F17",
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
   },
-  h: { color: "white", fontSize: 16, fontWeight: "900" },
-  label: { color: "rgba(255,255,255,0.65)", marginTop: 10, fontWeight: "700" },
+  h: { color: T.text, fontSize: 16, fontWeight: "900" },
+  label: { color: T.textMuted, marginTop: 10, fontWeight: "700" },
   uidBox: {
     marginTop: 10,
     padding: 14,
     borderRadius: 14,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
+    borderColor: T.border,
   },
-  uid: { color: "white", fontWeight: "900", fontSize: 16, letterSpacing: 0.6 },
+  uid: { color: T.text, fontWeight: "900", fontSize: 16, letterSpacing: 0.6 },
   msg: { color: "rgba(255,255,255,0.6)", marginTop: 8, fontSize: 12, textAlign: "center" },
   btn: { marginTop: 10, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnGhost: { backgroundColor: "rgba(255,255,255,0.06)" },
+  btnGhost: { backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: T.border },
   btnGhostText: { color: "white", fontWeight: "900" },
-  btnPrimary: { backgroundColor: "#2563EB" },
+  btnPrimary: { backgroundColor: T.primary },
   btnPrimaryText: { color: "white", fontWeight: "900" },
 });

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import ConfirmPurchase from "@/components/common/confirmpurchase";
+import { WALLET_THEME as T } from "@/components/wallet/theme";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 
@@ -26,10 +27,7 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
 
     const toUid = uid.trim();
     if (!toUid) throw new Error("Recipient UID is required");
-
-    if (!Number.isFinite(a) || a <= 0) {
-      throw new Error("Enter a valid amount");
-    }
+    if (!Number.isFinite(a) || a <= 0) throw new Error("Enter a valid amount");
 
     const { data: u, error: userErr } = await supabase.auth.getUser();
     if (userErr) throw new Error(userErr.message);
@@ -46,18 +44,14 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
     if (error) throw new Error(error.message);
 
     const res = data as TransferResponse | null;
-
-    if (!res?.reference) {
-      throw new Error("Transfer completed but no reference returned");
-    }
-
+    if (!res?.reference) throw new Error("Transfer completed but no reference returned");
     return res;
   }
 
   return (
     <View style={styles.card}>
-      <Text style={styles.h}>Send</Text>
-      <Text style={styles.sub}>Send to another user using their UID</Text>
+      <Text style={styles.h}>Send money</Text>
+      <Text style={styles.sub}>Transfer instantly with UID</Text>
 
       <Text style={styles.label}>Recipient UID</Text>
       <TextInput
@@ -80,7 +74,7 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
       />
 
       <Pressable style={[styles.btn, loading ? styles.btnDisabled : null]} disabled={loading} onPress={() => setConfirm(true)}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review and Send</Text>}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Review and send</Text>}
       </Pressable>
 
       {msg ? <Text style={styles.msg}>{msg}</Text> : null}
@@ -112,35 +106,33 @@ export default function SendMoney({ onSuccess }: { onSuccess: () => void }) {
 const styles = StyleSheet.create({
   card: {
     marginHorizontal: 16,
-    marginTop: 10,
-    backgroundColor: "#0B0F17",
-    borderRadius: 18,
+    marginTop: 12,
+    backgroundColor: T.card,
+    borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
   },
-  h: { color: "white", fontWeight: "900", fontSize: 16 },
-  sub: { color: "rgba(255,255,255,0.6)", marginTop: 4, marginBottom: 14, fontSize: 12 },
-  label: { color: "rgba(255,255,255,0.7)", fontWeight: "700", marginBottom: 8 },
+  h: { color: T.text, fontWeight: "900", fontSize: 16 },
+  sub: { color: T.textMuted, marginTop: 4, marginBottom: 14, fontSize: 12 },
+  label: { color: T.textMuted, fontWeight: "800", marginBottom: 8 },
   input: {
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
-    color: "white",
+    borderColor: T.border,
+    color: T.text,
   },
   btn: {
     marginTop: 12,
-    backgroundColor: "#2563EB",
+    backgroundColor: T.primary,
     paddingVertical: 14,
     borderRadius: 14,
     alignItems: "center",
   },
-  btnDisabled: {
-    opacity: 0.6,
-  },
+  btnDisabled: { opacity: 0.6 },
   btnText: { color: "white", fontWeight: "900" },
-  msg: { color: "rgba(255,255,255,0.75)", marginTop: 12 },
+  msg: { color: "rgba(255,255,255,0.8)", marginTop: 12 },
 });

@@ -2,6 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { WALLET_THEME as T } from "@/components/wallet/theme";
+
 type Props = {
   balance: number;
   onRefresh: () => void;
@@ -9,17 +11,20 @@ type Props = {
   refreshing?: boolean;
 };
 
+function fmt(value: number) {
+  return Number(value || 0).toLocaleString();
+}
+
 export default function WalletHeader({ balance, onRefresh, onOpenProfile, refreshing }: Props) {
   return (
     <View style={styles.wrap}>
       <View style={styles.topRow}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View>
           <Text style={styles.title}>Wallet</Text>
-          <View style={styles.pill}>
-            <Text style={styles.pillText}>NGN</Text>
-          </View>
+          <Text style={styles.subTitle}>Fast wallet operations with secure confirmation</Text>
         </View>
-        <View style={{ flexDirection: "row", gap: 10 }}>
+
+        <View style={styles.topActions}>
           <Pressable style={styles.smallBtn} onPress={onRefresh}>
             {refreshing ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="refresh" size={18} color="#fff" />}
           </Pressable>
@@ -30,46 +35,52 @@ export default function WalletHeader({ balance, onRefresh, onOpenProfile, refres
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>Available Balance</Text>
-        <Text style={styles.balance}>NGN {Number(balance || 0).toLocaleString()}</Text>
-        <Text style={styles.sub}>Secure ledger-backed balance</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>NGN WALLET</Text>
+        </View>
+        <Text style={styles.label}>Available balance</Text>
+        <Text style={styles.balance}>NGN {fmt(balance)}</Text>
+        <Text style={styles.foot}>Ledger-backed balance with audit trail</Text>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 },
-  topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  title: { color: "white", fontSize: 20, fontWeight: "900" },
+  wrap: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
+  topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  title: { color: T.text, fontSize: 24, fontWeight: "900" },
+  subTitle: { color: T.textMuted, fontSize: 12, marginTop: 4 },
+  topActions: { flexDirection: "row", gap: 10 },
   smallBtn: {
-    width: 40,
-    height: 40,
+    width: 42,
+    height: 42,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: T.card,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
     alignItems: "center",
     justifyContent: "center",
   },
   card: {
     marginTop: 12,
-    backgroundColor: "#0B0F17",
-    borderRadius: 18,
+    borderRadius: 22,
     padding: 16,
+    backgroundColor: T.card,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: T.border,
   },
-  label: { color: "rgba(255,255,255,0.65)", fontWeight: "700" },
-  balance: { color: "white", fontSize: 28, fontWeight: "900", marginTop: 8 },
-  sub: { color: "rgba(255,255,255,0.45)", marginTop: 6, fontSize: 12 },
-  pill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  badge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: T.primarySoft,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(124,58,237,0.45)",
   },
-  pillText: { color: "#fff", fontWeight: "900", fontSize: 10 },
+  badgeText: { color: "#DDD6FE", fontSize: 10, fontWeight: "900" },
+  label: { color: T.textMuted, marginTop: 10, fontWeight: "700" },
+  balance: { color: T.text, marginTop: 8, fontSize: 30, fontWeight: "900" },
+  foot: { color: T.textDim, marginTop: 6, fontSize: 12 },
 });

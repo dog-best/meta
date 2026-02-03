@@ -77,15 +77,23 @@ export async function getSupabaseJwtOrThrow() {
   const session = sessionData.session;
   const now = Date.now();
   const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
+  let token = session?.access_token || "";
 
-  if (session?.access_token && expiresAtMs - now > 60_000) {
-    return session.access_token;
+  if (!token || expiresAtMs - now <= 60_000) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) throw refreshErr;
+    token = refreshed.session?.access_token || "";
   }
 
-  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-  if (refreshErr) throw refreshErr;
+  if (!token) throw new Error("No session. Please sign in again.");
 
-  const token = refreshed.session?.access_token;
+  const probe = await supabase.auth.getUser(token);
+  if (probe.error || !probe.data.user) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) throw refreshErr;
+    token = refreshed.session?.access_token || "";
+  }
+
   if (!token) throw new Error("No session. Please sign in again.");
   return token;
 }

@@ -443,6 +443,7 @@ export default function Dashboard() {
                     NGN {formatNGN(item.amount)}
                   </Text>
                   <Text style={styles.txMeta} numberOfLines={1}>
+                    {item.counterpartyName ? `${item.counterpartyName} - ` : ""}
                     {formatDateTime(item.created_at)}
                     {item.reference ? ` - ${item.reference}` : ""}
                   </Text>
