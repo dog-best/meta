@@ -261,17 +261,27 @@ export default function Checkout() {
     console.log("[Checkout] payWithWallet start", { orderId: oid });
     setBusy(true);
     try {
-      // Force-refresh session right before secured function call to reduce Invalid JWT issues.
-      await supabase.auth.refreshSession().catch(() => null);
+      console.log("[Checkout] payWithWallet auth prompt");
       const auth = await requireLocalAuth("Confirm wallet payment");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
+      console.log("[Checkout] payWithWallet auth ok");
       try {
-        await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
+        console.log("[Checkout] payWithWallet callFn start");
+        await Promise.race([
+          callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000)),
+        ]);
+        console.log("[Checkout] payWithWallet callFn ok");
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (/jwt|session expired|unauthor/i.test(msg)) {
+          console.log("[Checkout] payWithWallet retry after session refresh");
           await supabase.auth.refreshSession().catch(() => null);
-          await callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid });
+          await Promise.race([
+            callFn(FN_MARKET_CHECKOUT_WALLET, { order_id: oid }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Checkout request timed out. Please try again.")), 20000)),
+          ]);
+          console.log("[Checkout] payWithWallet retry ok");
         } else {
           throw e;
         }
