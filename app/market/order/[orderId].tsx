@@ -331,7 +331,7 @@ export default function OrderDetails() {
   const canCancel = !!order && order.status === "CREATED" && isBuyer;
 
   const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
-  const canRequestOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
+  const canRequestOtp = !!order && isBuyer && order.status === "OUT_FOR_DELIVERY";
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
   // Buyer releases only after OTP verified + delivered
