@@ -43,6 +43,8 @@ const SELLERS_TABLE = "market_seller_profiles";
 const OTP_TABLE = "market_order_otps";
 const CRYPTO_INTENTS_TABLE = "market_crypto_intents";
 
+const OTP_REQUEST_COOLDOWN_SEC = 30;
+
 type OrderRow = {
   id: string;
   buyer_id: string;
@@ -197,6 +199,9 @@ export default function OrderDetails() {
   const [deliverables, setDeliverables] = useState<OrderDeliverable[]>([]);
 
   const [otpInput, setOtpInput] = useState("");
+  const [generatedOtpCode, setGeneratedOtpCode] = useState<string | null>(null);
+  const [otpCooldownUntilMs, setOtpCooldownUntilMs] = useState<number>(0);
+  const [nowMs, setNowMs] = useState<number>(Date.now());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -212,6 +217,12 @@ export default function OrderDetails() {
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
+
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
 
   const previewItems = useMemo(() => deliverables.filter((d) => d.access === "preview"), [deliverables]);
   const finalItems = useMemo(() => deliverables.filter((d) => d.access === "final"), [deliverables]);
@@ -337,6 +348,19 @@ export default function OrderDetails() {
   // Buyer releases only after OTP verified + delivered
   const canRelease = !!order && isBuyer && otpVerified && order.status === "DELIVERED";
 
+  const otpExpiresAtMs = otp?.expires_at ? new Date(otp.expires_at).getTime() : 0;
+  const otpExpiryRemainingSec = otpVerified || !otpExpiresAtMs ? 0 : Math.max(0, Math.ceil((otpExpiresAtMs - nowMs) / 1000));
+  const otpCooldownRemainingSec = Math.max(0, Math.ceil((otpCooldownUntilMs - nowMs) / 1000));
+  const hasPendingUnexpiredOtp = !!otp && !otpVerified && otpExpiryRemainingSec > 0;
+  const canGenerateOtpNow = canRequestOtp && !busy && otpCooldownRemainingSec === 0 && !hasPendingUnexpiredOtp;
+
+  function fmtCountdown(totalSec: number) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+
   async function doOutForDelivery() {
     if (!order) return;
     setBusy(true);
@@ -357,8 +381,28 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      const { error } = await supabase.rpc(RPC_OTP_GENERATE, { p_order_id: order.id });
+      const { data, error } = await supabase.rpc(RPC_OTP_GENERATE, { p_order_id: order.id });
       if (error) throw error;
+
+      const otpCode = (data as any)?.otp_code ? String((data as any).otp_code) : null;
+      const expiresAt = (data as any)?.expires_at ? new Date((data as any).expires_at).getTime() : 0;
+      setGeneratedOtpCode(otpCode);
+      setOtpCooldownUntilMs(Date.now() + OTP_REQUEST_COOLDOWN_SEC * 1000);
+      if (expiresAt > 0) {
+        setOtp((prev) => ({
+          order_id: order.id,
+          expires_at: new Date(expiresAt).toISOString(),
+          attempts: prev?.attempts ?? 0,
+          verified_at: null,
+        }));
+      }
+
+      if (otpCode) {
+        Alert.alert("Delivery OTP", `Share this OTP with the seller only after delivery:
+
+${otpCode}`);
+      }
+
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't send OTP yet. Please try again."));
@@ -1098,20 +1142,58 @@ async function pickAndUpload(access: "preview" | "final") {
                 </Text>
 
                 <Pressable
-                  disabled={!canRequestOtp || busy}
+                  disabled={!canGenerateOtpNow}
                   onPress={requestOTP}
                   style={{
                     marginTop: 12,
                     borderRadius: 18,
                     paddingVertical: 14,
                     alignItems: "center",
-                    backgroundColor: canRequestOtp && !busy ? "rgba(59,130,246,0.22)" : "rgba(255,255,255,0.06)",
+                    backgroundColor: canGenerateOtpNow ? "rgba(59,130,246,0.22)" : "rgba(255,255,255,0.06)",
                     borderWidth: 1,
-                    borderColor: canRequestOtp && !busy ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.10)",
+                    borderColor: canGenerateOtpNow ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.10)",
                   }}
                 >
                   <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Generate delivery OTP"}</Text>
                 </Pressable>
+
+                {generatedOtpCode && !otpVerified ? (
+                  <View
+                    style={{
+                      marginTop: 10,
+                      borderRadius: 14,
+                      padding: 12,
+                      backgroundColor: "rgba(124,58,237,0.12)",
+                      borderWidth: 1,
+                      borderColor: "rgba(124,58,237,0.35)",
+                    }}
+                  >
+                    <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
+                      Your OTP (share only after delivery)
+                    </Text>
+                    <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900", fontSize: 24, letterSpacing: 3 }}>
+                      {generatedOtpCode}
+                    </Text>
+                    <Pressable
+                      onPress={async () => {
+                        await Clipboard.setStringAsync(generatedOtpCode);
+                        Alert.alert("Copied", "OTP copied to clipboard");
+                      }}
+                      style={{
+                        marginTop: 8,
+                        alignSelf: "flex-start",
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        borderRadius: 10,
+                        backgroundColor: "rgba(255,255,255,0.10)",
+                        borderWidth: 1,
+                        borderColor: "rgba(255,255,255,0.16)",
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Copy OTP</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
 
                 <Pressable
                   disabled={!canRelease || busy}
