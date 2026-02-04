@@ -346,7 +346,7 @@ export default function OrderDetails() {
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
   // Buyer releases only after OTP verified + delivered
-  const canRelease = !!order && isBuyer && otpVerified && order.status === "DELIVERED";
+  const canRelease = !!order && isBuyer && otpVerified && (order.status === "DELIVERED" || order.status === "OUT_FOR_DELIVERY");
 
   const otpExpiresAtMs = otp?.expires_at ? new Date(otp.expires_at).getTime() : 0;
   const otpExpiryRemainingSec = otpVerified || !otpExpiresAtMs ? 0 : Math.max(0, Math.ceil((otpExpiresAtMs - nowMs) / 1000));
@@ -1076,8 +1076,25 @@ async function pickAndUpload(access: "preview" | "final") {
                   <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working…" : "Mark out for delivery"}</Text>
                 </Pressable>
 
-                <View style={{ marginTop: 14 }}>
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>Enter OTP (after delivery)</Text>
+                {otpVerified ? (
+                  <View
+                    style={{
+                      marginTop: 14,
+                      borderRadius: 14,
+                      padding: 12,
+                      backgroundColor: "rgba(16,185,129,0.14)",
+                      borderWidth: 1,
+                      borderColor: "rgba(16,185,129,0.35)",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>OTP verified</Text>
+                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+                      OTP verification is complete. Ask buyer to release funds.
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Enter OTP (after delivery)</Text>
                   <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
                     Buyer shares OTP after receiving item. Server checks hash + limits attempts.
                   </Text>
@@ -1130,7 +1147,8 @@ async function pickAndUpload(access: "preview" | "final") {
                   ) : (
                     <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>OTP not created yet.</Text>
                   )}
-                </View>
+                  </View>
+                )}
               </Card>
             ) : null}
 
