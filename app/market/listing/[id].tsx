@@ -20,6 +20,7 @@ import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -27,6 +28,7 @@ const PURPLE = "#7C3AED";
 
 const LISTINGS_TABLE = "market_listings";
 const IMAGES_TABLE = "market_listing_images";
+const PREVIEWS_TABLE = "market_listing_previews";
 const SELLERS_TABLE = "market_seller_profiles";
 const ORDERS_TABLE = "market_orders";
 const LISTING_IMAGES_BUCKET = "market-listings";
@@ -60,6 +62,20 @@ type ListingComment = {
   created_at: string;
   user_id: string;
   profiles?: { username?: string | null; full_name?: string | null } | null;
+};
+
+
+type ListingPreview = {
+  id: string;
+  listing_id: string;
+  kind: string;
+  title: string | null;
+  sort_order: number | null;
+  storage_path: string | null;
+  public_url: string | null;
+  link_url: string | null;
+  mime_type: string | null;
+  duration_sec: number | null;
 };
 
 type Seller = {
@@ -129,6 +145,22 @@ function resolveDisplayPrice(listing: Listing) {
   return { baseCurrency, now, was, altCurrency, altNow, discountOn };
 }
 
+
+function previewKind(k: string): "image" | "audio" | "video" | "file" | "link" {
+  const v = String(k || "").toLowerCase();
+  if (v === "image" || v === "audio" || v === "video" || v === "file" || v === "link") return v as any;
+  return "file";
+}
+
+function previewIcon(kind: string) {
+  const k = previewKind(kind);
+  if (k === "image") return "image-outline";
+  if (k === "video") return "videocam-outline";
+  if (k === "audio") return "musical-notes-outline";
+  if (k === "link") return "globe-outline";
+  return "document-attach-outline";
+}
+
 function imgUrl(img: ListingImage, supabaseUrl: string) {
   if (img.public_url) return img.public_url;
   if (img.storage_path) {
@@ -147,6 +179,7 @@ export default function ListingDetails() {
   const [listing, setListing] = useState<Listing | null>(null);
   const [images, setImages] = useState<ListingImage[]>([]);
   const [seller, setSeller] = useState<Seller | null>(null);
+  const [listingPreviews, setListingPreviews] = useState<ListingPreview[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [deliveryLabel, setDeliveryLabel] = useState("");
@@ -161,6 +194,8 @@ export default function ListingDetails() {
   const [commentInput, setCommentInput] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const [showAllComments, setShowAllComments] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPayload, setPreviewPayload] = useState<PreviewPayload | null>(null);
 
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
@@ -213,10 +248,19 @@ export default function ListingDetails() {
 
         if (sErr) throw new Error(sErr.message);
 
+        const { data: pv, error: pErr } = await supabase
+          .from(PREVIEWS_TABLE)
+          .select("id,listing_id,kind,title,sort_order,storage_path,public_url,link_url,mime_type,duration_sec")
+          .eq("listing_id", listingId)
+          .order("sort_order", { ascending: true });
+
+        if (pErr) throw new Error(pErr.message);
+
         if (mounted) {
           setListing(l as any);
           setImages((imgs as any) ?? []);
           setSeller((s as any) ?? null);
+          setListingPreviews((pv as any) ?? []);
         }
       } catch (e: any) {
         if (mounted) {
@@ -224,6 +268,7 @@ export default function ListingDetails() {
           setListing(null);
           setImages([]);
           setSeller(null);
+          setListingPreviews([]);
         }
       } finally {
         if (mounted) {
@@ -236,6 +281,39 @@ export default function ListingDetails() {
       mounted = false;
     };
   }, [listingId]);
+
+
+  function openListingPreview(item: ListingPreview) {
+    const kind = previewKind(item.kind);
+    if (kind === "link") {
+      const url = String(item.link_url || item.public_url || "");
+      if (!url) return setErr("No preview URL available yet.");
+      setPreviewPayload({
+        kind: "link",
+        access: "preview",
+        title: item.title || "Website preview",
+        url,
+      });
+      setPreviewOpen(true);
+      return;
+    }
+
+    const direct = item.public_url
+      ? String(item.public_url)
+      : item.storage_path
+      ? `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${item.storage_path}`
+      : "";
+
+    setPreviewPayload({
+      kind,
+      access: "preview",
+      title: item.title || `${kind.toUpperCase()} preview`,
+      previewSeconds: 20,
+      mimeType: item.mime_type || undefined,
+      urlPromise: async () => direct || null,
+    });
+    setPreviewOpen(true);
+  }
 
   async function loadReactions() {
     if (!listingId) return;
@@ -662,6 +740,62 @@ export default function ListingDetails() {
           ) : null}
         </View>
 
+
+        {listingPreviews.length > 0 || String(listing.delivery_type || "").toLowerCase() === "digital" ? (
+          <View
+            style={{
+              marginTop: 12,
+              borderRadius: 22,
+              padding: 16,
+              backgroundColor: "rgba(255,255,255,0.05)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.08)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Service previews</Text>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+              Tap any preview to open image, video, audio, file, or website in-app before purchase.
+            </Text>
+
+            {listingPreviews.length === 0 ? (
+              <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.6)" }}>
+                Seller has not added preview assets yet.
+              </Text>
+            ) : (
+              <View style={{ marginTop: 10, gap: 8 }}>
+                {listingPreviews.map((pv) => (
+                  <Pressable
+                    key={pv.id}
+                    onPress={() => openListingPreview(pv)}
+                    style={{
+                      borderRadius: 14,
+                      paddingVertical: 12,
+                      paddingHorizontal: 12,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.12)",
+                      backgroundColor: "rgba(255,255,255,0.04)",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                      <Ionicons name={previewIcon(pv.kind) as any} size={18} color="#fff" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: "#fff", fontWeight: "900" }}>{pv.title || `Preview ${pv.id.slice(0, 6)}`}</Text>
+                        <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                          {previewKind(pv.kind).toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.65)" />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        ) : null}
+
         <View
           style={{
             marginTop: 12,
@@ -962,6 +1096,17 @@ export default function ListingDetails() {
           </Text>
         </Pressable>
       </View>
+
+
+
+      <OrderPreviewModal
+        open={previewOpen}
+        onClose={() => {
+          setPreviewOpen(false);
+          setPreviewPayload(null);
+        }}
+        payload={previewPayload}
+      />
 
       <Modal visible={showAllComments} transparent animationType="slide" onRequestClose={() => setShowAllComments(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "flex-end" }}>

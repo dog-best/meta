@@ -6,7 +6,6 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linkin
 import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { callFn } from "@/services/functions";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
@@ -29,12 +28,13 @@ const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
 // ✅ Real function names in your repo
-const FN_SELLER_OUT_FOR_DELIVERY = "market-seller-out-for-delivery";
-const FN_OTP_GENERATE = "market-otp-generate";
-const FN_OTP_VERIFY = "market-otp-verify";
-const FN_RELEASE_ESCROW = "market-release-escrow";
-const FN_DISPUTE_OPEN = "market-dispute-open";
-const FN_BUYER_CANCEL = "market-buyer-cancel-order";
+const RPC_SELLER_OUT_FOR_DELIVERY = "market_seller_out_for_delivery_rpc";
+const RPC_OTP_GENERATE = "market_otp_generate_rpc";
+const RPC_OTP_VERIFY = "market_otp_verify_rpc";
+
+const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
+const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
+const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
 
 // Tables
 const ORDERS_TABLE = "market_orders";
@@ -331,7 +331,7 @@ export default function OrderDetails() {
   const canCancel = !!order && order.status === "CREATED" && isBuyer;
 
   const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
-  const canRequestOtp = !!order && isBuyer && order.status === "OUT_FOR_DELIVERY";
+  const canRequestOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
   // Buyer releases only after OTP verified + delivered
@@ -342,7 +342,8 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      await callFn(FN_SELLER_OUT_FOR_DELIVERY, { order_id: order.id });
+      const { error } = await supabase.rpc(RPC_SELLER_OUT_FOR_DELIVERY, { p_order_id: order.id });
+      if (error) throw error;
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't update delivery status."));
@@ -356,7 +357,8 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      await callFn(FN_OTP_GENERATE, { order_id: order.id });
+      const { error } = await supabase.rpc(RPC_OTP_GENERATE, { p_order_id: order.id });
+      if (error) throw error;
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't send OTP yet. Please try again."));
@@ -373,7 +375,8 @@ export default function OrderDetails() {
     setBusy(true);
     setErr(null);
     try {
-      await callFn(FN_OTP_VERIFY, { order_id: order.id, otp: code });
+      const { error } = await supabase.rpc(RPC_OTP_VERIFY, { p_order_id: order.id, p_otp: code });
+      if (error) throw error;
       setOtpInput("");
       await load();
     } catch (e: any) {
@@ -393,7 +396,8 @@ async function releaseFunds() {
     } else {
       const auth = await requireLocalAuth("Release escrow to seller");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      await callFn(FN_RELEASE_ESCROW, { order_id: order.id });
+      const { error } = await supabase.rpc(RPC_RELEASE_ESCROW, { p_order_id: order.id });
+      if (error) throw error;
     }
     await load();
   } catch (e: any) {
@@ -408,7 +412,11 @@ async function releaseFunds() {
     setBusy(true);
     setErr(null);
     try {
-      await callFn(FN_DISPUTE_OPEN, { order_id: order.id, reason: "Buyer requested refund / issue with delivery" });
+      const { error } = await supabase.rpc(RPC_OPEN_DISPUTE, {
+        p_order_id: order.id,
+        p_reason: "Buyer requested refund / issue with delivery",
+      });
+      if (error) throw error;
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't open a dispute right now."));
@@ -423,22 +431,8 @@ async function releaseFunds() {
     setBusy(true);
     setErr(null);
     try {
-      // Try direct DB path first to avoid JWT edge-function issues.
-      const direct = await supabase
-        .from("market_orders")
-        .update({ status: "CANCELLED", cancelled_at: new Date().toISOString() })
-        .eq("id", order.id)
-        .eq("buyer_id", me as string)
-        .eq("status", "CREATED")
-        .select("id")
-        .maybeSingle();
-
-      if (!direct.error && direct.data?.id) {
-        await load();
-        return;
-      }
-
-      await callFn(FN_BUYER_CANCEL, { order_id: order.id }, 15000);
+      const { error } = await supabase.rpc(RPC_BUYER_CANCEL, { p_order_id: order.id });
+      if (error) throw error;
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't cancel this order right now."));

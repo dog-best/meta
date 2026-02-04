@@ -556,7 +556,7 @@ export default function MarketAccountTab() {
         <CardBox>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Create your smart account only when youâ€™re ready. We never store your private keys.
+            Create your smart account only when you are ready. We never store your private keys.
           </Text>
           {!!chainErr ? (
             <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{chainErr}</Text>
