@@ -108,6 +108,8 @@ export default function WalletRoute() {
   const [sendTo, setSendTo] = useState("");
   const [sendAmount, setSendAmount] = useState("");
 
+  const hasAlchemyKey = !!process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
+
   const { balance, error: walletSimpleErr, loading: walletLoading, reload: reloadWallet } = useWalletSimple();
   const tx = useWalletTxPaginated();
 
@@ -271,6 +273,11 @@ export default function WalletRoute() {
     if (!chains.length) return;
     setWalletBusy(true);
     setWalletErr(null);
+    if (!hasAlchemyKey) {
+      setWalletBusy(false);
+      setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
+      return;
+    }
     try {
       const auth = await requireLocalAuth("Sync wallet across active networks");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
@@ -441,6 +448,11 @@ export default function WalletRoute() {
           <>
             <View style={styles.cryptoCard}>
               <Text style={styles.cryptoTitle}>Network</Text>
+              {!hasAlchemyKey ? (
+                <View style={styles.warnBox}>
+                  <Text style={styles.warnText}>Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart.</Text>
+                </View>
+              ) : null}
               <View style={styles.chipWrap}>
                 {chains.map((c) => {
                   const selected = chain?.chain === c.chain;
@@ -501,7 +513,7 @@ export default function WalletRoute() {
                 <Text style={styles.mainActionText}>{walletBusy ? "Working..." : walletAddr ? "Regenerate wallet" : "Generate wallet"}</Text>
               </Pressable>
 
-              <Pressable disabled={walletBusy || !chains.some((c) => c.active)} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active)) && styles.dimBtn]}>
+              <Pressable disabled={walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey) && styles.dimBtn]}>
                 <Text style={styles.secondaryActionText}>Sync wallet to all active networks</Text>
               </Pressable>
             </View>
@@ -620,6 +632,8 @@ const styles = StyleSheet.create({
   tokenBox: { flex: 1, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.04)", padding: 10 },
   tokenLabel: { color: T.textMuted, fontWeight: "800", fontSize: 12 },
   tokenValue: { color: "#fff", fontWeight: "900", marginTop: 4 },
+  warnBox: { marginTop: 10, borderRadius: 12, padding: 10, backgroundColor: "rgba(245,158,11,0.12)", borderWidth: 1, borderColor: "rgba(245,158,11,0.35)" },
+  warnText: { color: "#FDE68A", fontWeight: "800", fontSize: 12 },
   backupText: { marginTop: 10, color: T.textMuted, fontSize: 12, fontWeight: "700" },
   actionRow3: { marginTop: 12, flexDirection: "row", gap: 10 },
   smallAction: { flex: 1, borderRadius: 12, paddingVertical: 11, alignItems: "center", backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },

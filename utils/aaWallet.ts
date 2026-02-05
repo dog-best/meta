@@ -141,9 +141,10 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {
   const chain = chainOverride ?? getChainById(chainConfig.chain_id);
   const apiKey = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY as string | undefined;
+  // Prefer Alchemy RPC for AA flows to avoid counterfactual init failures on generic public RPCs.
   return (
-    chainConfig.rpc_url ||
     (apiKey && chain.rpcUrls?.alchemy?.http?.[0]?.replace("${ALCHEMY_API_KEY}", apiKey)) ||
+    chainConfig.rpc_url ||
     chain.rpcUrls?.default?.http?.[0] ||
     ""
   );
