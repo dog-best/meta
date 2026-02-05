@@ -16,6 +16,17 @@ export type MarketChainConfig = {
 const KEY_CHAIN = "bc_market_chain_pref";
 
 export async function fetchMarketChains() {
+  const normalize = (input: any): MarketChainConfig => ({
+    chain: String(input?.chain ?? ""),
+    chain_id: Number(input?.chain_id ?? 0),
+    rpc_url: input?.rpc_url ? String(input.rpc_url) : null,
+    usdc_address: String(input?.usdc_address ?? ""),
+    usdt_address: input?.usdt_address ? String(input.usdt_address) : null,
+    escrow_address: String(input?.escrow_address ?? ""),
+    confirmations_required: Number(input?.confirmations_required ?? 3),
+    active: Boolean(input?.active),
+  });
+
   try {
     const { data: sessionData } = await supabase.auth.getSession();
     const accessToken = sessionData?.session?.access_token;
@@ -31,14 +42,14 @@ export async function fetchMarketChains() {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json?.message || json?.error || "Failed to load chains");
-    return (json?.chains ?? []) as MarketChainConfig[];
+    return (json?.chains ?? []).map(normalize);
   } catch (e: any) {
     // Fallback to direct client query (may be blocked by RLS)
     const { data, error } = await supabase
       .from("market_chain_config")
       .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
       .order("active", { ascending: false });
-    if (!error && data && data.length) return data as MarketChainConfig[];
+    if (!error && data && data.length) return data.map(normalize);
 
     // Last fallback so UI is usable even if policies/functions are misconfigured.
     return [

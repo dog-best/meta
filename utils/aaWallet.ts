@@ -5,6 +5,7 @@ import { createAlchemySmartAccountClient } from "@alchemy/aa-alchemy";
 import { createLightAccount } from "@alchemy/aa-accounts";
 import { Wallet } from "ethers";
 import { http, type Hex } from "viem";
+import { arbitrum, base, baseSepolia, mainnet, optimism, polygon, sepolia } from "viem/chains";
 import { generatePrivateKey } from "viem/accounts";
 
 export type MarketChainConfig = {
@@ -27,7 +28,29 @@ function scopeKey(base: string, scope?: string | null) {
   return `${base}__${safe}`;
 }
 
-function getChainById(chainId: number) {
+function normalizeChainId(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function cleanAlchemyApiKey(raw?: string) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  return value.replace(/^https?:\/\/[^/]+\/v2\//i, "");
+}
+
+function getChainById(chainIdInput: number | string) {
+  const chainId = normalizeChainId(chainIdInput);
+  const map: Record<number, any> = {
+    84532: baseSepolia,
+    8453: base,
+    11155111: sepolia,
+    1: mainnet,
+    137: polygon,
+    42161: arbitrum,
+    10: optimism,
+  };
+  if (map[chainId]) return map[chainId];
   return AlchemyChainMap.get(chainId) ?? getChain(chainId);
 }
 
@@ -97,8 +120,13 @@ export async function getScopedWalletAddress(scope?: string | null) {
 }
 
 export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: string | null) {
-  const chain = getChainById(chainConfig.chain_id);
-  const rpcUrl = getRpcUrlForChain(chainConfig, chain);
+  const chainId = normalizeChainId((chainConfig as any).chain_id);
+  if (!chainId) {
+    throw new Error(`Invalid chain_id for ${chainConfig.chain}`);
+  }
+  const chain = getChainById(chainId);
+  const normalizedConfig = { ...chainConfig, chain_id: chainId };
+  const rpcUrl = getRpcUrlForChain(normalizedConfig, chain);
   if (!rpcUrl) {
     throw new Error("Missing RPC URL or Alchemy API key.");
   }
@@ -116,11 +144,11 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
   } catch (e: any) {
     const msg = String(e?.message || "Unknown error");
     throw new Error(
-      `Smart account init failed (getCounterFactualAddress). Check chain_id/rpc_url for ${chainConfig.chain}. ${msg}`,
+      `Smart account init failed (getCounterFactualAddress). chain=${chainConfig.chain} chain_id=${chainId} rpc=${rpcUrl}. ${msg}`,
     );
   }
 
-  const apiKey = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY as string | undefined;
+  const apiKey = cleanAlchemyApiKey(process.env.EXPO_PUBLIC_ALCHEMY_API_KEY);
   const gasPolicyId = process.env.EXPO_PUBLIC_ALCHEMY_GAS_POLICY_ID as string | undefined;
   const client = createAlchemySmartAccountClient({
     chain,
@@ -139,23 +167,25 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
 }
 
 function alchemyUrlForChainId(chainId: number, apiKey?: string) {
-  if (!apiKey) return "";
+  const safeApiKey = cleanAlchemyApiKey(apiKey);
+  if (!safeApiKey) return "";
   const map: Record<number, string> = {
-    84532: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
-    8453: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
-    11155111: `https://eth-sepolia.g.alchemy.com/v2/${apiKey}`,
-    1: `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`,
-    137: `https://polygon-mainnet.g.alchemy.com/v2/${apiKey}`,
-    42161: `https://arb-mainnet.g.alchemy.com/v2/${apiKey}`,
-    10: `https://opt-mainnet.g.alchemy.com/v2/${apiKey}`,
+    84532: `https://base-sepolia.g.alchemy.com/v2/${safeApiKey}`,
+    8453: `https://base-mainnet.g.alchemy.com/v2/${safeApiKey}`,
+    11155111: `https://eth-sepolia.g.alchemy.com/v2/${safeApiKey}`,
+    1: `https://eth-mainnet.g.alchemy.com/v2/${safeApiKey}`,
+    137: `https://polygon-mainnet.g.alchemy.com/v2/${safeApiKey}`,
+    42161: `https://arb-mainnet.g.alchemy.com/v2/${safeApiKey}`,
+    10: `https://opt-mainnet.g.alchemy.com/v2/${safeApiKey}`,
   };
   return map[chainId] ?? "";
 }
 
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {
-  const chain = chainOverride ?? getChainById(chainConfig.chain_id);
-  const apiKey = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY as string | undefined;
-  const explicitAlchemy = alchemyUrlForChainId(chainConfig.chain_id, apiKey);
+  const chainId = normalizeChainId((chainConfig as any).chain_id);
+  const chain = chainOverride ?? getChainById(chainId);
+  const apiKey = cleanAlchemyApiKey(process.env.EXPO_PUBLIC_ALCHEMY_API_KEY);
+  const explicitAlchemy = alchemyUrlForChainId(chainId, apiKey);
   // Prefer explicit Alchemy endpoint first for AA stability.
   return (
     explicitAlchemy ||
