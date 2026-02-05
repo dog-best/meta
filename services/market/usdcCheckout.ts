@@ -11,6 +11,8 @@ const FN_USDC_RELEASE_INTENT = "market-usdc-release-intent";
 const FN_USDC_DEPOSIT_SUBMIT = "market-usdc-deposit-submit";
 const FN_USDC_RELEASE_SUBMIT = "market-usdc-release-submit";
 const FN_CHAIN_TX_FINALIZE = "market-chain-tx-finalize";
+const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
+const RPC_USDC_RELEASE_INTENT = "market_usdc_release_intent_rpc";
 
 export type StableSymbol = "USDC" | "USDT";
 
@@ -117,7 +119,26 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  // Persist the smart-account address (not EOA signer address) so balances and checkout stay consistent.
+  // Reuse an existing address for this user first to avoid accidental address drift across chains.
+  const existingForChain = await getMyWalletForChain(chainConfig.chain);
+  if (existingForChain?.address) {
+    return { address: existingForChain.address };
+  }
+
+  const { data: existingAny, error: anyErr } = await supabase
+    .from("crypto_wallets")
+    .select("address")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (anyErr) throw new Error(anyErr.message);
+  if (existingAny?.address) {
+    await registerWallet(chainConfig.chain, existingAny.address);
+    return { address: existingAny.address };
+  }
+
+  // First-time generation: persist smart-account address.
   const { address } = await getSmartAccount(chainConfig, user.id);
   await registerWallet(chainConfig.chain, address);
   return { address };
@@ -135,7 +156,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const localAuth = await requireLocalAuth(`Confirm ${symbol} deposit`);
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
-  const intent = await callFn<{
+  let intent: {
     ok: boolean;
     order_id: string;
     order_key: string;
@@ -148,7 +169,20 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     buyer_total_raw: string;
     fee_bps: number;
     chain: string;
-  }>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain, token: symbol });
+  };
+  try {
+    intent = await callFn<typeof intent>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain, token: symbol });
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (!/jwt|session|auth/i.test(msg)) throw e;
+    const { data, error } = await supabase.rpc(RPC_USDC_DEPOSIT_INTENT, {
+      p_order_id: orderId,
+      p_chain: chain.chain,
+      p_token: symbol,
+    });
+    if (error) throw new Error(error.message || "Could not create crypto deposit intent.");
+    intent = data as typeof intent;
+  }
 
   const tokenAddress =
     intent.token_address ||
@@ -229,13 +263,25 @@ export async function releaseUsdcForOrder(orderId: string) {
   const localAuth = await requireLocalAuth("Release escrow to seller");
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
-  const intent = await callFn<{
+  let intent: {
     ok: boolean;
     order_id: string;
     order_key: string;
     escrow_address: string;
     chain: string;
-  }>(FN_USDC_RELEASE_INTENT, { order_id: orderId, chain: chain.chain });
+  };
+  try {
+    intent = await callFn<typeof intent>(FN_USDC_RELEASE_INTENT, { order_id: orderId, chain: chain.chain });
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (!/jwt|session|auth/i.test(msg)) throw e;
+    const { data, error } = await supabase.rpc(RPC_USDC_RELEASE_INTENT, {
+      p_order_id: orderId,
+      p_chain: chain.chain,
+    });
+    if (error) throw new Error(error.message || "Could not create release intent.");
+    intent = data as typeof intent;
+  }
 
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;

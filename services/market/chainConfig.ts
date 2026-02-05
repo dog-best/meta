@@ -13,7 +13,7 @@ export type MarketChainConfig = {
   active: boolean;
 };
 
-const KEY_CHAIN = "bc_market_chain_pref";
+const KEY_CHAIN = "bc_market_chain_pref_v2";
 
 export async function fetchMarketChains() {
   const normalize = (input: any): MarketChainConfig => ({
@@ -42,7 +42,11 @@ export async function fetchMarketChains() {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json?.message || json?.error || "Failed to load chains");
-    return (json?.chains ?? []).map(normalize);
+    const fromFn = (json?.chains ?? []).map(normalize);
+    // Guard against stale function deployments returning empty token addresses.
+    const hasValidTokens = fromFn.some((c) => /^0x[a-fA-F0-9]{40}$/.test(c.usdc_address || ""));
+    if (fromFn.length && hasValidTokens) return fromFn;
+    throw new Error("Chain config payload missing token addresses");
   } catch (e: any) {
     // Fallback to direct client query (may be blocked by RLS)
     const { data, error } = await supabase
@@ -75,7 +79,7 @@ export async function getPreferredMarketChain() {
 
   if (saved) {
     const match = chains.find((c) => c.chain === saved);
-    if (match) return match;
+    if (match?.active) return match;
   }
 
   if (active) {

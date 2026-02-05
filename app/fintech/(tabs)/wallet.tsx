@@ -16,7 +16,7 @@ import { useWalletTxPaginated } from "@/hooks/wallet/useWalletTxPaginated";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain } from "@/services/market/chainConfig";
 import { ensureSmartAccount, ensureWalletAddressOnChain, getMyWalletForChain } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getRpcUrlForChain, getWalletBackupSecret, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
+import { getRpcUrlForChain, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { supabase } from "@/services/supabase";
 
@@ -34,7 +34,25 @@ type ChainItem = {
   active: boolean;
 };
 
+type CryptoTxItem = {
+  id: string;
+  created_at: string;
+  intent_type: string;
+  status: string;
+  chain: string;
+  amount_units: string | null;
+  tx_hash: string | null;
+  order_id: string;
+};
+
 const ERC20_ABI = [
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
   {
     type: "function",
     name: "balanceOf",
@@ -75,6 +93,9 @@ function fmtNum(v: string) {
   const n = Number(v || "0");
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "0";
 }
+function isAddress(v?: string | null) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
 
 export default function WalletRoute() {
   const params = useLocalSearchParams<{ action?: string }>();
@@ -98,6 +119,7 @@ export default function WalletRoute() {
 
   const [usdcBal, setUsdcBal] = useState("0");
   const [usdtBal, setUsdtBal] = useState("0");
+  const [tokenDiag, setTokenDiag] = useState<{ usdc?: string; usdt?: string }>({});
 
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupType, setBackupType] = useState<"mnemonic" | "privateKey">("privateKey");
@@ -107,6 +129,15 @@ export default function WalletRoute() {
   const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
   const [sendTo, setSendTo] = useState("");
   const [sendAmount, setSendAmount] = useState("");
+  const [networkPickerOpen, setNetworkPickerOpen] = useState(false);
+  const [totalUsdc, setTotalUsdc] = useState("0");
+  const [totalUsdt, setTotalUsdt] = useState("0");
+  const [cryptoTx, setCryptoTx] = useState<CryptoTxItem[]>([]);
+  const [cryptoTxLoading, setCryptoTxLoading] = useState(false);
+  const [usdcPrice, setUsdcPrice] = useState(1);
+  const [usdtPrice, setUsdtPrice] = useState(1);
+  const [usdcChange, setUsdcChange] = useState(0);
+  const [usdtChange, setUsdtChange] = useState(0);
 
   const hasAlchemyKey = !!process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
 
@@ -147,6 +178,7 @@ export default function WalletRoute() {
         setWalletAddr("");
         setUsdcBal("0");
         setUsdtBal("0");
+        setTokenDiag({});
         return;
       }
 
@@ -156,10 +188,12 @@ export default function WalletRoute() {
       const w = await getMyWalletForChain(c.chain);
       const addr = w?.address ?? "";
       setWalletAddr(addr);
+      setTokenDiag({});
 
       if (!addr) {
         setUsdcBal("0");
         setUsdtBal("0");
+        setTokenDiag({ usdc: "No wallet address saved for this network", usdt: "No wallet address saved for this network" });
         return;
       }
 
@@ -167,44 +201,65 @@ export default function WalletRoute() {
       if (!rpcUrl) {
         setUsdcBal("0");
         setUsdtBal("0");
+        setTokenDiag({ usdc: "Missing RPC URL", usdt: "Missing RPC URL" });
         return;
       }
 
       const client = createPublicClient({ transport: http(rpcUrl) });
 
       try {
+        if (!isAddress(c.usdc_address)) throw new Error("USDC contract address is not configured.");
+        const usdcDecimals = Number(
+          await client.readContract({
+            address: c.usdc_address as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "decimals",
+          }),
+        );
         const usdcRaw = await client.readContract({
           address: c.usdc_address as `0x${string}`,
           abi: ERC20_ABI,
           functionName: "balanceOf",
           args: [addr as `0x${string}`],
         });
-        setUsdcBal(formatUnits(usdcRaw as bigint, 6));
-      } catch {
+        setUsdcBal(formatUnits(usdcRaw as bigint, usdcDecimals));
+        setTokenDiag((p) => ({ ...p, usdc: `OK - decimals=${usdcDecimals}` }));
+      } catch (e: any) {
         setUsdcBal("0");
+        setTokenDiag((p) => ({ ...p, usdc: `Read failed: ${String(e?.message || e)}` }));
       }
 
       if (!c.usdt_address) {
         setUsdtBal("0");
+        setTokenDiag((p) => ({ ...p, usdt: "USDT is not configured on this chain" }));
       } else {
         try {
+          if (!isAddress(c.usdt_address)) throw new Error("USDT contract address is not configured.");
+          const usdtDecimals = Number(
+            await client.readContract({
+              address: c.usdt_address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: "decimals",
+            }),
+          );
           const usdtRaw = await client.readContract({
             address: c.usdt_address as `0x${string}`,
             abi: ERC20_ABI,
             functionName: "balanceOf",
             args: [addr as `0x${string}`],
           });
-          setUsdtBal(formatUnits(usdtRaw as bigint, 6));
-        } catch {
+          setUsdtBal(formatUnits(usdtRaw as bigint, usdtDecimals));
+          setTokenDiag((p) => ({ ...p, usdt: `OK - decimals=${usdtDecimals}` }));
+        } catch (e: any) {
           setUsdtBal("0");
+          setTokenDiag((p) => ({ ...p, usdt: `Read failed: ${String(e?.message || e)}` }));
         }
       }
     } catch (e: any) {
       setWalletErr(friendlyMarketError(e, "Unable to refresh crypto wallet."));
     }
   }
-
-  async function loadChains() {
+async function loadChains() {
     try {
       setChainErr(null);
       const all = (await fetchMarketChains()) as ChainItem[];
@@ -226,13 +281,109 @@ export default function WalletRoute() {
     loadChains();
   }, [meId]);
 
+  async function refreshCryptoTotals() {
+    try {
+      if (!walletAddr || !chains.length) {
+        setTotalUsdc("0");
+        setTotalUsdt("0");
+        return;
+      }
+      let usdc = 0;
+      let usdt = 0;
+      for (const c of chains.filter((x) => x.active)) {
+        const rpcUrl = getRpcUrlForChain(c);
+        if (!rpcUrl) continue;
+        const client = createPublicClient({ transport: http(rpcUrl) });
+        try {
+          if (!isAddress(c.usdc_address)) throw new Error("USDC not configured");
+          const d = Number(
+            await client.readContract({
+              address: c.usdc_address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: "decimals",
+            }),
+          );
+          const raw = await client.readContract({
+            address: c.usdc_address as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [walletAddr as `0x${string}`],
+          });
+          usdc += Number(formatUnits(raw as bigint, d));
+        } catch {}
+        if (c.usdt_address) {
+          try {
+            if (!isAddress(c.usdt_address)) throw new Error("USDT not configured");
+            const d = Number(
+              await client.readContract({
+                address: c.usdt_address as `0x${string}`,
+                abi: ERC20_ABI,
+                functionName: "decimals",
+              }),
+            );
+            const raw = await client.readContract({
+              address: c.usdt_address as `0x${string}`,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [walletAddr as `0x${string}`],
+            });
+            usdt += Number(formatUnits(raw as bigint, d));
+          } catch {}
+        }
+      }
+      setTotalUsdc(String(usdc));
+      setTotalUsdt(String(usdt));
+    } catch {}
+  }
+
+  async function loadCryptoTx() {
+    try {
+      setCryptoTxLoading(true);
+      const { data, error } = await supabase
+        .from("market_crypto_intents")
+        .select("id,created_at,intent_type,status,chain,amount_units,tx_hash,order_id")
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (error) throw error;
+      setCryptoTx((data as CryptoTxItem[]) || []);
+    } catch {
+      setCryptoTx([]);
+    } finally {
+      setCryptoTxLoading(false);
+    }
+  }
+
   const refreshAll = async () => {
     if (mode === "ngn") {
       await Promise.allSettled([reloadWallet(), tx.refresh()]);
       return;
     }
     await refreshCrypto();
+    await refreshCryptoTotals();
+    await loadCryptoTx();
   };
+
+  useEffect(() => {
+    if (mode !== "crypto") return;
+    refreshCryptoTotals();
+    loadCryptoTx();
+  }, [mode, walletAddr, chains.length]);
+
+  useEffect(() => {
+    if (mode !== "crypto") return;
+    (async () => {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin,tether&vs_currencies=usd&include_24hr_change=true",
+        );
+        const j = await res.json();
+        setUsdcPrice(Number(j?.["usd-coin"]?.usd || 1));
+        setUsdtPrice(Number(j?.tether?.usd || 1));
+        setUsdcChange(Number(j?.["usd-coin"]?.usd_24h_change || 0));
+        setUsdtChange(Number(j?.tether?.usd_24h_change || 0));
+      } catch {}
+    })();
+  }, [mode]);
 
   async function onGenerateOrRegenerate() {
     if (!chain) return;
@@ -290,9 +441,11 @@ export default function WalletRoute() {
       if (!active.length) throw new Error("No active network available.");
 
       for (const c of active) {
-        await ensureWalletAddressOnChain(c);
+        const cur = await getMyWalletForChain(c.chain);
+        if (!cur?.address) await ensureWalletAddressOnChain(c);
       }
       await refreshCrypto(chain);
+      await refreshCryptoTotals();
       Alert.alert("Synced", `Wallet synced to ${active.length} active network(s).`);
     } catch (e: any) {
       setWalletErr(friendlyMarketError(e, "Unable to sync wallet."));
@@ -345,6 +498,8 @@ export default function WalletRoute() {
       setSendAmount("");
       setSendTo("");
       await refreshCrypto(chain);
+      await refreshCryptoTotals();
+      await loadCryptoTx();
     } catch (e: any) {
       setWalletErr(friendlyMarketError(e, "Unable to send token."));
     }
@@ -458,28 +613,23 @@ export default function WalletRoute() {
                   <Text style={styles.warnText}>Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart.</Text>
                 </View>
               ) : null}
-              <View style={styles.chipWrap}>
-                {chains.map((c) => {
-                  const selected = chain?.chain === c.chain;
-                  return (
-                    <Pressable
-                      key={c.chain}
-                      disabled={!c.active}
-                      onPress={async () => {
-                        setChain(c);
-                        await setPreferredMarketChain(c.chain);
-                        await refreshCrypto(c);
-                      }}
-                      style={[styles.chip, selected ? styles.chipActive : styles.chipIdle, { opacity: c.active ? 1 : 0.45 }]}
-                    >
-                      <Text style={styles.chipText}>{String(c.chain).toUpperCase().replace("_", " ")}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <Pressable style={styles.selectNetworkBtn} onPress={() => setNetworkPickerOpen(true)}>
+                <Text style={styles.selectNetworkText}>
+                  {chain ? String(chain.chain).toUpperCase().replace("_", " ") : "Select network"}
+                </Text>
+                <Ionicons name="chevron-down" size={18} color="#fff" />
+              </Pressable>
 
               <Text style={styles.addrLabel}>Wallet address</Text>
               <Text selectable style={styles.addrText}>{walletAddr || "No wallet address generated"}</Text>
+              {!!chain ? <Text selectable style={styles.addrHint}>USDC CA: {chain.usdc_address}</Text> : null}
+              {!!chain?.usdt_address ? <Text selectable style={styles.addrHint}>USDT CA: {chain.usdt_address}</Text> : null}
+
+              <View style={styles.totalCard}>
+                <Text style={styles.totalTitle}>Total Stable Balance (all active chains)</Text>
+                <Text style={styles.totalValue}>${fmtNum(String(Number(totalUsdc || 0) * usdcPrice + Number(totalUsdt || 0) * usdtPrice))}</Text>
+                <Text style={styles.totalSub}>USDC {fmtNum(totalUsdc)} ({usdcChange.toFixed(2)}%) • USDT {fmtNum(totalUsdt)} ({usdtChange.toFixed(2)}%)</Text>
+              </View>
 
               <View style={styles.tokenRow}>
                 <View style={styles.tokenBox}>
@@ -520,7 +670,30 @@ export default function WalletRoute() {
 
               <Pressable disabled={walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey) && styles.dimBtn]}>
                 <Text style={styles.secondaryActionText}>Sync wallet to all active networks</Text>
-              </Pressable>
+              </Pressable>{!!tokenDiag.usdc ? <Text style={styles.diagText}>USDC: {tokenDiag.usdc}</Text> : null}
+              {!!tokenDiag.usdt ? <Text style={styles.diagText}>USDT: {tokenDiag.usdt}</Text> : null}
+
+              <View style={styles.historyCard}>
+                <Text style={styles.hTitle}>Crypto Activity</Text>
+                {cryptoTxLoading ? <Text style={styles.dim}>Loading crypto transactions...</Text> : null}
+                <FlatList
+                  data={cryptoTx}
+                  keyExtractor={(i) => i.id}
+                  scrollEnabled={false}
+                  ListEmptyComponent={<Text style={styles.dim}>No crypto activity yet.</Text>}
+                  renderItem={({ item }) => (
+                    <View style={styles.txRow}>
+                      <TxBadge type={item.intent_type?.toLowerCase() || "tx"} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.txAmount}>{item.intent_type} • {item.status}</Text>
+                        <Text style={styles.txMeta}>{new Date(item.created_at).toLocaleString()} • {item.chain}</Text>
+                        {!!item.amount_units ? <Text style={styles.txRef}>Amount: {item.amount_units}</Text> : null}
+                        {!!item.tx_hash ? <Text numberOfLines={1} style={styles.txRef}>Tx: {item.tx_hash}</Text> : null}
+                      </View>
+                    </View>
+                  )}
+                />
+              </View>
             </View>
           </>
         )}
@@ -570,6 +743,31 @@ export default function WalletRoute() {
               <Pressable onPress={() => setSendOpen(false)} style={styles.modalBtnLight}><Text style={styles.modalBtnText}>Cancel</Text></Pressable>
               <Pressable onPress={onSendToken} style={styles.modalBtnMain}><Text style={styles.modalBtnText}>Send</Text></Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={networkPickerOpen} transparent animationType="fade" onRequestClose={() => setNetworkPickerOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select network</Text>
+            {chains.map((c) => (
+              <Pressable
+                key={c.chain}
+                disabled={!c.active}
+                onPress={async () => {
+                  setNetworkPickerOpen(false);
+                  setChain(c);
+                  await setPreferredMarketChain(c.chain);
+                  await refreshCrypto(c);
+                  await refreshCryptoTotals();
+                }}
+                style={[styles.networkRow, !c.active && styles.dimBtn]}
+              >
+                <Text style={styles.networkRowText}>{String(c.chain).toUpperCase().replace("_", " ")}</Text>
+                {chain?.chain === c.chain ? <Ionicons name="checkmark-circle" size={18} color="#A78BFA" /> : null}
+              </Pressable>
+            ))}
           </View>
         </View>
       </Modal>
@@ -631,12 +829,20 @@ const styles = StyleSheet.create({
   chipIdle: { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.12)" },
   chipActive: { backgroundColor: "rgba(124,58,237,0.20)", borderColor: "rgba(124,58,237,0.45)" },
   chipText: { color: "#fff", fontWeight: "900", fontSize: 12 },
+  selectNetworkBtn: { marginTop: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.06)", padding: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  selectNetworkText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   addrLabel: { marginTop: 12, color: T.textMuted, fontSize: 12, fontWeight: "700" },
   addrText: { marginTop: 6, color: "#fff", fontWeight: "900" },
+  addrHint: { marginTop: 4, color: T.textDim, fontSize: 11 },
+  totalCard: { marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(124,58,237,0.45)", backgroundColor: "rgba(124,58,237,0.12)", padding: 12 },
+  totalTitle: { color: "#DDD6FE", fontSize: 11, fontWeight: "800" },
+  totalValue: { color: "#fff", fontSize: 22, fontWeight: "900", marginTop: 4 },
+  totalSub: { color: T.textMuted, fontSize: 12, marginTop: 4 },
   tokenRow: { marginTop: 12, flexDirection: "row", gap: 10 },
   tokenBox: { flex: 1, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.04)", padding: 10 },
   tokenLabel: { color: T.textMuted, fontWeight: "800", fontSize: 12 },
   tokenValue: { color: "#fff", fontWeight: "900", marginTop: 4 },
+  diagText: { marginTop: 6, color: "#C4B5FD", fontSize: 11 },
   warnBox: { marginTop: 10, borderRadius: 12, padding: 10, backgroundColor: "rgba(245,158,11,0.12)", borderWidth: 1, borderColor: "rgba(245,158,11,0.35)" },
   warnText: { color: "#FDE68A", fontWeight: "800", fontSize: 12 },
   backupText: { marginTop: 10, color: T.textMuted, fontSize: 12, fontWeight: "700" },
@@ -647,6 +853,8 @@ const styles = StyleSheet.create({
   mainActionText: { color: "#fff", fontWeight: "900" },
   secondaryAction: { marginTop: 10, borderRadius: 16, paddingVertical: 13, alignItems: "center", backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
   secondaryActionText: { color: "#fff", fontWeight: "900" },
+  chartWrap: { marginTop: 14, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
+  chartTitle: { color: "#fff", fontWeight: "900", padding: 10, backgroundColor: "rgba(255,255,255,0.06)" },
   dimBtn: { opacity: 0.6 },
 
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 },
@@ -665,4 +873,8 @@ const styles = StyleSheet.create({
   tokenPickActive: { backgroundColor: "rgba(124,58,237,0.30)", borderColor: "rgba(124,58,237,0.45)" },
   tokenPickText: { color: "#fff", fontWeight: "900" },
   input: { marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 },
+  networkRow: { marginTop: 8, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 10, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  networkRowText: { color: "#fff", fontWeight: "800" },
 });
+
+

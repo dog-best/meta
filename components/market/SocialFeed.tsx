@@ -13,6 +13,7 @@ import {
 } from "react-native";
 
 import { supabase } from "@/services/supabase";
+import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 
 type FeedProfile = {
   user_id: string;
@@ -322,15 +323,15 @@ export default function SocialFeed({ profileUserId, hideComposer = false }: Prop
   }
 
   async function uploadAsset(userId: string, postId: string, asset: LocalAsset, idx: number): Promise<FeedMedia> {
-    const blob = await (await fetch(asset.uri)).blob();
     const ext = fileExtFromMime(asset.mimeType);
     const path = `${userId}/${postId}/${Date.now()}-${idx}.${ext}`;
-
-    const { error: uploadErr } = await supabase.storage.from(SOCIAL_BUCKET).upload(path, blob, {
+    await uploadToSupabaseStorage({
+      bucket: SOCIAL_BUCKET,
+      path,
+      localUri: asset.uri,
       contentType: asset.mimeType,
       upsert: false,
     });
-    if (uploadErr) throw uploadErr;
 
     const { data: inserted, error: mediaErr } = await supabase
       .from("market_social_media")

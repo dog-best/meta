@@ -184,6 +184,13 @@ function alchemyUrlForChainId(chainId: number, apiKey?: string) {
   return map[chainId] ?? "";
 }
 
+export async function getWalletPrivateKey(scope?: string | null) {
+  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
+  const pk = await SecureStore.getItemAsync(keyPrivate);
+  if (pk && pk.startsWith("0x")) return pk;
+  throw new Error("No private key found.");
+}
+
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {
   const chainId = normalizeChainId((chainConfig as any).chain_id);
   const chain = chainOverride ?? getChainById(chainId);

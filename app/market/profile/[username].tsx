@@ -240,15 +240,32 @@ export default function PublicSellerProfile() {
 
   async function loadReviews() {
     if (!seller?.user_id) return;
-    const { data, count } = await supabase
+    const { data, error } = await supabase
       .from("market_seller_reviews")
-      .select("id,seller_id,reviewer_id,rating,comment,created_at,profiles(username,full_name)", { count: "exact" })
+      .select("id,seller_id,reviewer_id,rating,comment,created_at")
       .eq("seller_id", seller.user_id)
       .order("created_at", { ascending: false })
       .limit(50);
+    if (error) throw new Error(error.message);
     const rows = (data as any as Review[]) ?? [];
-    setReviews(rows);
-    setReviewCount(count ?? rows.length);
+
+    const reviewerIds = Array.from(new Set(rows.map((r) => r.reviewer_id).filter(Boolean)));
+    let profileMap: Record<string, { username?: string | null; full_name?: string | null }> = {};
+    if (reviewerIds.length) {
+      const { data: profileRows, error: pErr } = await supabase
+        .from("profiles")
+        .select("id,username,full_name")
+        .in("id", reviewerIds);
+      if (pErr) throw new Error(pErr.message);
+      profileMap = (profileRows ?? []).reduce((acc: any, p: any) => {
+        acc[p.id] = { username: p.username ?? null, full_name: p.full_name ?? null };
+        return acc;
+      }, {});
+    }
+
+    const hydrated = rows.map((r) => ({ ...r, profiles: profileMap[r.reviewer_id] ?? null }));
+    setReviews(hydrated);
+    setReviewCount(rows.length);
     if (rows.length) {
       const avg = rows.reduce((a, b) => a + Number(b.rating || 0), 0) / rows.length;
       setAvgRating(Math.round(avg * 10) / 10);
@@ -330,7 +347,7 @@ export default function PublicSellerProfile() {
     setReviewBusy(true);
     setErr(null);
     try {
-      await supabase
+      const { error } = await supabase
         .from("market_seller_reviews")
         .upsert(
           {
@@ -341,6 +358,7 @@ export default function PublicSellerProfile() {
           },
           { onConflict: "seller_id,reviewer_id" }
         );
+      if (error) throw new Error(error.message);
       setMyComment("");
       setMyRating(0);
       await loadReviews();
