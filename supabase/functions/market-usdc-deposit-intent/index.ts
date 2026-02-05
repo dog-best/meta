@@ -2,6 +2,10 @@ import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 import { addRaw, feeFromRaw, getFeeBps, getFeeRecipient, toUsdcRaw } from "../_shared/market/crypto.ts";
 
+function orderTokenHint(body: any) {
+  return String(body?.currency ?? body?.token_symbol ?? "USDC");
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed();
 
@@ -15,6 +19,7 @@ Deno.serve(async (req) => {
   const body = await req.json().catch(() => ({}));
   const order_id = String(body?.order_id ?? "");
   const chain = String(body?.chain ?? "");
+  const token = String(body?.token ?? orderTokenHint(body)).toUpperCase();
 
   if (!order_id) return bad("order_id required");
 
@@ -26,7 +31,9 @@ Deno.serve(async (req) => {
 
   if (!order) return bad("Order not found");
   if (order.buyer_id !== user.id) return bad("Not your order");
-  if (order.currency !== "USDC") return bad("Not USDC order");
+  if (!["USDC", "USDT"].includes(order.currency)) return bad("Order must be USDC or USDT");
+  if (!["USDC", "USDT"].includes(token)) return bad("token must be USDC or USDT");
+  if (order.currency !== token) return bad(`Order currency mismatch: expected ${order.currency}, got ${token}`);
 
   const { data: esc, error: escErr } = await admin
     .from("market_crypto_escrows")
@@ -41,12 +48,15 @@ Deno.serve(async (req) => {
 
   const { data: cfg } = await admin
     .from("market_chain_config")
-    .select("chain,chain_id,usdc_address,escrow_address,confirmations_required,rpc_url,active")
+    .select("chain,chain_id,usdc_address,usdt_address,escrow_address,confirmations_required,rpc_url,active")
     .eq("chain", chainToUse)
     .eq("active", true)
     .maybeSingle();
 
   if (!cfg) return bad("Chain config missing");
+
+  const tokenAddress = token === "USDT" ? cfg.usdt_address : cfg.usdc_address;
+  if (!tokenAddress) return bad(`${token} address missing for chain config`);
 
   const amountUnits = Number(esc.amount_units);
   const amountRaw = toUsdcRaw(amountUnits);
@@ -55,7 +65,7 @@ Deno.serve(async (req) => {
   const buyerFeeRaw = feeFromRaw(amountRaw, feeBps);
   const buyerTotalRaw = addRaw(amountRaw, buyerFeeRaw);
 
-  await admin.from("market_crypto_escrows").update({ amount_raw: amountRaw }).eq("order_id", order_id);
+  await admin.from("market_crypto_escrows").update({ amount_raw: amountRaw, token_address: tokenAddress }).eq("order_id", order_id);
 
   await admin.rpc("market_set_crypto_intent", {
     p_order_id: order_id,
@@ -78,7 +88,10 @@ Deno.serve(async (req) => {
     confirmations_required: cfg.confirmations_required,
     rpc_url: cfg.rpc_url,
     escrow_address: cfg.escrow_address,
+    token_symbol: token,
+    token_address: tokenAddress,
     usdc_address: cfg.usdc_address,
+    usdt_address: cfg.usdt_address ?? null,
     buyer_wallet: esc.buyer_wallet,
     seller_wallet: esc.seller_wallet,
     amount_units: amountUnits,

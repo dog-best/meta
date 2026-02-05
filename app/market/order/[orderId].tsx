@@ -346,13 +346,13 @@ export default function OrderDetails() {
   const canVerifyOtp = !!order && isSeller && order.status === "OUT_FOR_DELIVERY";
 
   // Buyer releases only after OTP verified + delivered
-  const canRelease = !!order && isBuyer && otpVerified && (order.status === "DELIVERED" || order.status === "OUT_FOR_DELIVERY");
+  const canRelease = !!order && isBuyer && otpVerified && order.status === "DELIVERED";
 
   const otpExpiresAtMs = otp?.expires_at ? new Date(otp.expires_at).getTime() : 0;
   const otpExpiryRemainingSec = otpVerified || !otpExpiresAtMs ? 0 : Math.max(0, Math.ceil((otpExpiresAtMs - nowMs) / 1000));
   const otpCooldownRemainingSec = Math.max(0, Math.ceil((otpCooldownUntilMs - nowMs) / 1000));
   const hasPendingUnexpiredOtp = !!otp && !otpVerified && otpExpiryRemainingSec > 0;
-  const canGenerateOtpNow = canRequestOtp && !busy && otpCooldownRemainingSec === 0 && !hasPendingUnexpiredOtp;
+  const canGenerateOtpNow = canRequestOtp && !busy && !otpVerified && otpCooldownRemainingSec === 0 && !hasPendingUnexpiredOtp;
 
   function fmtCountdown(totalSec: number) {
     const m = Math.floor(totalSec / 60);

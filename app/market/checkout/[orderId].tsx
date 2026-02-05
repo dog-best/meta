@@ -9,7 +9,7 @@ import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
-import { payUsdcForOrder } from "@/services/market/usdcCheckout";
+import { payUsdcForOrder, payUsdtForOrder } from "@/services/market/usdcCheckout";
 import { getPreferredMarketChain } from "@/services/market/chainConfig";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -79,6 +79,8 @@ function Pill({
   onPress: () => void;
   disabled?: boolean;
 }) {
+
+
   return (
     <Pressable
       disabled={!!disabled}
@@ -142,6 +144,7 @@ export default function Checkout() {
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
   const allowNgn = paymentOptions?.allow_ngn !== false && listingCurrency !== "USDC" && listingCurrency !== "USDT";
   const allowUsdc = paymentOptions?.allow_usdc !== false && (listingCurrency === "USDC" || listingCurrency === "" || !!paymentOptions?.allow_crypto);
+  const allowUsdt = paymentOptions?.allow_usdt === true || listingCurrency === "USDT";
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();
@@ -355,6 +358,28 @@ export default function Checkout() {
     } finally {
       setBusy(false);
       console.log("[Checkout] payWithUsdc end");
+    }
+  }
+
+
+  async function payWithUsdt() {
+    if (busy) return;
+    setErr(null);
+    if (!oid) return setErr("Missing orderId");
+    if (!allowUsdt) return setErr("This listing does not accept USDT payments.");
+    const user = await requireAuth();
+    if (!user) return;
+
+    console.log("[Checkout] payWithUsdt start", { orderId: oid });
+    setBusy(true);
+    try {
+      await payUsdtForOrder(oid);
+      router.replace(`/market/order/${oid}` as any);
+    } catch (e: any) {
+      setErr(friendlyMarketError(e, "We couldn't start USDT checkout."));
+    } finally {
+      setBusy(false);
+      console.log("[Checkout] payWithUsdt end");
     }
   }
 
@@ -607,9 +632,17 @@ export default function Checkout() {
             disabled={busy || !allowUsdc}
           />
 
-          {!allowNgn || !allowUsdc ? (
+          <Pill
+            icon="cash-outline"
+            title="Pay with USDT"
+            subtitle="Approve + deposit into escrow using your smart account"
+            onPress={payWithUsdt}
+            disabled={busy || !allowUsdt}
+          />
+
+          {!allowNgn || !allowUsdc || !allowUsdt ? (
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-              Seller payment setting: {allowNgn && allowUsdc ? "NGN + USDC" : allowNgn ? "NGN only" : "USDC only"}.
+              Seller payment setting: {allowNgn && allowUsdc && allowUsdt ? "NGN + USDC + USDT" : allowNgn && allowUsdc ? "NGN + USDC" : allowNgn && allowUsdt ? "NGN + USDT" : allowUsdc && allowUsdt ? "USDC + USDT" : allowNgn ? "NGN only" : allowUsdc ? "USDC only" : allowUsdt ? "USDT only" : "No payment route enabled"}.
             </Text>
           ) : null}
 

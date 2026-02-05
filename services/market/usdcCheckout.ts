@@ -9,6 +9,8 @@ import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/ch
 const FN_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent";
 const FN_USDC_RELEASE_INTENT = "market-usdc-release-intent";
 
+export type StableSymbol = "USDC" | "USDT";
+
 const ESCROW_ABI = [
   {
     type: "function",
@@ -116,7 +118,7 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   return { address };
 }
 
-export async function payUsdcForOrder(orderId: string) {
+export async function payStableForOrder(orderId: string, symbol: StableSymbol = "USDC") {
   const chain = await getPreferredMarketChain();
   if (!chain) throw new Error("No active chain configuration found.");
 
@@ -125,7 +127,7 @@ export async function payUsdcForOrder(orderId: string) {
     throw new Error("No wallet address found. Generate a wallet in Market Account first.");
   }
 
-  const localAuth = await requireLocalAuth("Confirm USDC deposit");
+  const localAuth = await requireLocalAuth(`Confirm ${symbol} deposit`);
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
   const intent = await callFn<{
@@ -133,13 +135,25 @@ export async function payUsdcForOrder(orderId: string) {
     order_id: string;
     order_key: string;
     escrow_address: string;
-    usdc_address: string;
+    usdc_address?: string;
+    usdt_address?: string;
+    token_address?: string;
     seller_wallet: string;
     amount_raw: string;
     buyer_total_raw: string;
     fee_bps: number;
     chain: string;
-  }>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain });
+  }>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain, token: symbol });
+
+  const tokenAddress =
+    intent.token_address ||
+    (symbol === "USDT" ? intent.usdt_address : intent.usdc_address) ||
+    intent.usdc_address ||
+    "";
+
+  if (!tokenAddress) {
+    throw new Error(`${symbol} token address is not configured for this network.`);
+  }
 
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
@@ -162,12 +176,20 @@ export async function payUsdcForOrder(orderId: string) {
 
   await client.sendTransactions({
     requests: [
-      { to: intent.usdc_address as `0x${string}`, data: approveData },
+      { to: tokenAddress as `0x${string}`, data: approveData },
       { to: intent.escrow_address as `0x${string}`, data: depositData },
     ],
   });
 
-  return intent;
+  return { ...intent, token_symbol: symbol, token_address: tokenAddress };
+}
+
+export async function payUsdcForOrder(orderId: string) {
+  return payStableForOrder(orderId, "USDC");
+}
+
+export async function payUsdtForOrder(orderId: string) {
+  return payStableForOrder(orderId, "USDT");
 }
 
 export async function releaseUsdcForOrder(orderId: string) {

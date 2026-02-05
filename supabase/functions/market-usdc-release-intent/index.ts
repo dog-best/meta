@@ -25,9 +25,20 @@ Deno.serve(async (req) => {
 
   if (!order) return bad("Order not found");
   if (order.buyer_id !== user.id) return bad("Not your order");
-  if (order.currency !== "USDC") return bad("Not USDC order");
+  if (!["USDC", "USDT"].includes(order.currency)) return bad("Order must be USDC or USDT");
 
   const allowed = ["IN_ESCROW", "DELIVERED", "DELIVERABLE_UPLOADED"];
+
+  const { data: dispute } = await admin
+    .from("market_disputes")
+    .select("status")
+    .eq("order_id", order_id)
+    .maybeSingle();
+
+  if (dispute && String(dispute.status || "").toUpperCase() === "OPEN") {
+    return bad("Order is under dispute");
+  }
+
   if (!allowed.includes(order.status)) {
     return bad(`Cannot release from status: ${order.status}`);
   }
@@ -71,7 +82,7 @@ Deno.serve(async (req) => {
   await admin.from("market_audit_logs").insert({
     actor_id: user.id,
     actor_type: "user",
-    action: "USDC_RELEASE_INTENT",
+    action: `${order.currency}_RELEASE_INTENT`,
     entity_type: "market_orders",
     entity_id: order_id,
     payload: { order_key: esc.order_key, chain: esc.chain },
