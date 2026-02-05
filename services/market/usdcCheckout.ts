@@ -8,6 +8,9 @@ import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/ch
 
 const FN_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent";
 const FN_USDC_RELEASE_INTENT = "market-usdc-release-intent";
+const FN_USDC_DEPOSIT_SUBMIT = "market-usdc-deposit-submit";
+const FN_USDC_RELEASE_SUBMIT = "market-usdc-release-submit";
+const FN_CHAIN_TX_FINALIZE = "market-chain-tx-finalize";
 
 export type StableSymbol = "USDC" | "USDT";
 
@@ -19,6 +22,7 @@ const ESCROW_ABI = [
     inputs: [
       { name: "orderKey", type: "bytes32" },
       { name: "seller", type: "address" },
+      { name: "token", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [],
@@ -160,7 +164,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  const { client } = await getSmartAccount(chain, user.id);
+  const { client, account, address } = await getSmartAccount(chain, user.id);
 
   const approveData = encodeFunctionData({
     abi: ERC20_ABI,
@@ -171,17 +175,37 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const depositData = encodeFunctionData({
     abi: ESCROW_ABI,
     functionName: "deposit",
-    args: [intent.order_key as `0x${string}`, intent.seller_wallet as `0x${string}`, BigInt(intent.amount_raw)],
+    args: [intent.order_key as `0x${string}`, intent.seller_wallet as `0x${string}`, tokenAddress as `0x${string}`, BigInt(intent.amount_raw)],
   });
 
-  await client.sendTransactions({
+  const sendResult = await (client as any).sendTransactions({
+    account,
     requests: [
-      { to: tokenAddress as `0x${string}`, data: approveData },
-      { to: intent.escrow_address as `0x${string}`, data: depositData },
+      { from: address as `0x${string}`, to: tokenAddress as `0x${string}`, data: approveData },
+      { from: address as `0x${string}`, to: intent.escrow_address as `0x${string}`, data: depositData },
     ],
   });
 
-  return { ...intent, token_symbol: symbol, token_address: tokenAddress };
+  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
+
+  await callFn<{ ok: boolean }>(FN_USDC_DEPOSIT_SUBMIT, {
+    order_id: orderId,
+    chain: chain.chain,
+    token: symbol,
+    tx_hash: txHash || null,
+  });
+
+  if (txHash) {
+    // Strict finality: this may return pending until required confirmations are reached.
+    await callFn<{ ok: boolean }>(FN_CHAIN_TX_FINALIZE, {
+      order_id: orderId,
+      chain: chain.chain,
+      tx_hash: txHash,
+      event_type: "DEPOSIT",
+    }).catch(() => null);
+  }
+
+  return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: txHash || null };
 }
 
 export async function payUsdcForOrder(orderId: string) {
@@ -217,7 +241,7 @@ export async function releaseUsdcForOrder(orderId: string) {
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  const { client } = await getSmartAccount(chain, user.id);
+  const { client, account, address } = await getSmartAccount(chain, user.id);
 
   const data = encodeFunctionData({
     abi: ESCROW_ABI,
@@ -225,10 +249,29 @@ export async function releaseUsdcForOrder(orderId: string) {
     args: [intent.order_key as `0x${string}`],
   });
 
-  await client.sendTransaction({
+  const sendResult = await (client as any).sendTransaction({
+    from: address as `0x${string}`,
     to: intent.escrow_address as `0x${string}`,
     data,
   });
 
-  return intent;
+  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
+
+  await callFn<{ ok: boolean }>(FN_USDC_RELEASE_SUBMIT, {
+    order_id: orderId,
+    chain: chain.chain,
+    tx_hash: txHash || null,
+  });
+
+  if (txHash) {
+    // Strict finality: this may return pending until required confirmations are reached.
+    await callFn<{ ok: boolean }>(FN_CHAIN_TX_FINALIZE, {
+      order_id: orderId,
+      chain: chain.chain,
+      tx_hash: txHash,
+      event_type: "RELEASE",
+    }).catch(() => null);
+  }
+
+  return { ...intent, tx_hash: txHash || null };
 }

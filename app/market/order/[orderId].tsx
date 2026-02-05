@@ -435,7 +435,7 @@ async function releaseFunds() {
   setBusy(true);
   setErr(null);
   try {
-    if (order.currency === "USDC") {
+    if (["USDC", "USDT"].includes(String(order.currency || "").toUpperCase())) {
       await releaseUsdcForOrder(order.id);
     } else {
       const auth = await requireLocalAuth("Release escrow to seller");

@@ -38,7 +38,7 @@ async function invokeCheckoutWallet(orderId: string) {
 
   const run = async () =>
     await withTimeout(
-      supabase.rpc(RPC_CHECKOUT_WALLET, { p_order_id: orderId }),
+      Promise.resolve(supabase.rpc(RPC_CHECKOUT_WALLET, { p_order_id: orderId })),
       25000,
       "Checkout request",
     );
@@ -142,9 +142,20 @@ export default function Checkout() {
   const [chain, setChain] = useState<{ chain: string } | null>(null);
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
-  const allowNgn = paymentOptions?.allow_ngn !== false && listingCurrency !== "USDC" && listingCurrency !== "USDT";
-  const allowUsdc = paymentOptions?.allow_usdc !== false && (listingCurrency === "USDC" || listingCurrency === "" || !!paymentOptions?.allow_crypto);
-  const allowUsdt = paymentOptions?.allow_usdt === true || listingCurrency === "USDT";
+  const hasExplicitRoutes =
+    typeof paymentOptions?.allow_ngn === "boolean" ||
+    typeof paymentOptions?.allow_usdc === "boolean" ||
+    typeof paymentOptions?.allow_usdt === "boolean";
+
+  const allowNgn = hasExplicitRoutes
+    ? paymentOptions?.allow_ngn === true
+    : listingCurrency === "NGN" || listingCurrency === "";
+  const allowUsdc = hasExplicitRoutes
+    ? paymentOptions?.allow_usdc === true
+    : listingCurrency === "USDC";
+  const allowUsdt = hasExplicitRoutes
+    ? paymentOptions?.allow_usdt === true
+    : listingCurrency === "USDT";
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();

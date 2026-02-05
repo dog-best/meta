@@ -26,7 +26,7 @@ export type CreateListingInput = {
   title: string;
   description?: string | null;
   price_amount: number;
-  currency: "NGN" | "USDC";
+  currency: "NGN" | "USDC" | "USDT";
   stock_qty?: number | null; // products
   availability?: any;
   payment_options?: any;

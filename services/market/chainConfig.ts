@@ -7,6 +7,7 @@ export type MarketChainConfig = {
   chain_id: number;
   rpc_url: string | null;
   usdc_address: string;
+  usdt_address: string | null;
   escrow_address: string;
   confirmations_required: number;
   active: boolean;
@@ -35,7 +36,7 @@ export async function fetchMarketChains() {
     // Fallback to direct client query (may be blocked by RLS)
     const { data, error } = await supabase
       .from("market_chain_config")
-      .select("chain,chain_id,rpc_url,usdc_address,escrow_address,confirmations_required,active")
+      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
       .order("active", { ascending: false });
     if (!error && data && data.length) return data as MarketChainConfig[];
 
@@ -46,6 +47,7 @@ export async function fetchMarketChains() {
         chain_id: 84532,
         rpc_url: process.env.EXPO_PUBLIC_BASE_SEPOLIA_RPC_URL ?? null,
         usdc_address: process.env.EXPO_PUBLIC_USDC_ADDRESS_BASE_SEPOLIA ?? "",
+        usdt_address: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA ?? null,
         escrow_address: process.env.EXPO_PUBLIC_ESCROW_ADDRESS_BASE_SEPOLIA ?? "",
         confirmations_required: 3,
         active: true,
