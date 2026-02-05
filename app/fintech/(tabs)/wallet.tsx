@@ -28,7 +28,7 @@ type ChainItem = {
   chain_id: number;
   rpc_url: string | null;
   usdc_address: string;
-  usdt_address?: string | null;
+  usdt_address: string | null;
   escrow_address: string;
   confirmations_required: number;
   active: boolean;

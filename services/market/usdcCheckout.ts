@@ -3,7 +3,7 @@ import { encodeFunctionData } from "viem";
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getScopedWalletAddress, getSmartAccount } from "@/utils/aaWallet";
+import { getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
 const FN_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent";
@@ -117,7 +117,8 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  const address = await getScopedWalletAddress(user.id);
+  // Persist the smart-account address (not EOA signer address) so balances and checkout stay consistent.
+  const { address } = await getSmartAccount(chainConfig, user.id);
   await registerWallet(chainConfig.chain, address);
   return { address };
 }

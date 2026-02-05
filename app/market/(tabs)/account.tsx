@@ -510,7 +510,7 @@ export default function MarketAccountTab() {
                   variant="outline"
                 />
 
-                <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/market/wallet" as any)} variant="outline" />
+                <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/fintech/(tabs)/wallet?action=crypto" as any)} variant="outline" />
               </View>
 
               <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
@@ -538,7 +538,7 @@ export default function MarketAccountTab() {
           </Text>
 
           <Pressable
-            onPress={() => router.push("/fintech/(tabs)" as any)}
+            onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
             style={{
               marginTop: 12,
               borderRadius: 18,
