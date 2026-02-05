@@ -138,11 +138,27 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
   };
 }
 
+function alchemyUrlForChainId(chainId: number, apiKey?: string) {
+  if (!apiKey) return "";
+  const map: Record<number, string> = {
+    84532: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
+    8453: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
+    11155111: `https://eth-sepolia.g.alchemy.com/v2/${apiKey}`,
+    1: `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`,
+    137: `https://polygon-mainnet.g.alchemy.com/v2/${apiKey}`,
+    42161: `https://arb-mainnet.g.alchemy.com/v2/${apiKey}`,
+    10: `https://opt-mainnet.g.alchemy.com/v2/${apiKey}`,
+  };
+  return map[chainId] ?? "";
+}
+
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {
   const chain = chainOverride ?? getChainById(chainConfig.chain_id);
   const apiKey = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY as string | undefined;
-  // Prefer Alchemy RPC for AA flows to avoid counterfactual init failures on generic public RPCs.
+  const explicitAlchemy = alchemyUrlForChainId(chainConfig.chain_id, apiKey);
+  // Prefer explicit Alchemy endpoint first for AA stability.
   return (
+    explicitAlchemy ||
     (apiKey && chain.rpcUrls?.alchemy?.http?.[0]?.replace("${ALCHEMY_API_KEY}", apiKey)) ||
     chainConfig.rpc_url ||
     chain.rpcUrls?.default?.http?.[0] ||

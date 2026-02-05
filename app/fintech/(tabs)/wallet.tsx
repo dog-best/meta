@@ -238,6 +238,11 @@ export default function WalletRoute() {
     if (!chain) return;
     setWalletErr(null);
     setWalletBusy(true);
+    if (!hasAlchemyKey) {
+      setWalletBusy(false);
+      setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
+      return;
+    }
     try {
       const auth = await requireLocalAuth(walletAddr ? "Regenerate smart wallet" : "Create smart wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
@@ -509,7 +514,7 @@ export default function WalletRoute() {
                 </Pressable>
               </View>
 
-              <Pressable disabled={!chain?.active || walletBusy} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy) && styles.dimBtn]}>
+              <Pressable disabled={!chain?.active || walletBusy || !hasAlchemyKey} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || !hasAlchemyKey) && styles.dimBtn]}>
                 <Text style={styles.mainActionText}>{walletBusy ? "Working..." : walletAddr ? "Regenerate wallet" : "Generate wallet"}</Text>
               </Pressable>
 
