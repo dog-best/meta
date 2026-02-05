@@ -41,6 +41,8 @@ function cleanAlchemyApiKey(raw?: string) {
 
 function getChainById(chainIdInput: number | string) {
   const chainId = normalizeChainId(chainIdInput);
+  const alchemyChain = AlchemyChainMap.get(chainId);
+  if (alchemyChain) return alchemyChain;
   const map: Record<number, any> = {
     84532: baseSepolia,
     8453: base,
@@ -150,10 +152,11 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
 
   const apiKey = cleanAlchemyApiKey(process.env.EXPO_PUBLIC_ALCHEMY_API_KEY);
   const gasPolicyId = process.env.EXPO_PUBLIC_ALCHEMY_GAS_POLICY_ID as string | undefined;
+  const canUseApiKeyClient = !!apiKey && !!chain?.rpcUrls?.alchemy?.http?.[0];
   const client = createAlchemySmartAccountClient({
     chain,
     account,
-    ...(apiKey ? { apiKey } : { rpcUrl }),
+    ...(canUseApiKeyClient ? { apiKey } : { rpcUrl }),
     ...(gasPolicyId ? { gasManagerConfig: { policyId: gasPolicyId } } : {}),
   });
 
