@@ -1,18 +1,15 @@
 import { encodeFunctionData } from "viem";
 
-import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
-const FN_USDC_DEPOSIT_INTENT = "market-usdc-deposit-intent";
-const FN_USDC_RELEASE_INTENT = "market-usdc-release-intent";
-const FN_USDC_DEPOSIT_SUBMIT = "market-usdc-deposit-submit";
-const FN_USDC_RELEASE_SUBMIT = "market-usdc-release-submit";
-const FN_CHAIN_TX_FINALIZE = "market-chain-tx-finalize";
 const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
 const RPC_USDC_RELEASE_INTENT = "market_usdc_release_intent_rpc";
+const RPC_USDC_DEPOSIT_SUBMIT = "market_usdc_deposit_submit_rpc";
+const RPC_USDC_RELEASE_SUBMIT = "market_usdc_release_submit_rpc";
+const RPC_CHAIN_TX_FINALIZE = "market_chain_tx_finalize_rpc";
 
 export type StableSymbol = "USDC" | "USDT";
 
@@ -156,7 +153,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const localAuth = await requireLocalAuth(`Confirm ${symbol} deposit`);
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
-  let intent: {
+  const intent: {
     ok: boolean;
     order_id: string;
     order_key: string;
@@ -169,20 +166,15 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     buyer_total_raw: string;
     fee_bps: number;
     chain: string;
-  };
-  try {
-    intent = await callFn<typeof intent>(FN_USDC_DEPOSIT_INTENT, { order_id: orderId, chain: chain.chain, token: symbol });
-  } catch (e: any) {
-    const msg = String(e?.message || "");
-    if (!/jwt|session|auth/i.test(msg)) throw e;
+  } = await (async () => {
     const { data, error } = await supabase.rpc(RPC_USDC_DEPOSIT_INTENT, {
       p_order_id: orderId,
       p_chain: chain.chain,
       p_token: symbol,
     });
     if (error) throw new Error(error.message || "Could not create crypto deposit intent.");
-    intent = data as typeof intent;
-  }
+    return data as any;
+  })();
 
   const tokenAddress =
     intent.token_address ||
@@ -223,21 +215,23 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
 
-  await callFn<{ ok: boolean }>(FN_USDC_DEPOSIT_SUBMIT, {
-    order_id: orderId,
-    chain: chain.chain,
-    token: symbol,
-    tx_hash: txHash || null,
+  await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
+    p_order_id: orderId,
+    p_chain: chain.chain,
+    p_token: symbol,
+    p_tx_hash: txHash || null,
   });
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.
-    await callFn<{ ok: boolean }>(FN_CHAIN_TX_FINALIZE, {
-      order_id: orderId,
-      chain: chain.chain,
-      tx_hash: txHash,
-      event_type: "DEPOSIT",
-    }).catch(() => null);
+    await supabase
+      .rpc(RPC_CHAIN_TX_FINALIZE, {
+        p_order_id: orderId,
+        p_chain: chain.chain,
+        p_tx_hash: txHash,
+        p_event_type: "DEPOSIT",
+      })
+      .catch(() => null);
   }
 
   return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: txHash || null };
@@ -263,25 +257,20 @@ export async function releaseUsdcForOrder(orderId: string) {
   const localAuth = await requireLocalAuth("Release escrow to seller");
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
 
-  let intent: {
+  const intent: {
     ok: boolean;
     order_id: string;
     order_key: string;
     escrow_address: string;
     chain: string;
-  };
-  try {
-    intent = await callFn<typeof intent>(FN_USDC_RELEASE_INTENT, { order_id: orderId, chain: chain.chain });
-  } catch (e: any) {
-    const msg = String(e?.message || "");
-    if (!/jwt|session|auth/i.test(msg)) throw e;
+  } = await (async () => {
     const { data, error } = await supabase.rpc(RPC_USDC_RELEASE_INTENT, {
       p_order_id: orderId,
       p_chain: chain.chain,
     });
     if (error) throw new Error(error.message || "Could not create release intent.");
-    intent = data as typeof intent;
-  }
+    return data as any;
+  })();
 
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
@@ -304,20 +293,22 @@ export async function releaseUsdcForOrder(orderId: string) {
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
 
-  await callFn<{ ok: boolean }>(FN_USDC_RELEASE_SUBMIT, {
-    order_id: orderId,
-    chain: chain.chain,
-    tx_hash: txHash || null,
+  await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
+    p_order_id: orderId,
+    p_chain: chain.chain,
+    p_tx_hash: txHash || null,
   });
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.
-    await callFn<{ ok: boolean }>(FN_CHAIN_TX_FINALIZE, {
-      order_id: orderId,
-      chain: chain.chain,
-      tx_hash: txHash,
-      event_type: "RELEASE",
-    }).catch(() => null);
+    await supabase
+      .rpc(RPC_CHAIN_TX_FINALIZE, {
+        p_order_id: orderId,
+        p_chain: chain.chain,
+        p_tx_hash: txHash,
+        p_event_type: "RELEASE",
+      })
+      .catch(() => null);
   }
 
   return { ...intent, tx_hash: txHash || null };
