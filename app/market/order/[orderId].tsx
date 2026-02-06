@@ -217,6 +217,20 @@ export default function OrderDetails() {
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
 
   const otpVerified = !!otp?.verified_at;
+  const latestDepositIntent = useMemo(() => {
+    const dep = intents.filter((i) => String(i.intent_type || "").toUpperCase() === "DEPOSIT");
+    return dep.length ? dep[0] : null;
+  }, [intents]);
+  const isStableOrder = useMemo(
+    () => ["USDC", "USDT"].includes(String(order?.currency || "").toUpperCase()),
+    [order?.currency],
+  );
+  const awaitingConfirmations =
+    !!order &&
+    order.status === "CREATED" &&
+    isStableOrder &&
+    !!latestDepositIntent &&
+    ["SUBMITTED", "PENDING"].includes(String(latestDepositIntent.status || "").toUpperCase());
 
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
@@ -686,6 +700,35 @@ async function pickAndUpload(access: "preview" | "final") {
                 Order ID: {order.id}
               </Text>
             </View>
+
+            {awaitingConfirmations ? (
+              <Card title="Waiting for blockchain confirmations">
+                <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
+                  Your deposit is submitted. We&apos;re waiting for on-chain confirmations before moving the order
+                  into escrow. This typically updates within ~5 minutes (poller interval) plus chain confirmations.
+                </Text>
+                {latestDepositIntent?.tx_hash ? (
+                  <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                    Tx: {latestDepositIntent.tx_hash}
+                  </Text>
+                ) : null}
+                <Pressable
+                  onPress={load}
+                  style={{
+                    marginTop: 10,
+                    alignSelf: "flex-start",
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    backgroundColor: "rgba(124,58,237,0.18)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,237,0.35)",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Refresh status</Text>
+                </Pressable>
+              </Card>
+            ) : null}
 
             {(isSeller || isBuyer) && (order as any)?.delivery_address?.geo ? (
               <Card title={isSeller ? "Buyer delivery location" : "Your delivery location"}>

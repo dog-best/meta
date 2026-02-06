@@ -1,4 +1,4 @@
-import { encodeFunctionData } from "viem";
+import { createPublicClient, encodeFunctionData, http } from "viem";
 
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
@@ -192,6 +192,42 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   if (!user) throw new Error("Not authenticated");
 
   const { client, account, address } = await getSmartAccount(chain, user.id);
+  const buyerAddress = String(address || "").toLowerCase();
+  const sellerAddress = String(intent.seller_wallet || "").toLowerCase();
+  if (buyerAddress && sellerAddress && buyerAddress === sellerAddress) {
+    throw new Error("Buyer and seller wallet cannot be the same.");
+  }
+
+  // Pre-check balances to avoid opaque UserOp reverts.
+  try {
+    const rpcUrl = chain.rpc_url || "";
+    if (rpcUrl) {
+      const publicClient = createPublicClient({
+        chain: (chain as any).viemChain ?? undefined,
+        transport: http(rpcUrl),
+      });
+      const bal = await publicClient.readContract({
+        abi: [
+          {
+            type: "function",
+            name: "balanceOf",
+            stateMutability: "view",
+            inputs: [{ name: "owner", type: "address" }],
+            outputs: [{ name: "bal", type: "uint256" }],
+          },
+        ],
+        address: tokenAddress as `0x${string}`,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`],
+      });
+      if (BigInt(bal) < BigInt(intent.buyer_total_raw || "0")) {
+        throw new Error("Insufficient token balance on smart account.");
+      }
+    }
+  } catch (e) {
+    // Surface as a normal error so user sees it.
+    throw e;
+  }
 
   const approveData = encodeFunctionData({
     abi: ERC20_ABI,
@@ -205,15 +241,21 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     args: [intent.order_key as `0x${string}`, intent.seller_wallet as `0x${string}`, tokenAddress as `0x${string}`, BigInt(intent.amount_raw)],
   });
 
-  const sendResult = await (client as any).sendTransactions({
+  // Send sequentially to get clearer errors.
+  const approveTx = await (client as any).sendTransaction({
     account,
-    requests: [
-      { from: address as `0x${string}`, to: tokenAddress as `0x${string}`, data: approveData },
-      { from: address as `0x${string}`, to: intent.escrow_address as `0x${string}`, data: depositData },
-    ],
+    to: tokenAddress as `0x${string}`,
+    data: approveData,
+  });
+  const approveHash = String((approveTx as any)?.hash ?? (approveTx as any)?.transactionHash ?? "");
+
+  const sendResult = await (client as any).sendTransaction({
+    account,
+    to: intent.escrow_address as `0x${string}`,
+    data: depositData,
   });
 
-  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
+  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? approveHash ?? "");
 
   await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
     p_order_id: orderId,
