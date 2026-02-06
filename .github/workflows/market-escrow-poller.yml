@@ -1,0 +1,20 @@
+name: market-escrow-poller
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call market-escrow-poller
+        env:
+          POLLER_URL: ${{ secrets.SUPABASE_MARKET_ESCROW_POLLER_URL }}
+        run: |
+          if [ -z "$POLLER_URL" ]; then
+            echo "Missing SUPABASE_MARKET_ESCROW_POLLER_URL secret"
+            exit 1
+          fi
+          curl -sS -X POST "$POLLER_URL" -H "Content-Type: application/json" -d '{}' | cat
