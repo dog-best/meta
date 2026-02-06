@@ -365,6 +365,7 @@ export default function Checkout() {
       // We route back to order screen where you can show deposit instructions/intents history
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {
+      console.log("[Checkout] payWithUsdc error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start crypto checkout."));
     } finally {
       setBusy(false);
@@ -387,6 +388,7 @@ export default function Checkout() {
       await payUsdtForOrder(oid);
       router.replace(`/market/order/${oid}` as any);
     } catch (e: any) {
+      console.log("[Checkout] payWithUsdt error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start USDT checkout."));
     } finally {
       setBusy(false);
