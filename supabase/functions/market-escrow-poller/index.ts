@@ -229,8 +229,8 @@ serve(async () => {
     }
 
     return json(200, { ok: true, results });
-  } catch (err) {
+  } catch (err: any) {
     console.error("market-escrow-poller error:", err);
-    return json(500, { ok: false, message: "Server error" });
+    return json(500, { ok: false, message: String(err?.message || err) });
   }
 });
