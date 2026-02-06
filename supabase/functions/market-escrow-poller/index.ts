@@ -200,8 +200,11 @@ serve(async () => {
       }
 
       const fromBlock = Math.max(0, lastBlock + 1);
-      const maxRange = 2000;
+      const maxRange = 10;
       let cursor = fromBlock;
+      if (lastBlock === 0) {
+        cursor = Math.max(0, toBlock - (maxRange - 1));
+      }
       let processed = 0;
 
       while (cursor <= toBlock) {
