@@ -12,9 +12,18 @@ jobs:
       - name: Call market-escrow-poller
         env:
           POLLER_URL: ${{ secrets.SUPABASE_MARKET_ESCROW_POLLER_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           if [ -z "$POLLER_URL" ]; then
             echo "Missing SUPABASE_MARKET_ESCROW_POLLER_URL secret"
             exit 1
           fi
-          curl -sS -X POST "$POLLER_URL" -H "Content-Type: application/json" -d '{}' | cat
+          if [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "Missing SUPABASE_ANON_KEY secret"
+            exit 1
+          fi
+          curl -sS -X POST "$POLLER_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -d '{}' | cat
