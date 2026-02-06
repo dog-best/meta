@@ -202,8 +202,12 @@ serve(async () => {
       const fromBlock = Math.max(0, lastBlock + 1);
       const maxRange = 10;
       let cursor = fromBlock;
+      let truncated = false;
       if (lastBlock === 0) {
-        cursor = Math.max(0, toBlock - (maxRange - 1));
+        // First run: backfill a small recent window to catch older deposits.
+        const backfill = 300;
+        cursor = Math.max(0, toBlock - backfill);
+        truncated = cursor > 0;
       }
       let processed = 0;
 
@@ -228,7 +232,7 @@ serve(async () => {
         .upsert({ chain: cfg.chain, last_block: toBlock })
         .select();
 
-      results[cfg.chain] = { ok: true, processed, fromBlock, toBlock, latest, required };
+      results[cfg.chain] = { ok: true, processed, fromBlock: cursor, toBlock, latest, required, truncated };
     }
 
     return json(200, { ok: true, results });

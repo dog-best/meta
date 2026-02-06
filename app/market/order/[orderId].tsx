@@ -231,6 +231,13 @@ export default function OrderDetails() {
     isStableOrder &&
     !!latestDepositIntent &&
     ["SUBMITTED", "PENDING"].includes(String(latestDepositIntent.status || "").toUpperCase());
+  const hasSubmittedCryptoDeposit = useMemo(() => {
+    return intents.some(
+      (i) =>
+        String(i.intent_type || "").toUpperCase() === "DEPOSIT" &&
+        ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
+    );
+  }, [intents]);
 
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
@@ -353,7 +360,7 @@ export default function OrderDetails() {
 
   // Buttons conditions (your existing logic)
   const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
-  const canCancel = !!order && order.status === "CREATED" && isBuyer;
+  const canCancel = !!order && order.status === "CREATED" && isBuyer && !hasSubmittedCryptoDeposit;
 
   const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
   const canRequestOtp = !!order && isBuyer && order.status === "OUT_FOR_DELIVERY";
@@ -705,8 +712,13 @@ async function pickAndUpload(access: "preview" | "final") {
               <Card title="Waiting for blockchain confirmations">
                 <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
                   Your deposit is submitted. We&apos;re waiting for on-chain confirmations before moving the order
-                  into escrow. This typically updates within ~5 minutes (poller interval) plus chain confirmations.
+                  into escrow. We check every ~5 minutes plus chain confirmations.
                 </Text>
+                {pollRemainingSec > 0 ? (
+                  <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                    Next automatic check in {fmtCountdown(pollRemainingSec)}.
+                  </Text>
+                ) : null}
                 {latestDepositIntent?.tx_hash ? (
                   <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
                     Tx: {latestDepositIntent.tx_hash}
@@ -1331,3 +1343,7 @@ async function pickAndUpload(access: "preview" | "final") {
   );
 }
 
+  const pollIntervalMs = 5 * 60 * 1000;
+  const depositCreatedAtMs = latestDepositIntent?.created_at ? new Date(latestDepositIntent.created_at).getTime() : 0;
+  const nextPollAtMs = depositCreatedAtMs > 0 ? depositCreatedAtMs + pollIntervalMs : 0;
+  const pollRemainingSec = nextPollAtMs > 0 ? Math.max(0, Math.ceil((nextPollAtMs - nowMs) / 1000)) : 0;
