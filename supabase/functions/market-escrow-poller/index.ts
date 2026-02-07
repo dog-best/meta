@@ -189,7 +189,8 @@ serve(async () => {
         .eq("chain", cfg.chain)
         .maybeSingle();
 
-      const backfill = 60;
+      const backfill = 20;
+      const maxBlocksPerRun = 60;
       let lastBlock = Number((syncRow as ChainSync | null)?.last_block ?? 0);
       const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
       const latest = toNum(latestHex);
@@ -223,10 +224,11 @@ serve(async () => {
         continue;
       }
 
+      const runToBlock = Math.min(toBlock, cursor + maxBlocksPerRun - 1);
       let processed = 0;
 
-      while (cursor <= toBlock) {
-        const end = Math.min(cursor + maxRange - 1, toBlock);
+      while (cursor <= runToBlock) {
+        const end = Math.min(cursor + maxRange - 1, runToBlock);
         let logs: RpcLog[] = [];
         try {
           logs = (await rpcCall(cfg.rpc_url, "eth_getLogs", [
@@ -258,14 +260,14 @@ serve(async () => {
 
       await admin
         .from("market_chain_sync")
-        .upsert({ chain: cfg.chain, last_block: toBlock })
+        .upsert({ chain: cfg.chain, last_block: runToBlock })
         .select();
 
       results[cfg.chain] = {
         ok: true,
         processed,
         fromBlock: cursor,
-        toBlock,
+        toBlock: runToBlock,
         latest,
         required,
         truncated,
