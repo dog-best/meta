@@ -73,6 +73,10 @@ function getUsdtAddress(chainName?: string | null) {
   return USDT_BY_CHAIN[chainName] ?? "";
 }
 
+function isAddress(v?: string | null) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
 function Badge({ text, tone }: { text: string; tone: "purple" | "green" | "gray" }) {
   const map = {
     purple: { bg: "rgba(124,58,237,0.18)", bd: "rgba(124,58,237,0.40)", fg: "rgba(221,214,254,0.95)" },
@@ -215,6 +219,7 @@ export default function MarketAccountTab() {
       transport: http(rpcUrl),
     });
     try {
+      if (!isAddress(current.usdc_address)) throw new Error("USDC contract address is not configured.");
       const usdcRaw = await client.readContract({
         address: current.usdc_address as `0x${string}`,
         abi: ERC20_ABI,
@@ -222,16 +227,18 @@ export default function MarketAccountTab() {
         args: [w.address as `0x${string}`],
       });
       setUsdcBalance(formatUnits(usdcRaw as bigint, 6));
-    } catch {
+    } catch (e: any) {
       setUsdcBalance("0");
+      setWalletErr(friendlyMarketError(e, "Unable to load USDC balance."));
     }
 
-    const usdt = getUsdtAddress(current.chain);
+    const usdt = (current.usdt_address as string) || getUsdtAddress(current.chain);
     if (!usdt) {
       setUsdtBalance("0");
       return;
     }
     try {
+      if (!isAddress(usdt)) throw new Error("USDT contract address is not configured.");
       const usdtRaw = await client.readContract({
         address: usdt as `0x${string}`,
         abi: ERC20_ABI,
@@ -239,8 +246,9 @@ export default function MarketAccountTab() {
         args: [w.address as `0x${string}`],
       });
       setUsdtBalance(formatUnits(usdtRaw as bigint, 6));
-    } catch {
+    } catch (e: any) {
       setUsdtBalance("0");
+      setWalletErr(friendlyMarketError(e, "Unable to load USDT balance."));
     }
   }
 

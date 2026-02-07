@@ -263,6 +263,15 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     p_token: symbol,
     p_tx_hash: txHash || null,
   });
+  if (txHash) {
+    // Ensure tx hash is persisted even if RPC or trigger missed it.
+    await supabase
+      .from("market_crypto_intents")
+      .update({ tx_hash: txHash, status: "SUBMITTED" })
+      .eq("order_id", orderId)
+      .eq("intent_type", "DEPOSIT")
+      .is("tx_hash", null);
+  }
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.
@@ -340,6 +349,14 @@ export async function releaseUsdcForOrder(orderId: string) {
     p_chain: chain.chain,
     p_tx_hash: txHash || null,
   });
+  if (txHash) {
+    await supabase
+      .from("market_crypto_intents")
+      .update({ tx_hash: txHash, status: "SUBMITTED" })
+      .eq("order_id", orderId)
+      .eq("intent_type", "RELEASE")
+      .is("tx_hash", null);
+  }
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.

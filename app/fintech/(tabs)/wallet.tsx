@@ -186,7 +186,17 @@ export default function WalletRoute() {
       setBackedUp(backed);
 
       const w = await getMyWalletForChain(c.chain);
-      const addr = w?.address ?? "";
+      let addr = w?.address ?? "";
+      if (!addr) {
+        const { data: anyAddr } = await supabase
+          .from("crypto_wallets")
+          .select("address")
+          .eq("user_id", meId)
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        addr = anyAddr?.address ?? "";
+      }
       setWalletAddr(addr);
       setTokenDiag({});
 
