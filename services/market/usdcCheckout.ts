@@ -10,7 +10,6 @@ const RPC_USDC_RELEASE_INTENT = "market_usdc_release_intent_rpc";
 const RPC_USDC_DEPOSIT_SUBMIT = "market_usdc_deposit_submit_rpc";
 const RPC_USDC_RELEASE_SUBMIT = "market_usdc_release_submit_rpc";
 const RPC_CHAIN_TX_FINALIZE = "market_chain_tx_finalize_rpc";
-const RPC_MARK_IN_ESCROW = "market_crypto_mark_in_escrow_rpc";
 
 export type StableSymbol = "USDC" | "USDT";
 
@@ -274,9 +273,6 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
       .is("tx_hash", null);
   }
 
-  // Move order to IN_ESCROW immediately after successful deposit submit.
-  // This avoids waiting for the poller during test flows.
-  await supabase.rpc(RPC_MARK_IN_ESCROW, { p_order_id: orderId }).catch(() => null);
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.

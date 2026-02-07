@@ -235,6 +235,11 @@ export default function OrderDetails() {
     isStableOrder &&
     !!latestDepositIntent &&
     ["SUBMITTED", "PENDING"].includes(String(latestDepositIntent.status || "").toUpperCase());
+  const canResyncDeposit =
+    !!order &&
+    order.status === "CREATED" &&
+    isStableOrder &&
+    !!latestDepositIntent;
   const hasSubmittedCryptoDeposit = useMemo(() => {
     return intents.some(
       (i) =>
@@ -787,6 +792,33 @@ async function pickAndUpload(access: "preview" | "final") {
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
                     Resync deposit now
                   </Text>
+                </Pressable>
+              </Card>
+            ) : null}
+
+            {!awaitingConfirmations && canResyncDeposit ? (
+              <Card title="Resync deposit">
+                <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
+                  If your deposit is confirmed on-chain but the order is still Created, resync using the tx hash.
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    setReindexTx(latestDepositIntent?.tx_hash ?? "");
+                    setReindexOpen(true);
+                  }}
+                  disabled={busy}
+                  style={{
+                    marginTop: 10,
+                    alignSelf: "flex-start",
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    backgroundColor: busy ? "rgba(255,255,255,0.08)" : "rgba(124,58,237,0.25)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,237,0.45)",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Resync deposit now</Text>
                 </Pressable>
               </Card>
             ) : null}
