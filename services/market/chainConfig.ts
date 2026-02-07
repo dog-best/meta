@@ -28,6 +28,17 @@ export async function fetchMarketChains() {
   });
 
   try {
+    // Prefer direct DB query to avoid stale/misconfigured edge function responses.
+    const { data: direct, error: directErr } = await supabase
+      .from("market_chain_config")
+      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
+      .order("active", { ascending: false });
+    if (!directErr && direct && direct.length) {
+      const directNorm = direct.map(normalize);
+      const hasValidTokens = directNorm.some((c) => /^0x[a-fA-F0-9]{40}$/.test(c.usdc_address || ""));
+      if (hasValidTokens) return directNorm;
+    }
+
     const { data: sessionData } = await supabase.auth.getSession();
     const accessToken = sessionData?.session?.access_token;
     const base = getSupabaseFunctionsBaseUrl();
@@ -48,13 +59,6 @@ export async function fetchMarketChains() {
     if (fromFn.length && hasValidTokens) return fromFn;
     throw new Error("Chain config payload missing token addresses");
   } catch (e: any) {
-    // Fallback to direct client query (may be blocked by RLS)
-    const { data, error } = await supabase
-      .from("market_chain_config")
-      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
-      .order("active", { ascending: false });
-    if (!error && data && data.length) return data.map(normalize);
-
     // Last fallback so UI is usable even if policies/functions are misconfigured.
     return [
       {

@@ -11,6 +11,7 @@ import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { callFn } from "@/services/functions";
+import { callFn } from "@/services/functions";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import {
@@ -36,6 +37,7 @@ const RPC_OTP_VERIFY = "market_otp_verify_rpc";
 const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
 const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
 const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
+const FN_ESCROW_REINDEX = "market-escrow-reindex";
 const FN_ESCROW_REINDEX = "market-escrow-reindex";
 
 // Tables
@@ -214,6 +216,8 @@ export default function OrderDetails() {
   // Upload (seller)
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const [reindexOpen, setReindexOpen] = useState(false);
+  const [reindexTx, setReindexTx] = useState("");
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
@@ -529,6 +533,26 @@ async function releaseFunds() {
     }
   }
 
+  async function reindexDeposit() {
+    if (!order) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const txHash = (reindexTx || latestDepositIntent?.tx_hash || "").trim();
+      if (!txHash) throw new Error("Enter a transaction hash.");
+      await callFn(FN_ESCROW_REINDEX, {
+        order_id: order.id,
+        tx_hash: txHash,
+      });
+      await load();
+      setReindexOpen(false);
+    } catch (e: any) {
+      setErr(friendlyMarketError(e, "We couldn't resync the deposit yet."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openPreview(payload: PreviewPayload) {
     setPreviewPayload(payload);
     setPreviewOpen(true);
@@ -762,26 +786,27 @@ async function pickAndUpload(access: "preview" | "final") {
                 >
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Refresh status</Text>
                 </Pressable>
-                {latestDepositIntent?.tx_hash ? (
-                  <Pressable
-                    onPress={reindexDeposit}
-                    disabled={busy}
-                    style={{
-                      marginTop: 10,
-                      alignSelf: "flex-start",
-                      borderRadius: 12,
-                      paddingVertical: 10,
-                      paddingHorizontal: 12,
-                      backgroundColor: busy ? "rgba(255,255,255,0.08)" : "rgba(124,58,237,0.25)",
-                      borderWidth: 1,
-                      borderColor: "rgba(124,58,237,0.45)",
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                      Resync deposit now
-                    </Text>
-                  </Pressable>
-                ) : null}
+                <Pressable
+                  onPress={() => {
+                    setReindexTx(latestDepositIntent?.tx_hash ?? "");
+                    setReindexOpen(true);
+                  }}
+                  disabled={busy}
+                  style={{
+                    marginTop: 10,
+                    alignSelf: "flex-start",
+                    borderRadius: 12,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                    backgroundColor: busy ? "rgba(255,255,255,0.08)" : "rgba(124,58,237,0.25)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,237,0.45)",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                    Resync deposit now
+                  </Text>
+                </Pressable>
               </Card>
             ) : null}
 
@@ -1373,6 +1398,48 @@ async function pickAndUpload(access: "preview" | "final") {
           </>
         )}
       </ScrollView>
+
+      <Modal visible={reindexOpen} transparent animationType="slide" onRequestClose={() => setReindexOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.7)", justifyContent: "center", padding: 20 }}>
+          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Resync deposit</Text>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+              Paste the deposit transaction hash to force a resync.
+            </Text>
+            <TextInput
+              value={reindexTx}
+              onChangeText={setReindexTx}
+              placeholder="0x..."
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              autoCapitalize="none"
+              style={{
+                marginTop: 12,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                color: "#fff",
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+              }}
+            />
+            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
+              <Pressable
+                onPress={() => setReindexOpen(false)}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={reindexDeposit}
+                disabled={busy}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(124,58,237,0.30)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>{busy ? "Working..." : "Resync"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <OrderPreviewModal
         open={previewOpen}
