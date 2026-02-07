@@ -92,6 +92,7 @@ async function processLogs(
     if (!isDeposit && !isRelease && !isRefund) continue;
 
     const orderKey = String(log.topics?.[1] ?? "").toLowerCase();
+    const orderKeyNo0x = orderKey.startsWith("0x") ? orderKey.slice(2) : orderKey;
     const buyer = hexToAddress(log.topics?.[2]);
     const seller = hexToAddress(log.topics?.[3]);
     const { token, amountRaw } = decodeData(log.data);
@@ -102,7 +103,7 @@ async function processLogs(
     const { data: esc } = await admin
       .from("market_crypto_escrows")
       .select("order_id,order_key")
-      .eq("order_key", orderKey)
+      .in("order_key", [orderKey, orderKeyNo0x])
       .maybeSingle();
 
     if (!esc?.order_id) continue;
@@ -188,39 +189,67 @@ serve(async () => {
         .eq("chain", cfg.chain)
         .maybeSingle();
 
-      const lastBlock = Number((syncRow as ChainSync | null)?.last_block ?? 0);
+      const backfill = 60;
+      let lastBlock = Number((syncRow as ChainSync | null)?.last_block ?? 0);
       const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
       const latest = toNum(latestHex);
       const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
       const toBlock = Math.max(0, latest - required + 1);
 
-      if (toBlock <= lastBlock) {
-        results[cfg.chain] = { ok: true, message: "No new confirmed blocks" };
+      const maxRange = 10;
+      const backfillStart = Math.max(0, toBlock - backfill);
+      let cursor = Math.max(0, lastBlock + 1);
+      let truncated = backfillStart > 0;
+      let reset = false;
+
+      if (lastBlock > toBlock) {
+        lastBlock = backfillStart - 1;
+        cursor = Math.max(0, lastBlock + 1);
+        reset = true;
+      }
+
+      if (cursor > backfillStart) {
+        cursor = backfillStart;
+      }
+
+      if (cursor > toBlock) {
+        results[cfg.chain] = {
+          ok: true,
+          message: "No new confirmed blocks",
+          latest,
+          required,
+          toBlock,
+        };
         continue;
       }
 
-      const fromBlock = Math.max(0, lastBlock + 1);
-      const maxRange = 10;
-      let cursor = fromBlock;
-      let truncated = false;
-      if (lastBlock === 0) {
-        // First run: backfill a small recent window to catch older deposits.
-        const backfill = 300;
-        cursor = Math.max(0, toBlock - backfill);
-        truncated = cursor > 0;
-      }
       let processed = 0;
 
       while (cursor <= toBlock) {
         const end = Math.min(cursor + maxRange - 1, toBlock);
-        const logs = (await rpcCall(cfg.rpc_url, "eth_getLogs", [
-          {
-            address: cfg.escrow_address,
-            fromBlock: `0x${cursor.toString(16)}`,
-            toBlock: `0x${end.toString(16)}`,
-            topics: [[TOPIC_DEPOSIT_MULTI, TOPIC_RELEASE_MULTI, TOPIC_REFUND_MULTI]],
-          },
-        ])) as RpcLog[];
+        let logs: RpcLog[] = [];
+        try {
+          logs = (await rpcCall(cfg.rpc_url, "eth_getLogs", [
+            {
+              address: cfg.escrow_address,
+              fromBlock: `0x${cursor.toString(16)}`,
+              toBlock: `0x${end.toString(16)}`,
+              topics: [[TOPIC_DEPOSIT_MULTI, TOPIC_RELEASE_MULTI, TOPIC_REFUND_MULTI]],
+            },
+          ])) as RpcLog[];
+        } catch (err: any) {
+          const msg = String(err?.message || err);
+          results[cfg.chain] = {
+            ok: false,
+            error: "rpc_throttled",
+            message: msg,
+            fromBlock: cursor,
+            toBlock,
+            latest,
+            required,
+          };
+          return json(200, { ok: true, results });
+        }
 
         await processLogs(admin, cfg, logs ?? []);
         processed += logs?.length ?? 0;
@@ -232,7 +261,16 @@ serve(async () => {
         .upsert({ chain: cfg.chain, last_block: toBlock })
         .select();
 
-      results[cfg.chain] = { ok: true, processed, fromBlock: cursor, toBlock, latest, required, truncated };
+      results[cfg.chain] = {
+        ok: true,
+        processed,
+        fromBlock: cursor,
+        toBlock,
+        latest,
+        required,
+        truncated,
+        reset,
+      };
     }
 
     return json(200, { ok: true, results });

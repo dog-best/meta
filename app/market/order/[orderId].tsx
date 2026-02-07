@@ -238,6 +238,10 @@ export default function OrderDetails() {
         ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
     );
   }, [intents]);
+  const pollIntervalMs = 5 * 60 * 1000;
+  const depositCreatedAtMs = latestDepositIntent?.created_at ? new Date(latestDepositIntent.created_at).getTime() : 0;
+  const nextPollAtMs = depositCreatedAtMs > 0 ? depositCreatedAtMs + pollIntervalMs : 0;
+  const pollRemainingSec = nextPollAtMs > 0 ? Math.max(0, Math.ceil((nextPollAtMs - nowMs) / 1000)) : 0;
 
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
@@ -1342,8 +1346,3 @@ async function pickAndUpload(access: "preview" | "final") {
     </LinearGradient>
   );
 }
-
-  const pollIntervalMs = 5 * 60 * 1000;
-  const depositCreatedAtMs = latestDepositIntent?.created_at ? new Date(latestDepositIntent.created_at).getTime() : 0;
-  const nextPollAtMs = depositCreatedAtMs > 0 ? depositCreatedAtMs + pollIntervalMs : 0;
-  const pollRemainingSec = nextPollAtMs > 0 ? Math.max(0, Math.ceil((nextPollAtMs - nowMs) / 1000)) : 0;
