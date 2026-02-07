@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking, Alert } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking, Alert, Modal } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -10,7 +10,6 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
 import { friendlyMarketError } from "@/utils/marketUx";
-import { callFn } from "@/services/functions";
 import { callFn } from "@/services/functions";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
@@ -37,7 +36,6 @@ const RPC_OTP_VERIFY = "market_otp_verify_rpc";
 const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
 const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
 const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
-const FN_ESCROW_REINDEX = "market-escrow-reindex";
 const FN_ESCROW_REINDEX = "market-escrow-reindex";
 
 // Tables
@@ -511,23 +509,6 @@ async function releaseFunds() {
       await load();
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't cancel this order right now."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function reindexDeposit() {
-    if (!order || !latestDepositIntent?.tx_hash) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await callFn(FN_ESCROW_REINDEX, {
-        order_id: order.id,
-        tx_hash: latestDepositIntent.tx_hash,
-      });
-      await load();
-    } catch (e: any) {
-      setErr(friendlyMarketError(e, "We couldn't resync the deposit yet."));
     } finally {
       setBusy(false);
     }
