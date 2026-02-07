@@ -10,6 +10,7 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { callFn } from "@/services/functions";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import {
@@ -35,6 +36,7 @@ const RPC_OTP_VERIFY = "market_otp_verify_rpc";
 const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
 const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
 const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
+const FN_ESCROW_REINDEX = "market-escrow-reindex";
 
 // Tables
 const ORDERS_TABLE = "market_orders";
@@ -510,6 +512,23 @@ async function releaseFunds() {
     }
   }
 
+  async function reindexDeposit() {
+    if (!order || !latestDepositIntent?.tx_hash) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await callFn(FN_ESCROW_REINDEX, {
+        order_id: order.id,
+        tx_hash: latestDepositIntent.tx_hash,
+      });
+      await load();
+    } catch (e: any) {
+      setErr(friendlyMarketError(e, "We couldn't resync the deposit yet."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openPreview(payload: PreviewPayload) {
     setPreviewPayload(payload);
     setPreviewOpen(true);
@@ -743,6 +762,26 @@ async function pickAndUpload(access: "preview" | "final") {
                 >
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Refresh status</Text>
                 </Pressable>
+                {latestDepositIntent?.tx_hash ? (
+                  <Pressable
+                    onPress={reindexDeposit}
+                    disabled={busy}
+                    style={{
+                      marginTop: 10,
+                      alignSelf: "flex-start",
+                      borderRadius: 12,
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      backgroundColor: busy ? "rgba(255,255,255,0.08)" : "rgba(124,58,237,0.25)",
+                      borderWidth: 1,
+                      borderColor: "rgba(124,58,237,0.45)",
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                      Resync deposit now
+                    </Text>
+                  </Pressable>
+                ) : null}
               </Card>
             ) : null}
 
