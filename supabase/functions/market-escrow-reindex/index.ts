@@ -17,6 +17,7 @@ type ChainConfig = {
   escrow_address: string | null;
   usdc_address: string | null;
   usdt_address: string | null;
+  confirmations_required?: number | null;
 };
 
 const TOPIC_DEPOSIT_MULTI = keccak256(stringToHex("EscrowDeposited(bytes32,address,address,address,uint256)"));
@@ -131,7 +132,7 @@ serve(async (req) => {
 
     const { data: cfg, error: cfgErr } = await admin
       .from("market_chain_config")
-      .select("chain,rpc_url,escrow_address,usdc_address,usdt_address")
+      .select("chain,rpc_url,escrow_address,usdc_address,usdt_address,confirmations_required")
       .eq("chain", esc.chain)
       .eq("active", true)
       .maybeSingle();
@@ -140,6 +141,25 @@ serve(async (req) => {
     }
 
     const receipt = await rpcCall(cfg.rpc_url, "eth_getTransactionReceipt", [txHash]);
+    const receiptBlock = toNum(receipt?.blockNumber ?? 0);
+    if (!receiptBlock) {
+      return json(404, { ok: false, message: "Transaction receipt not found yet" });
+    }
+    // Strict finality: require N confirmations before we update DB status.
+    const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
+    const latest = toNum(latestHex);
+    const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
+    const confirmations = latest - receiptBlock + 1;
+    if (confirmations < required) {
+      return json(200, {
+        ok: true,
+        applied: false,
+        pending: "confirmations",
+        required,
+        confirmations,
+        remaining: Math.max(0, required - confirmations),
+      });
+    }
     const logs = (receipt?.logs ?? []) as RpcLog[];
 
     const wantKey = normalizeOrderKey(esc.order_key);

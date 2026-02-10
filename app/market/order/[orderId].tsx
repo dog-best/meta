@@ -229,17 +229,14 @@ export default function OrderDetails() {
     () => ["USDC", "USDT"].includes(String(order?.currency || "").toUpperCase()),
     [order?.currency],
   );
+  // Note: `market_crypto_intents` can be temporarily empty (RLS, RPC not writing tx_hash, etc).
+  // Resync must still be available for strict on-chain confirmation.
   const awaitingConfirmations =
     !!order &&
     order.status === "CREATED" &&
     isStableOrder &&
-    !!latestDepositIntent &&
-    ["SUBMITTED", "PENDING"].includes(String(latestDepositIntent.status || "").toUpperCase());
-  const canResyncDeposit =
-    !!order &&
-    order.status === "CREATED" &&
-    isStableOrder &&
-    !!latestDepositIntent;
+    hasSubmittedCryptoDeposit;
+  const canResyncDeposit = !!order && order.status === "CREATED" && isStableOrder;
   const hasSubmittedCryptoDeposit = useMemo(() => {
     return intents.some(
       (i) =>
@@ -799,7 +796,7 @@ async function pickAndUpload(access: "preview" | "final") {
             {!awaitingConfirmations && canResyncDeposit ? (
               <Card title="Resync deposit">
                 <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
-                  If your deposit is confirmed on-chain but the order is still Created, resync using the tx hash.
+                  If your deposit is confirmed on-chain but the order is still Created, resync using the transaction hash.
                 </Text>
                 <Pressable
                   onPress={() => {

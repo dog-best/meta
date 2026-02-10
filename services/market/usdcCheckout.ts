@@ -265,12 +265,16 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   });
   if (txHash) {
     // Ensure tx hash is persisted even if RPC or trigger missed it.
-    await supabase
+    const { error: intentUpdErr } = await supabase
       .from("market_crypto_intents")
       .update({ tx_hash: txHash, status: "SUBMITTED" })
       .eq("order_id", orderId)
       .eq("intent_type", "DEPOSIT")
       .is("tx_hash", null);
+    if (intentUpdErr) {
+      // RLS can block direct updates; the RPC should still have stored it.
+      console.log("[Checkout] deposit intent tx_hash update blocked", intentUpdErr.message);
+    }
   }
 
 
@@ -351,12 +355,15 @@ export async function releaseUsdcForOrder(orderId: string) {
     p_tx_hash: txHash || null,
   });
   if (txHash) {
-    await supabase
+    const { error: intentUpdErr } = await supabase
       .from("market_crypto_intents")
       .update({ tx_hash: txHash, status: "SUBMITTED" })
       .eq("order_id", orderId)
       .eq("intent_type", "RELEASE")
       .is("tx_hash", null);
+    if (intentUpdErr) {
+      console.log("[Checkout] release intent tx_hash update blocked", intentUpdErr.message);
+    }
   }
 
   if (txHash) {

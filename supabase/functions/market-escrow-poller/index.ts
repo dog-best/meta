@@ -189,6 +189,9 @@ serve(async () => {
         .eq("chain", cfg.chain)
         .maybeSingle();
 
+      // Keep the scan window tight to avoid:
+      // - Alchemy free-tier eth_getLogs range limits (10 blocks)
+      // - huge catch-up scans when last_block lags far behind
       const backfill = 20;
       const maxBlocksPerRun = 60;
       let lastBlock = Number((syncRow as ChainSync | null)?.last_block ?? 0);
@@ -200,7 +203,7 @@ serve(async () => {
       const maxRange = 10;
       const backfillStart = Math.max(0, toBlock - backfill);
       let cursor = Math.max(0, lastBlock + 1);
-      let truncated = backfillStart > 0;
+      let truncated = false;
       let reset = false;
 
       if (lastBlock > toBlock) {
@@ -209,8 +212,10 @@ serve(async () => {
         reset = true;
       }
 
-      if (cursor > backfillStart) {
+      // If stored cursor is far behind, jump forward to the recent window.
+      if (cursor < backfillStart) {
         cursor = backfillStart;
+        truncated = backfillStart > 0;
       }
 
       if (cursor > toBlock) {
