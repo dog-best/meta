@@ -229,6 +229,13 @@ export default function OrderDetails() {
     () => ["USDC", "USDT"].includes(String(order?.currency || "").toUpperCase()),
     [order?.currency],
   );
+  const hasSubmittedCryptoDeposit = useMemo(() => {
+    return intents.some(
+      (i) =>
+        String(i.intent_type || "").toUpperCase() === "DEPOSIT" &&
+        ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
+    );
+  }, [intents]);
   // Note: `market_crypto_intents` can be temporarily empty (RLS, RPC not writing tx_hash, etc).
   // Resync must still be available for strict on-chain confirmation.
   const awaitingConfirmations =
@@ -237,13 +244,6 @@ export default function OrderDetails() {
     isStableOrder &&
     hasSubmittedCryptoDeposit;
   const canResyncDeposit = !!order && order.status === "CREATED" && isStableOrder;
-  const hasSubmittedCryptoDeposit = useMemo(() => {
-    return intents.some(
-      (i) =>
-        String(i.intent_type || "").toUpperCase() === "DEPOSIT" &&
-        ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
-    );
-  }, [intents]);
   const pollIntervalMs = 5 * 60 * 1000;
   const depositCreatedAtMs = latestDepositIntent?.created_at ? new Date(latestDepositIntent.created_at).getTime() : 0;
   const nextPollAtMs = depositCreatedAtMs > 0 ? depositCreatedAtMs + pollIntervalMs : 0;
