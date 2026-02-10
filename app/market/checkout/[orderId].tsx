@@ -2,8 +2,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Clipboard from "expo-clipboard";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
@@ -360,10 +361,23 @@ export default function Checkout() {
     console.log("[Checkout] payWithUsdc start", { orderId: oid });
     setBusy(true);
     try {
-      await payUsdcForOrder(oid);
-
-      // We route back to order screen where you can show deposit instructions/intents history
-      router.replace(`/market/order/${oid}` as any);
+      const res: any = await payUsdcForOrder(oid);
+      const txHash = String(res?.tx_hash || "").trim();
+      if (txHash.startsWith("0x")) {
+        Alert.alert(
+          "Deposit submitted",
+          `Your USDC deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+          [
+            { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+            {
+              text: "Continue",
+              onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
+            },
+          ],
+        );
+      } else {
+        router.replace(`/market/order/${oid}` as any);
+      }
     } catch (e: any) {
       console.log("[Checkout] payWithUsdc error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start crypto checkout."));
@@ -385,8 +399,23 @@ export default function Checkout() {
     console.log("[Checkout] payWithUsdt start", { orderId: oid });
     setBusy(true);
     try {
-      await payUsdtForOrder(oid);
-      router.replace(`/market/order/${oid}` as any);
+      const res: any = await payUsdtForOrder(oid);
+      const txHash = String(res?.tx_hash || "").trim();
+      if (txHash.startsWith("0x")) {
+        Alert.alert(
+          "Deposit submitted",
+          `Your USDT deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+          [
+            { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+            {
+              text: "Continue",
+              onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
+            },
+          ],
+        );
+      } else {
+        router.replace(`/market/order/${oid}` as any);
+      }
     } catch (e: any) {
       console.log("[Checkout] payWithUsdt error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start USDT checkout."));

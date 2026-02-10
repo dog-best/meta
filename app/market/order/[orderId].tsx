@@ -185,8 +185,9 @@ async function safeLoadListing(listingId: string) {
 
 export default function OrderDetails() {
   const insets = useSafeAreaInsets();
-  const { orderId } = useLocalSearchParams<{ orderId: string }>();
+  const { orderId, tx } = useLocalSearchParams<{ orderId: string; tx?: string }>();
   const oid = useMemo(() => String(orderId || ""), [orderId]);
+  const navTx = useMemo(() => String(tx || "").trim(), [tx]);
 
   const [loading, setLoading] = useState(true);
   const [me, setMe] = useState<string | null>(null);
@@ -234,8 +235,12 @@ export default function OrderDetails() {
       (i) =>
         String(i.intent_type || "").toUpperCase() === "DEPOSIT" &&
         ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
-    );
-  }, [intents]);
+    ) || navTx.startsWith("0x");
+  }, [intents, navTx]);
+  const defaultDepositTx = useMemo(() => {
+    const v = String(latestDepositIntent?.tx_hash || navTx || "").trim();
+    return v.startsWith("0x") ? v : "";
+  }, [latestDepositIntent?.tx_hash, navTx]);
   // Note: `market_crypto_intents` can be temporarily empty (RLS, RPC not writing tx_hash, etc).
   // Resync must still be available for strict on-chain confirmation.
   const awaitingConfirmations =
@@ -521,7 +526,7 @@ async function releaseFunds() {
     setBusy(true);
     setErr(null);
     try {
-      const txHash = (reindexTx || latestDepositIntent?.tx_hash || "").trim();
+      const txHash = (reindexTx || defaultDepositTx || "").trim();
       if (!txHash) throw new Error("Enter a transaction hash.");
       await callFn(FN_ESCROW_REINDEX, {
         order_id: order.id,
@@ -749,9 +754,9 @@ async function pickAndUpload(access: "preview" | "final") {
                     Next automatic check in {fmtCountdown(pollRemainingSec)}.
                   </Text>
                 ) : null}
-                {latestDepositIntent?.tx_hash ? (
+                {defaultDepositTx ? (
                   <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-                    Tx: {latestDepositIntent.tx_hash}
+                    Tx: {defaultDepositTx}
                   </Text>
                 ) : null}
                 <Pressable
@@ -771,7 +776,7 @@ async function pickAndUpload(access: "preview" | "final") {
                 </Pressable>
                 <Pressable
                   onPress={() => {
-                    setReindexTx(latestDepositIntent?.tx_hash ?? "");
+                    setReindexTx(defaultDepositTx);
                     setReindexOpen(true);
                   }}
                   disabled={busy}
@@ -800,7 +805,7 @@ async function pickAndUpload(access: "preview" | "final") {
                 </Text>
                 <Pressable
                   onPress={() => {
-                    setReindexTx(latestDepositIntent?.tx_hash ?? "");
+                    setReindexTx(defaultDepositTx);
                     setReindexOpen(true);
                   }}
                   disabled={busy}

@@ -192,6 +192,12 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   if (!user) throw new Error("Not authenticated");
 
   const { client, account, address } = await getSmartAccount(chain, user.id);
+  // Prevent sending from a different smart account than what we display/save in DB.
+  if (wallet?.address && String(wallet.address).toLowerCase() !== String(address).toLowerCase()) {
+    throw new Error(
+      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Restore your wallet backup (seed/private key) or regenerate.`,
+    );
+  }
   const buyerAddress = String(address || "").toLowerCase();
   const sellerAddress = String(intent.seller_wallet || "").toLowerCase();
   if (buyerAddress && sellerAddress && buyerAddress === sellerAddress) {
@@ -202,10 +208,8 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   try {
     const rpcUrl = chain.rpc_url || "";
     if (rpcUrl) {
-      const publicClient = createPublicClient({
-        chain: (chain as any).viemChain ?? undefined,
-        transport: http(rpcUrl),
-      });
+      const publicClient = createPublicClient({ transport: http(rpcUrl) });
+      const ethBal = await publicClient.getBalance({ address: address as `0x${string}` });
       const bal = await publicClient.readContract({
         abi: [
           {
@@ -220,8 +224,17 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
         functionName: "balanceOf",
         args: [address as `0x${string}`],
       });
-      if (BigInt(bal) < BigInt(intent.buyer_total_raw || "0")) {
-        throw new Error("Insufficient token balance on smart account.");
+      const need = BigInt(intent.buyer_total_raw || "0");
+      if (BigInt(bal) < need) {
+        throw new Error(
+          `Insufficient ${symbol} balance on your wallet.\n\nWallet: ${address}\nHave: ${bal.toString()}\nNeed: ${need.toString()}`,
+        );
+      }
+      // AA without a paymaster requires ETH on the smart account to pay network fees.
+      if (ethBal < 50_000_000_000_000n) {
+        throw new Error(
+          `Not enough ${chain.chain} ETH for network fees.\n\nWallet: ${address}\nAdd a small amount of gas and try again.`,
+        );
       }
     }
   } catch (e) {
@@ -255,14 +268,20 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     data: depositData,
   });
 
-  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? approveHash ?? "");
+  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
+  if (!txHash || !txHash.startsWith("0x")) {
+    throw new Error("Deposit submitted, but no transaction hash was returned.");
+  }
 
-  await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
+  const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
     p_order_id: orderId,
     p_chain: chain.chain,
     p_token: symbol,
     p_tx_hash: txHash || null,
   });
+  if (submitErr) {
+    console.log("[Checkout] deposit submit RPC failed", submitErr.message);
+  }
   if (txHash) {
     // Ensure tx hash is persisted even if RPC or trigger missed it.
     const { error: intentUpdErr } = await supabase
@@ -280,14 +299,15 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.
-    await supabase
-      .rpc(RPC_CHAIN_TX_FINALIZE, {
+    const { error: finalizeErr } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
         p_order_id: orderId,
         p_chain: chain.chain,
         p_tx_hash: txHash,
         p_event_type: "DEPOSIT",
-      })
-      .catch(() => null);
+      });
+    if (finalizeErr) {
+      console.log("[Checkout] chain finalize RPC failed", finalizeErr.message);
+    }
   }
 
   return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: txHash || null };
@@ -349,11 +369,14 @@ export async function releaseUsdcForOrder(orderId: string) {
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
 
-  await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
+  const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
     p_order_id: orderId,
     p_chain: chain.chain,
     p_tx_hash: txHash || null,
   });
+  if (submitErr) {
+    console.log("[Checkout] release submit RPC failed", submitErr.message);
+  }
   if (txHash) {
     const { error: intentUpdErr } = await supabase
       .from("market_crypto_intents")
@@ -368,14 +391,15 @@ export async function releaseUsdcForOrder(orderId: string) {
 
   if (txHash) {
     // Strict finality: this may return pending until required confirmations are reached.
-    await supabase
-      .rpc(RPC_CHAIN_TX_FINALIZE, {
+    const { error: finalizeErr } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
         p_order_id: orderId,
         p_chain: chain.chain,
         p_tx_hash: txHash,
         p_event_type: "RELEASE",
-      })
-      .catch(() => null);
+      });
+    if (finalizeErr) {
+      console.log("[Checkout] chain finalize RPC failed", finalizeErr.message);
+    }
   }
 
   return { ...intent, tx_hash: txHash || null };
