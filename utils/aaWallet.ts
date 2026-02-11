@@ -33,6 +33,16 @@ function normalizeChainId(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+export function normalizePrivateKey(rawKey: string): `0x${string}` {
+  const trimmed = String(rawKey || "").trim();
+  const cleaned = trimmed.replace(/\s+/g, "");
+  const hex = cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
+  if (/^[a-fA-F0-9]{64}$/.test(hex)) {
+    return `0x${hex}` as `0x${string}`;
+  }
+  throw new Error("Private key must be 64 hex chars (with or without 0x).");
+}
+
 function cleanAlchemyApiKey(raw?: string) {
   const value = String(raw || "").trim();
   if (!value) return "";
@@ -58,35 +68,54 @@ function getChainById(chainIdInput: number | string) {
 
 export async function getOrCreatePrivateKey(scope?: string | null): Promise<`0x${string}`> {
   const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
   const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
 
   const existing = await SecureStore.getItemAsync(keyPrivate);
   if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
+  if (!scope) {
+    const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
+    if (globalExisting && globalExisting.startsWith("0x")) {
+      await SecureStore.setItemAsync(keyPrivate, globalExisting);
+      return globalExisting as `0x${string}`;
+    }
+  }
 
   const created = Wallet.createRandom();
   const pk = (created.privateKey || generatePrivateKey()) as `0x${string}`;
-  const phrase = created.mnemonic?.phrase ?? null;
 
   await SecureStore.setItemAsync(keyPrivate, pk);
-  if (phrase) {
-    await SecureStore.setItemAsync(keyMnemonic, phrase);
+  if (!scope) {
+    await SecureStore.setItemAsync(scopeKey(KEY_PRIVATE, null), pk);
   }
   await SecureStore.setItemAsync(keyBackedUp, "false");
   return pk;
+}
+
+export async function getStoredPrivateKey(scope?: string | null): Promise<`0x${string}` | null> {
+  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
+  const existing = await SecureStore.getItemAsync(keyPrivate);
+  if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
+  if (!scope) {
+    const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
+    if (globalExisting && globalExisting.startsWith("0x")) return globalExisting as `0x${string}`;
+  }
+  return null;
 }
 
 export async function getWalletBackupSecret(scope?: string | null) {
   const keyPrivate = scopeKey(KEY_PRIVATE, scope);
   const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
 
-  const mnemonic = await SecureStore.getItemAsync(keyMnemonic);
-  if (mnemonic && mnemonic.trim().length > 0) {
-    return { type: "mnemonic" as const, value: mnemonic };
-  }
   const pk = await SecureStore.getItemAsync(keyPrivate);
   if (pk && pk.startsWith("0x")) {
     return { type: "privateKey" as const, value: pk };
+  }
+  const mnemonic = await SecureStore.getItemAsync(keyMnemonic);
+  if (mnemonic && mnemonic.trim().length > 0) {
+    const derived = Wallet.fromPhrase(mnemonic.trim()).privateKey as `0x${string}`;
+    await SecureStore.setItemAsync(keyPrivate, derived);
+    await SecureStore.deleteItemAsync(keyMnemonic);
+    return { type: "privateKey" as const, value: derived };
   }
   throw new Error("No wallet secret found.");
 }
@@ -101,17 +130,14 @@ export async function markWalletBackedUp(scope?: string | null) {
 
 export async function regenerateWalletKey(scope?: string | null) {
   const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
   const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
 
   const created = Wallet.createRandom();
   const pk = (created.privateKey || generatePrivateKey()) as `0x${string}`;
-  const phrase = created.mnemonic?.phrase ?? null;
 
   await SecureStore.setItemAsync(keyPrivate, pk);
-  if (phrase) {
-    await SecureStore.setItemAsync(keyMnemonic, phrase);
-  }
+  await SecureStore.setItemAsync(scopeKey(KEY_PRIVATE, null), pk);
+  await SecureStore.deleteItemAsync(scopeKey(KEY_MNEMONIC, scope));
   await SecureStore.setItemAsync(keyBackedUp, "false");
   return pk;
 }
@@ -184,11 +210,44 @@ function alchemyUrlForChainId(chainId: number, apiKey?: string) {
   return map[chainId] ?? "";
 }
 
+export async function deriveSmartAccountAddress(chainConfig: MarketChainConfig, privateKey: `0x${string}`) {
+  const chainId = normalizeChainId((chainConfig as any).chain_id);
+  if (!chainId) {
+    throw new Error(`Invalid chain_id for ${chainConfig.chain}`);
+  }
+  const chain = getChainById(chainId);
+  const rpcUrl = getRpcUrlForChain({ ...chainConfig, chain_id: chainId }, chain);
+  if (!rpcUrl) {
+    throw new Error("Missing RPC URL or Alchemy API key.");
+  }
+  const signer = LocalAccountSigner.privateKeyToAccountSigner(privateKey as Hex);
+  const account = await createLightAccount({
+    chain,
+    signer,
+    transport: http(rpcUrl),
+  });
+  return account.address as `0x${string}`;
+}
+
 export async function getWalletPrivateKey(scope?: string | null) {
   const keyPrivate = scopeKey(KEY_PRIVATE, scope);
   const pk = await SecureStore.getItemAsync(keyPrivate);
   if (pk && pk.startsWith("0x")) return pk;
   throw new Error("No private key found.");
+}
+
+export async function importPrivateKey(scope: string | null | undefined, rawKey: string) {
+  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
+  const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
+  const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
+
+  const normalized = normalizePrivateKey(rawKey);
+  const wallet = new Wallet(normalized);
+  await SecureStore.setItemAsync(keyPrivate, wallet.privateKey);
+  await SecureStore.setItemAsync(scopeKey(KEY_PRIVATE, null), wallet.privateKey);
+  await SecureStore.deleteItemAsync(keyMnemonic);
+  await SecureStore.setItemAsync(keyBackedUp, "true");
+  return wallet.address;
 }
 
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {

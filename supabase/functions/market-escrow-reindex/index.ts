@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { keccak256, stringToHex } from "https://esm.sh/viem@2.45.1";
+import { envAny } from "../_shared/market/env.ts";
 
 type RpcLog = {
   address?: string;
@@ -82,9 +83,12 @@ function normalizeOrderKey(key: string | null | undefined) {
 
 serve(async (req) => {
   try {
-    const SB_URL = Deno.env.get("SB_URL");
-    const SB_SERVICE = Deno.env.get("SB_SERVICE_ROLE_KEY");
-    const SB_ANON = Deno.env.get("SB_ANON_KEY");
+    const SB_URL = envAny(["SB_URL", "SUPABASE_URL", "sb_url"], "");
+    const SB_SERVICE = envAny(
+      ["SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "sb_secret_key", "sb_scret_key"],
+      "",
+    );
+    const SB_ANON = envAny(["SB_ANON_KEY", "SUPABASE_ANON_KEY", "SUPABASE_ANON", "sb_anon"], "");
     if (!SB_URL || !SB_SERVICE || !SB_ANON) {
       return json(500, {
         ok: false,

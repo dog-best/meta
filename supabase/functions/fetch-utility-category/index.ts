@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std/http/server.ts";
-import { supabaseAdmin } from "../_shared/supabase.ts";
+import { supabaseAdminClient } from "../_shared/supabase.ts";
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -32,6 +32,7 @@ async function readInput(req: Request) {
 
 serve(async (req) => {
   try {
+    const supabaseAdmin = supabaseAdminClient();
     const { category, provider } = await readInput(req);
 
     if (!category) {

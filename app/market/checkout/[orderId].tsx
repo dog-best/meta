@@ -363,6 +363,7 @@ export default function Checkout() {
     try {
       const res: any = await payUsdcForOrder(oid);
       const txHash = String(res?.tx_hash || "").trim();
+      const userOpHash = String(res?.user_op_hash || "").trim();
       if (txHash.startsWith("0x")) {
         Alert.alert(
           "Deposit submitted",
@@ -373,6 +374,15 @@ export default function Checkout() {
               text: "Continue",
               onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
             },
+          ],
+        );
+      } else if (userOpHash.startsWith("0x")) {
+        Alert.alert(
+          "Deposit submitted",
+          `Your USDC deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
+          [
+            { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
+            { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
           ],
         );
       } else {
@@ -401,6 +411,7 @@ export default function Checkout() {
     try {
       const res: any = await payUsdtForOrder(oid);
       const txHash = String(res?.tx_hash || "").trim();
+      const userOpHash = String(res?.user_op_hash || "").trim();
       if (txHash.startsWith("0x")) {
         Alert.alert(
           "Deposit submitted",
@@ -411,6 +422,15 @@ export default function Checkout() {
               text: "Continue",
               onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
             },
+          ],
+        );
+      } else if (userOpHash.startsWith("0x")) {
+        Alert.alert(
+          "Deposit submitted",
+          `Your USDT deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
+          [
+            { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
+            { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
           ],
         );
       } else {

@@ -11,7 +11,17 @@ import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } f
 import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
-import { getRpcUrlForChain, getWalletBackupSecret, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
+import {
+  deriveSmartAccountAddress,
+  getRpcUrlForChain,
+  getStoredPrivateKey,
+  getWalletBackupSecret,
+  hasWalletBackup,
+  importPrivateKey,
+  markWalletBackedUp,
+  normalizePrivateKey,
+  regenerateWalletKey,
+} from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 
 type SellerProfile = {
@@ -140,6 +150,7 @@ export default function MarketAccountTab() {
   const [chains, setChains] = useState<any[]>([]);
   const [chain, setChain] = useState<any | null>(null);
   const [wallet, setWallet] = useState<{ address: string } | null>(null);
+  const [deviceAddress, setDeviceAddress] = useState<string>("");
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletErr, setWalletErr] = useState<string | null>(null);
   const [chainErr, setChainErr] = useState<string | null>(null);
@@ -147,6 +158,9 @@ export default function MarketAccountTab() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupSecret, setBackupSecret] = useState("");
   const [backupType, setBackupType] = useState<"mnemonic" | "privateKey">("privateKey");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importKey, setImportKey] = useState("");
+  const [importErr, setImportErr] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState("0");
   const [usdtBalance, setUsdtBalance] = useState("0");
   const [sendOpen, setSendOpen] = useState(false);
@@ -204,10 +218,22 @@ export default function MarketAccountTab() {
     if (!current) {
       setUsdcBalance("0");
       setUsdtBalance("0");
+      setDeviceAddress("");
       return;
     }
     const w = await getMyWalletForChain(current.chain);
     setWallet(w ? { address: w.address } : null);
+    try {
+      const pk = await getStoredPrivateKey(meId || undefined);
+      if (pk) {
+        const derived = await deriveSmartAccountAddress(current, pk);
+        setDeviceAddress(derived);
+      } else {
+        setDeviceAddress("");
+      }
+    } catch {
+      setDeviceAddress("");
+    }
     if (!w?.address) {
       setUsdcBalance("0");
       setUsdtBalance("0");
@@ -270,6 +296,66 @@ export default function MarketAccountTab() {
     await markWalletBackedUp(meId || undefined);
     setBackedUp(true);
     setBackupOpen(false);
+  }
+
+  async function onImportPrivateKey() {
+    if (!meId) return;
+    setImportErr(null);
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth("Import wallet private key");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      if (!chain) throw new Error("Select a network before importing.");
+
+      const { data: existing, error: fetchErr } = await supabase
+        .from("crypto_wallets")
+        .select("id,address")
+        .eq("user_id", meId);
+      if (fetchErr) throw fetchErr;
+
+      const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
+      const normalized = normalizePrivateKey(importKey);
+      const derivedAddr = await deriveSmartAccountAddress(chain, normalized);
+      const derivedAddrLc = String(derivedAddr).toLowerCase();
+      if (savedAddr && savedAddr !== derivedAddrLc) {
+        const proceed = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Saved wallet mismatch",
+            `Saved: ${savedAddr}\nDerived: ${derivedAddrLc}\n\nUse this key anyway and replace the saved wallet address?`,
+            [
+              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              { text: "Replace saved", style: "destructive", onPress: () => resolve(true) },
+            ],
+          );
+        });
+        if (!proceed) return;
+      }
+
+      await importPrivateKey(meId || undefined, importKey);
+      const addr = derivedAddr;
+
+      if (existing && existing.length > 0) {
+        const { error: updErr } = await supabase.from("crypto_wallets").update({ address: addr }).eq("user_id", meId);
+        if (updErr) throw updErr;
+      } else if (chain) {
+        const { error: insErr } = await supabase
+          .from("crypto_wallets")
+          .insert({ user_id: meId, chain: chain.chain, address: addr, wallet_type: "aa" });
+        if (insErr) throw insErr;
+      }
+
+      setWallet({ address: addr });
+      setImportOpen(false);
+      setImportKey("");
+      await refreshWalletMeta(chain);
+      Alert.alert("Wallet imported", "Your saved wallet address was updated.");
+    } catch (e: any) {
+      setImportErr(String(e?.message || e || "We couldn't import that private key."));
+    } finally {
+      setWalletBusy(false);
+    }
   }
 
   async function onGenerateOrRegenerateWallet() {
@@ -634,6 +720,11 @@ export default function MarketAccountTab() {
             <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
               {wallet?.address ? wallet.address : "No wallet address generated"}
             </Text>
+            {deviceAddress ? (
+              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
+                Device key address: {deviceAddress}
+              </Text>
+            ) : null}
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
               Backup status: {backedUp ? "Backed up" : "Not backed up"}
             </Text>
@@ -705,6 +796,21 @@ export default function MarketAccountTab() {
           </View>
 
           <Pressable
+            onPress={() => setImportOpen(true)}
+            style={{
+              marginTop: 10,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Import private key / Change saved address</Text>
+          </Pressable>
+
+          <Pressable
             disabled={!chain?.active || walletBusy}
             onPress={onGenerateOrRegenerateWallet}
             style={{
@@ -766,9 +872,7 @@ export default function MarketAccountTab() {
       <Modal visible={backupOpen} transparent animationType="slide" onRequestClose={() => setBackupOpen(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
           <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-              Backup {backupType === "mnemonic" ? "Seed Phrase" : "Private Key"}
-            </Text>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Backup Private Key</Text>
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
               Store this offline. Anyone with this can access your wallet.
             </Text>
@@ -790,6 +894,41 @@ export default function MarketAccountTab() {
                 style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
               >
                 <Text style={{ color: "#fff", fontWeight: "900" }}>I backed it up</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
+          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Import private key</Text>
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              This will replace the saved wallet address for your account. Use only a private key you control.
+            </Text>
+            <TextInput
+              value={importKey}
+              onChangeText={setImportKey}
+              placeholder="Private key (0x + 64 hex)"
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
+            />
+            {importErr ? <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{importErr}</Text> : null}
+            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
+              <Pressable
+                onPress={() => setImportOpen(false)}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={onImportPrivateKey}
+                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Import</Text>
               </Pressable>
             </View>
           </View>

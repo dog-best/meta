@@ -2,7 +2,7 @@ import { createPublicClient, encodeFunctionData, http } from "viem";
 
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getSmartAccount } from "@/utils/aaWallet";
+import { getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
 const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
@@ -131,6 +131,10 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
     .maybeSingle();
   if (anyErr) throw new Error(anyErr.message);
   if (existingAny?.address) {
+    const localKey = await getStoredPrivateKey(user.id);
+    if (!localKey) {
+      throw new Error("Saved wallet exists. Import your private key to use it on this device.");
+    }
     await registerWallet(chainConfig.chain, existingAny.address);
     return { address: existingAny.address };
   }
@@ -191,11 +195,16 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
+  const localKey = await getStoredPrivateKey(user.id);
+  if (!localKey) {
+    throw new Error("No private key found on this device. Import your wallet key to continue.");
+  }
+
   const { client, account, address } = await getSmartAccount(chain, user.id);
   // Prevent sending from a different smart account than what we display/save in DB.
   if (wallet?.address && String(wallet.address).toLowerCase() !== String(address).toLowerCase()) {
     throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Restore your wallet backup (seed/private key) or regenerate.`,
+      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import your private key to restore the same wallet, or regenerate.`,
     );
   }
   const buyerAddress = String(address || "").toLowerCase();
@@ -269,40 +278,61 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   });
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
-  if (!txHash || !txHash.startsWith("0x")) {
-    throw new Error("Deposit submitted, but no transaction hash was returned.");
+  const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
+
+  // Try to resolve tx hash for userOp (AA) if not returned immediately.
+  let resolvedTxHash = txHash;
+  if (!resolvedTxHash && userOpHash) {
+    try {
+      const rpcUrl = chain.rpc_url || "";
+      if (rpcUrl) {
+        const publicClient = createPublicClient({ transport: http(rpcUrl) });
+        const receipt: any =
+          (await publicClient.request({
+            method: "eth_getUserOperationReceipt",
+            params: [userOpHash],
+          })) ??
+          (await publicClient.request({
+            method: "alchemy_getUserOperationReceipt",
+            params: [userOpHash],
+          }));
+        const opTx = String(receipt?.receipt?.transactionHash || receipt?.transactionHash || "");
+        if (opTx.startsWith("0x")) resolvedTxHash = opTx;
+      }
+    } catch (e) {
+      // Best-effort only.
+    }
   }
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
     p_order_id: orderId,
     p_chain: chain.chain,
     p_token: symbol,
-    p_tx_hash: txHash || null,
+    p_tx_hash: resolvedTxHash || null,
   });
   if (submitErr) {
     console.log("[Checkout] deposit submit RPC failed", submitErr.message);
   }
-  if (txHash) {
-    // Ensure tx hash is persisted even if RPC or trigger missed it.
-    const { error: intentUpdErr } = await supabase
-      .from("market_crypto_intents")
-      .update({ tx_hash: txHash, status: "SUBMITTED" })
-      .eq("order_id", orderId)
-      .eq("intent_type", "DEPOSIT")
-      .is("tx_hash", null);
-    if (intentUpdErr) {
-      // RLS can block direct updates; the RPC should still have stored it.
-      console.log("[Checkout] deposit intent tx_hash update blocked", intentUpdErr.message);
-    }
+  // Ensure intent is marked submitted even if we only have a userOp hash.
+  const intentUpdate: any = { status: "SUBMITTED" };
+  if (resolvedTxHash) intentUpdate.tx_hash = resolvedTxHash;
+  if (userOpHash) intentUpdate.client_reference = userOpHash;
+  const { error: intentUpdErr } = await supabase
+    .from("market_crypto_intents")
+    .update(intentUpdate)
+    .eq("order_id", orderId)
+    .eq("intent_type", "DEPOSIT");
+  if (intentUpdErr) {
+    // RLS can block direct updates; the RPC should still have stored it.
+    console.log("[Checkout] deposit intent update blocked", intentUpdErr.message);
   }
 
-
-  if (txHash) {
+  if (resolvedTxHash) {
     // Strict finality: this may return pending until required confirmations are reached.
     const { error: finalizeErr } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
         p_order_id: orderId,
         p_chain: chain.chain,
-        p_tx_hash: txHash,
+        p_tx_hash: resolvedTxHash,
         p_event_type: "DEPOSIT",
       });
     if (finalizeErr) {
@@ -310,7 +340,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     }
   }
 
-  return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: txHash || null };
+  return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: resolvedTxHash || null, user_op_hash: userOpHash || null };
 }
 
 export async function payUsdcForOrder(orderId: string) {
@@ -368,6 +398,7 @@ export async function releaseUsdcForOrder(orderId: string) {
   });
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
+  const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
     p_order_id: orderId,
@@ -377,16 +408,16 @@ export async function releaseUsdcForOrder(orderId: string) {
   if (submitErr) {
     console.log("[Checkout] release submit RPC failed", submitErr.message);
   }
-  if (txHash) {
-    const { error: intentUpdErr } = await supabase
-      .from("market_crypto_intents")
-      .update({ tx_hash: txHash, status: "SUBMITTED" })
-      .eq("order_id", orderId)
-      .eq("intent_type", "RELEASE")
-      .is("tx_hash", null);
-    if (intentUpdErr) {
-      console.log("[Checkout] release intent tx_hash update blocked", intentUpdErr.message);
-    }
+  const intentUpdate: any = { status: "SUBMITTED" };
+  if (txHash) intentUpdate.tx_hash = txHash;
+  if (userOpHash) intentUpdate.client_reference = userOpHash;
+  const { error: intentUpdErr } = await supabase
+    .from("market_crypto_intents")
+    .update(intentUpdate)
+    .eq("order_id", orderId)
+    .eq("intent_type", "RELEASE");
+  if (intentUpdErr) {
+    console.log("[Checkout] release intent update blocked", intentUpdErr.message);
   }
 
   if (txHash) {
@@ -402,5 +433,5 @@ export async function releaseUsdcForOrder(orderId: string) {
     }
   }
 
-  return { ...intent, tx_hash: txHash || null };
+  return { ...intent, tx_hash: txHash || null, user_op_hash: userOpHash || null };
 }

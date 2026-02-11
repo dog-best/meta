@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { keccak256, stringToHex } from "https://esm.sh/viem@2.45.1";
+import { envAny } from "../_shared/market/env.ts";
 
 type AlchemyLog = {
   address?: string;
@@ -80,8 +81,11 @@ function extractLogs(payload: any): AlchemyLog[] {
 
 serve(async (req) => {
   try {
-    const SB_URL = Deno.env.get("SB_URL");
-    const SB_SERVICE = Deno.env.get("SB_SERVICE_ROLE_KEY");
+    const SB_URL = envAny(["SB_URL", "SUPABASE_URL", "sb_url"], "");
+    const SB_SERVICE = envAny(
+      ["SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "sb_secret_key", "sb_scret_key"],
+      "",
+    );
     if (!SB_URL || !SB_SERVICE) {
       return json(500, {
         ok: false,

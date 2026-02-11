@@ -8,13 +8,19 @@ export function envAny(keys: string[], fallback?: string) {
 }
 
 export function getSupabaseUrl() {
-  return envAny(["SUPABASE_URL", "supabase_url", "sb_url"]);
+  return envAny(["SUPABASE_URL", "SB_URL", "supabase_url", "sb_url"]);
 }
 
 export function getAnonKey() {
-  return envAny(["SUPABASE_ANON_KEY", "SUPABASE_ANON", "sb_anon"]);
+  return envAny(["SUPABASE_ANON_KEY", "SUPABASE_ANON", "SB_ANON_KEY", "sb_anon"]);
 }
 
 export function getServiceKey() {
-  return envAny(["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "sb_secret_key", "sb_scret_key"]);
+  return envAny([
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_SERVICE_KEY",
+    "SB_SERVICE_ROLE_KEY",
+    "sb_secret_key",
+    "sb_scret_key",
+  ]);
 }

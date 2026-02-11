@@ -16,7 +16,7 @@ import { useWalletTxPaginated } from "@/hooks/wallet/useWalletTxPaginated";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain } from "@/services/market/chainConfig";
 import { ensureSmartAccount, ensureWalletAddressOnChain, getMyWalletForChain } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getRpcUrlForChain, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, markWalletBackedUp, regenerateWalletKey } from "@/utils/aaWallet";
+import { deriveSmartAccountAddress, getRpcUrlForChain, getStoredPrivateKey, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, importPrivateKey, markWalletBackedUp, normalizePrivateKey, regenerateWalletKey } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { supabase } from "@/services/supabase";
 
@@ -113,6 +113,7 @@ export default function WalletRoute() {
   const [chainErr, setChainErr] = useState<string | null>(null);
 
   const [walletAddr, setWalletAddr] = useState<string>("");
+  const [deviceAddress, setDeviceAddress] = useState<string>("");
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletErr, setWalletErr] = useState<string | null>(null);
   const [backedUp, setBackedUp] = useState(false);
@@ -124,6 +125,9 @@ export default function WalletRoute() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupType, setBackupType] = useState<"mnemonic" | "privateKey">("privateKey");
   const [backupSecret, setBackupSecret] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importKey, setImportKey] = useState("");
+  const [importErr, setImportErr] = useState<string | null>(null);
 
   const [sendOpen, setSendOpen] = useState(false);
   const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
@@ -179,6 +183,7 @@ export default function WalletRoute() {
         setUsdcBal("0");
         setUsdtBal("0");
         setTokenDiag({});
+        setDeviceAddress("");
         return;
       }
 
@@ -198,6 +203,17 @@ export default function WalletRoute() {
         addr = anyAddr?.address ?? "";
       }
       setWalletAddr(addr);
+      try {
+        const pk = await getStoredPrivateKey(meId || undefined);
+        if (pk) {
+          const derived = await deriveSmartAccountAddress(c, pk);
+          setDeviceAddress(derived);
+        } else {
+          setDeviceAddress("");
+        }
+      } catch {
+        setDeviceAddress("");
+      }
       setTokenDiag({});
 
       if (!addr) {
@@ -267,6 +283,63 @@ export default function WalletRoute() {
       }
     } catch (e: any) {
       setWalletErr(friendlyMarketError(e, "Unable to refresh crypto wallet."));
+    }
+  }
+
+  async function onImportPrivateKey() {
+    if (!meId) return;
+    setImportErr(null);
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth("Import wallet private key");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      if (!chain) throw new Error("Select a network before importing.");
+
+      const { data: existing, error: fetchErr } = await supabase
+        .from("crypto_wallets")
+        .select("id,address")
+        .eq("user_id", meId);
+      if (fetchErr) throw fetchErr;
+
+      const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
+      const normalized = normalizePrivateKey(importKey);
+      const derivedAddr = await deriveSmartAccountAddress(chain, normalized);
+      const derivedAddrLc = String(derivedAddr).toLowerCase();
+      if (savedAddr && savedAddr !== derivedAddrLc) {
+        const proceed = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Saved wallet mismatch",
+            `Saved: ${savedAddr}\nDerived: ${derivedAddrLc}\n\nUse this key anyway and replace the saved wallet address?`,
+            [
+              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              { text: "Replace saved", style: "destructive", onPress: () => resolve(true) },
+            ],
+          );
+        });
+        if (!proceed) return;
+      }
+
+      await importPrivateKey(meId || undefined, importKey);
+      const addr = derivedAddr;
+      if (existing && existing.length > 0) {
+        const { error: updErr } = await supabase.from("crypto_wallets").update({ address: addr }).eq("user_id", meId);
+        if (updErr) throw updErr;
+      } else if (chain) {
+        const { error: insErr } = await supabase
+          .from("crypto_wallets")
+          .insert({ user_id: meId, chain: chain.chain, address: addr, wallet_type: "aa" });
+        if (insErr) throw insErr;
+      }
+      setImportOpen(false);
+      setImportKey("");
+      await refreshCrypto(chain ?? undefined);
+      Alert.alert("Wallet imported", "Saved address updated.");
+    } catch (e: any) {
+      setImportErr(String(e?.message || e || "We couldn't import that private key."));
+    } finally {
+      setWalletBusy(false);
     }
   }
 async function loadChains() {
@@ -632,6 +705,7 @@ async function loadChains() {
 
               <Text style={styles.addrLabel}>Wallet address</Text>
               <Text selectable style={styles.addrText}>{walletAddr || "No wallet address generated"}</Text>
+              {!!deviceAddress ? <Text selectable style={styles.addrHint}>Device key: {deviceAddress}</Text> : null}
               {!!chain ? <Text selectable style={styles.addrHint}>USDC CA: {chain.usdc_address}</Text> : null}
               {!!chain?.usdt_address ? <Text selectable style={styles.addrHint}>USDT CA: {chain.usdt_address}</Text> : null}
 
@@ -674,6 +748,10 @@ async function loadChains() {
                 </Pressable>
               </View>
 
+              <Pressable onPress={() => setImportOpen(true)} style={styles.secondaryAction}>
+                <Text style={styles.secondaryActionText}>Import private key / Change saved address</Text>
+              </Pressable>
+
               <Pressable disabled={!chain?.active || walletBusy || !hasAlchemyKey} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || !hasAlchemyKey) && styles.dimBtn]}>
                 <Text style={styles.mainActionText}>{walletBusy ? "Working..." : walletAddr ? "Regenerate wallet" : "Generate wallet"}</Text>
               </Pressable>
@@ -714,7 +792,7 @@ async function loadChains() {
       <Modal visible={backupOpen} transparent animationType="slide" onRequestClose={() => setBackupOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Backup {backupType === "mnemonic" ? "Seed Phrase" : "Private Key"}</Text>
+            <Text style={styles.modalTitle}>Backup Private Key</Text>
             <Text style={styles.modalSub}>Store this offline. Anyone with this can access your wallet.</Text>
             <Text selectable style={styles.modalSecret}>{backupSecret}</Text>
             <View style={styles.modalActions}>
@@ -778,6 +856,33 @@ async function loadChains() {
                 {chain?.chain === c.chain ? <Ionicons name="checkmark-circle" size={18} color="#A78BFA" /> : null}
               </Pressable>
             ))}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Import private key</Text>
+            <Text style={styles.modalSub}>This replaces the saved wallet address for your account.</Text>
+            <TextInput
+              value={importKey}
+              onChangeText={setImportKey}
+              placeholder="Private key (0x + 64 hex)"
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.modalInput}
+            />
+            {importErr ? <Text style={styles.err}>{importErr}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable onPress={() => setImportOpen(false)} style={styles.modalBtnLight}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={onImportPrivateKey} style={styles.modalBtnSolid}>
+                <Text style={styles.modalBtnText}>Import</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -872,9 +977,11 @@ const styles = StyleSheet.create({
   modalTitle: { color: "#fff", fontWeight: "900", fontSize: 16 },
   modalSub: { marginTop: 8, color: T.textMuted, fontSize: 12 },
   modalSecret: { marginTop: 12, color: "#fff", fontWeight: "800", lineHeight: 22 },
+  modalInput: { marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 },
   modalActions: { marginTop: 14, flexDirection: "row", gap: 10 },
   modalBtnLight: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" },
   modalBtnMain: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(124,58,237,0.30)" },
+  modalBtnSolid: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" },
   modalBtnText: { color: "#fff", fontWeight: "900" },
 
   tokenPickRow: { marginTop: 12, flexDirection: "row", gap: 8 },
