@@ -1,12 +1,13 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HapticTab } from "@/components/followcome/haptic-tab";
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/followcome/use-color-scheme";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 let BlurViewComp: any = null;
 if (Platform.OS === "ios") {
@@ -21,12 +22,32 @@ export default function TabLayout() {
   const scheme = useColorScheme();
   const tint = Colors[scheme ?? "dark"].tint;
   const insets = useSafeAreaInsets();
+  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   const TABBAR_HEIGHT = 64;
   const bottomPad = Math.max(insets.bottom, 10);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (userCountry === undefined) return null;
+
   return (
     <Tabs
+      initialRouteName={isNigeria ? "index" : "wallet"}
       screenOptions={{
         headerShown: false,
         tabBarButton: HapticTab,
@@ -70,6 +91,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
+          href: isNigeria ? undefined : null,
           title: "Home",
           tabBarIcon: ({ color, focused }) => (
             <MaterialCommunityIcons

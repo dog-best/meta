@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
+import { Redirect, router } from "expo-router";
 import React, { memo, useCallback, useEffect, useMemo } from "react";
 import {
   ActivityIndicator,
@@ -270,6 +270,9 @@ export default function Dashboard() {
 
   // Prevent UI flicker while redirecting.
   if (!authLoading && !user) return null;
+  if (userCountry !== undefined && !isNigeria) {
+    return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+  }
 
   const refreshing = useMemo(() => authLoading || walletLoading, [authLoading, walletLoading]);
   const txPreview = useMemo(() => ((tx ?? []) as TxItem[]).slice(0, 6), [tx]);
