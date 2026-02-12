@@ -23,6 +23,7 @@ import {
   regenerateWalletKey,
 } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 type SellerProfile = {
   user_id: string;
@@ -154,6 +155,7 @@ export default function MarketAccountTab() {
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletErr, setWalletErr] = useState<string | null>(null);
   const [chainErr, setChainErr] = useState<string | null>(null);
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
   const [backedUp, setBackedUp] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupSecret, setBackupSecret] = useState("");
@@ -167,6 +169,7 @@ export default function MarketAccountTab() {
   const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
   const [sendTo, setSendTo] = useState("");
   const [sendAmount, setSendAmount] = useState("");
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   async function load() {
     setLoading(true);
@@ -278,6 +281,21 @@ export default function MarketAccountTab() {
     }
   }
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   async function onBackupWallet() {
     setWalletErr(null);
     try {
@@ -317,9 +335,14 @@ export default function MarketAccountTab() {
 
       const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
       const normalized = normalizePrivateKey(importKey);
-      const derivedAddr = await deriveSmartAccountAddress(chain, normalized);
-      const derivedAddrLc = String(derivedAddr).toLowerCase();
-      if (savedAddr && savedAddr !== derivedAddrLc) {
+      let derivedAddr = "";
+      try {
+        derivedAddr = await deriveSmartAccountAddress(chain, normalized);
+      } catch (e: any) {
+        derivedAddr = "";
+      }
+      const derivedAddrLc = String(derivedAddr || "").toLowerCase();
+      if (derivedAddr && savedAddr && savedAddr !== derivedAddrLc) {
         const proceed = await new Promise<boolean>((resolve) => {
           Alert.alert(
             "Saved wallet mismatch",
@@ -334,23 +357,29 @@ export default function MarketAccountTab() {
       }
 
       await importPrivateKey(meId || undefined, importKey);
-      const addr = derivedAddr;
 
-      if (existing && existing.length > 0) {
-        const { error: updErr } = await supabase.from("crypto_wallets").update({ address: addr }).eq("user_id", meId);
-        if (updErr) throw updErr;
-      } else if (chain) {
-        const { error: insErr } = await supabase
-          .from("crypto_wallets")
-          .insert({ user_id: meId, chain: chain.chain, address: addr, wallet_type: "aa" });
-        if (insErr) throw insErr;
+      if (derivedAddr) {
+        if (existing && existing.length > 0) {
+          const { error: updErr } = await supabase.from("crypto_wallets").update({ address: derivedAddr }).eq("user_id", meId);
+          if (updErr) throw updErr;
+        } else if (chain) {
+          const { error: insErr } = await supabase
+            .from("crypto_wallets")
+            .insert({ user_id: meId, chain: chain.chain, address: derivedAddr, wallet_type: "aa" });
+          if (insErr) throw insErr;
+        }
       }
 
-      setWallet({ address: addr });
+      setWallet(derivedAddr ? { address: derivedAddr } : wallet);
       setImportOpen(false);
       setImportKey("");
       await refreshWalletMeta(chain);
-      Alert.alert("Wallet imported", "Your saved wallet address was updated.");
+      Alert.alert(
+        "Wallet imported",
+        derivedAddr
+          ? "Your saved wallet address was updated."
+          : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
+      );
     } catch (e: any) {
       setImportErr(String(e?.message || e || "We couldn't import that private key."));
     } finally {
@@ -625,27 +654,29 @@ export default function MarketAccountTab() {
           </View>
         )}
 
-        <CardBox>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Utility</Text>
-          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Fund, Withdraw, Recieve, and Pay bills with 🆖NGN
-          </Text>
+        {isNigeria ? (
+          <CardBox>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Utility</Text>
+            <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
+              Fund, Withdraw, Recieve, and Pay bills with 🆖NGN
+            </Text>
 
-          <Pressable
-            onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
-            style={{
-              marginTop: 12,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Open Utility section</Text>
-          </Pressable>
-        </CardBox>
+            <Pressable
+              onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
+              style={{
+                marginTop: 12,
+                borderRadius: 18,
+                paddingVertical: 14,
+                alignItems: "center",
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900" }}>Open Utility section</Text>
+            </Pressable>
+          </CardBox>
+        ) : null}
 
         <CardBox>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>

@@ -7,6 +7,8 @@ import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "rea
 import AppHeader from "@/components/common/AppHeader";
 import { getCategoryBySlug } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry } from "@/utils/country";
+import { listingAllowsCrypto } from "@/utils/marketVisibility";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -19,10 +21,12 @@ type ListingRow = {
   title: string | null;
   price_amount: number | string | null;
   currency: string | null;
+  payment_options?: any;
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
   cover_image_id: string | null;
+  availability?: any;
   market_listing_images?: { id: string; public_url: string | null } | null;
 };
 
@@ -52,6 +56,8 @@ export default function CategoryFeed() {
 
         // ✅ Correct: join cover image via FK:
         // market_listings.cover_image_id -> market_listing_images.id
+        const userCountry = await resolveUserCountry({ prompt: true });
+        const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
         const { data, error } = await supabase
           .from(LISTINGS_TABLE)
           .select(
@@ -60,10 +66,12 @@ export default function CategoryFeed() {
               title,
               price_amount,
               currency,
+              payment_options,
               delivery_type,
               category,
               sub_category,
               cover_image_id,
+              availability,
               market_listing_images!market_listings_cover_image_fk (
                 id,
                 public_url
@@ -78,7 +86,10 @@ export default function CategoryFeed() {
         if (error) throw new Error(error.message);
 
         if (mounted) {
-          setRows((data as any) ?? []);
+          const items = ((data as any) ?? []) as ListingRow[];
+          const scoped = items.filter((r) => listingMatchesCountry(r.availability, userCountry, false));
+          const filtered = restrictToCrypto ? scoped.filter((r) => listingAllowsCrypto(r)) : scoped;
+          setRows(filtered);
         }
       } catch (e: any) {
         if (mounted) {

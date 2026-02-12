@@ -14,6 +14,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry } from "@/utils/country";
+import { listingAllowsCrypto } from "@/utils/marketVisibility";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -30,10 +32,12 @@ type Listing = {
   title: string | null;
   price_amount: number | string | null;
   currency: string | null;
+  payment_options?: any;
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
   created_at?: string | null;
+  availability?: any;
 
   market_listing_images?: Array<{
     id: string;
@@ -94,13 +98,15 @@ export default function MarketSearchScreen() {
         return;
       }
 
+      const userCountry = await resolveUserCountry({ prompt: true });
+      const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
       // ✅ Search by title / description / sub_category
       // If you later add FTS, we replace this with a proper text search.
       const { data, error } = await supabase
         .from(LISTINGS_TABLE)
         .select(
           `
-          id,title,price_amount,currency,delivery_type,category,sub_category,created_at,
+          id,title,price_amount,currency,payment_options,delivery_type,category,sub_category,created_at,availability,
           market_listing_images:${IMAGES_TABLE}(id,public_url,storage_path,sort_order)
         `,
         )
@@ -117,7 +123,10 @@ export default function MarketSearchScreen() {
 
       if (error) throw new Error(error.message);
 
-      setRows((data as any) ?? []);
+      const items = ((data as any) ?? []) as Listing[];
+      const scoped = items.filter((r) => listingMatchesCountry((r as any).availability, userCountry, false));
+      const filtered = restrictToCrypto ? scoped.filter((r) => listingAllowsCrypto(r)) : scoped;
+      setRows(filtered);
     } catch (e: any) {
       setErr(e?.message || "Search failed");
       setRows([]);

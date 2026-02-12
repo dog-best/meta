@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAuth } from "@/hooks/authentication/useAuth";
 import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const ROUTES = {
   crypto: "/crypto",
@@ -243,6 +244,23 @@ export default function Dashboard() {
   const insets = useSafeAreaInsets();
   const { user, loading: authLoading } = useAuth();
   const { balance, tx, loading: walletLoading, error, reload } = useWalletSimple();
+  const [userCountry, setUserCountry] = React.useState<UserCountry | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -272,12 +290,27 @@ export default function Dashboard() {
   );
 
   const onGoProfile = useCallback(() => go(ROUTES.profile), []);
-  const onGoWallet = useCallback(() => go(ROUTES.wallet), []);
+  const onGoWallet = useCallback(() => {
+    if (isNigeria) {
+      go(ROUTES.wallet);
+      return;
+    }
+    router.push({ pathname: ROUTES.wallet, params: { action: "crypto" } });
+  }, [isNigeria]);
   const onGoCrypto = useCallback(() => go(ROUTES.crypto), []);
   const onGoMarket = useCallback(() => go(ROUTES.market), []);
-  const onFund = useCallback(() => goWallet("fund"), []);
-  const onSend = useCallback(() => goWallet("send"), []);
-  const onWithdraw = useCallback(() => goWallet("withdraw"), []);
+  const onFund = useCallback(() => {
+    if (!isNigeria) return;
+    goWallet("fund");
+  }, [isNigeria]);
+  const onSend = useCallback(() => {
+    if (!isNigeria) return;
+    goWallet("send");
+  }, [isNigeria]);
+  const onWithdraw = useCallback(() => {
+    if (!isNigeria) return;
+    goWallet("withdraw");
+  }, [isNigeria]);
   const onRefresh = useCallback(() => reload(), [reload]);
 
   return (
@@ -313,67 +346,90 @@ export default function Dashboard() {
         </View>
 
         {/* Wallet Card */}
-        <View style={styles.walletCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.walletLabel}>Wallet Balance</Text>
+        {isNigeria ? (
+          <View style={styles.walletCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.walletLabel}>Wallet Balance</Text>
 
-            {walletLoading ? (
-              <View style={{ marginTop: 10 }}>
-                <ActivityIndicator color="#fff" />
-              </View>
-            ) : (
-              <Text style={styles.walletBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-                NGN {formatNGN(balance ?? 0)}
-              </Text>
-            )}
-
-            {!!error && (
-              <View style={styles.errorRow}>
-                <Text style={styles.err} numberOfLines={2}>
-                  {error}
+              {walletLoading ? (
+                <View style={{ marginTop: 10 }}>
+                  <ActivityIndicator color="#fff" />
+                </View>
+              ) : (
+                <Text style={styles.walletBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                  NGN {formatNGN(balance ?? 0)}
                 </Text>
-                <PressableCard
-                  onPress={onRefresh}
-                  accessibilityLabel="Retry"
-                  accessibilityHint="Try reloading your wallet data"
-                  style={styles.retryBtn}
-                >
-                  <Text style={styles.retryText}>Retry</Text>
-                </PressableCard>
-              </View>
-            )}
-          </View>
+              )}
 
-          <PressableCard
-            onPress={onGoWallet}
-            accessibilityLabel="Wallet"
-            accessibilityHint="Open wallet"
-            style={styles.pillBtn}
-          >
-            <Ionicons name="wallet-outline" size={16} color="#fff" />
-            <Text style={styles.pillText}>Wallet</Text>
-          </PressableCard>
-        </View>
+              {!!error && (
+                <View style={styles.errorRow}>
+                  <Text style={styles.err} numberOfLines={2}>
+                    {error}
+                  </Text>
+                  <PressableCard
+                    onPress={onRefresh}
+                    accessibilityLabel="Retry"
+                    accessibilityHint="Try reloading your wallet data"
+                    style={styles.retryBtn}
+                  >
+                    <Text style={styles.retryText}>Retry</Text>
+                  </PressableCard>
+                </View>
+              )}
+            </View>
+
+            <PressableCard
+              onPress={onGoWallet}
+              accessibilityLabel="Wallet"
+              accessibilityHint="Open wallet"
+              style={styles.pillBtn}
+            >
+              <Ionicons name="wallet-outline" size={16} color="#fff" />
+              <Text style={styles.pillText}>Wallet</Text>
+            </PressableCard>
+          </View>
+        ) : (
+          <View style={styles.walletCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.walletLabel}>Crypto Wallet</Text>
+              <Text style={styles.walletBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                USDC / USDT
+              </Text>
+              <Text style={[styles.err, { marginTop: 6 }]}>NGN features are available only in Nigeria.</Text>
+            </View>
+            <PressableCard
+              onPress={onGoWallet}
+              accessibilityLabel="Crypto wallet"
+              accessibilityHint="Open crypto wallet"
+              style={styles.pillBtn}
+            >
+              <Ionicons name="wallet-outline" size={16} color="#fff" />
+              <Text style={styles.pillText}>Crypto</Text>
+            </PressableCard>
+          </View>
+        )}
 
         {/* Actions */}
-        <View style={styles.actions}>
-          <ActionButton
-            variant="primary"
-            label="Fund"
-            onPress={onFund}
-            icon={<MaterialCommunityIcons name="cash-plus" size={18} color="#fff" />}
-          />
-          <ActionButton
-            label="Send"
-            onPress={onSend}
-            icon={<Ionicons name="send-outline" size={18} color="#fff" />}
-          />
-          <ActionButton
-            label="Withdraw"
-            onPress={onWithdraw}
-            icon={<MaterialCommunityIcons name="bank-transfer-out" size={18} color="#fff" />}
-          />
-        </View>
+        {isNigeria ? (
+          <View style={styles.actions}>
+            <ActionButton
+              variant="primary"
+              label="Fund"
+              onPress={onFund}
+              icon={<MaterialCommunityIcons name="cash-plus" size={18} color="#fff" />}
+            />
+            <ActionButton
+              label="Send"
+              onPress={onSend}
+              icon={<Ionicons name="send-outline" size={18} color="#fff" />}
+            />
+            <ActionButton
+              label="Withdraw"
+              onPress={onWithdraw}
+              icon={<MaterialCommunityIcons name="bank-transfer-out" size={18} color="#fff" />}
+            />
+          </View>
+        ) : null}
 
         {/* Security */}
         <View style={styles.securityCard} accessibilityRole="summary" accessibilityLabel="Security notice">
@@ -405,54 +461,62 @@ export default function Dashboard() {
         </View>
 
         {/* Utilities */}
-        <SectionHeader title="Utilities" hint="Bills and payments" />
+        {isNigeria ? (
+          <>
+            <SectionHeader title="Utilities" hint="Bills and payments" />
 
-        <View style={styles.utilWrap}>
-          {utilities.map((u) => (
-            <UtilityCard key={u.key} title={u.title} icon={u.icon} onPress={() => go(u.to)} />
-          ))}
-        </View>
+            <View style={styles.utilWrap}>
+              {utilities.map((u) => (
+                <UtilityCard key={u.key} title={u.title} icon={u.icon} onPress={() => go(u.to)} />
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {/* History */}
-        <SectionHeader
-          title="History"
-          right={
-            <PressableCard
-              onPress={onGoWallet}
-              accessibilityLabel="View all transactions"
-              accessibilityHint="Open wallet transaction history"
-              style={styles.linkBtn}
-            >
-              <Text style={styles.link}>View all</Text>
-            </PressableCard>
-          }
-        />
+        {isNigeria ? (
+          <>
+            <SectionHeader
+              title="History"
+              right={
+                <PressableCard
+                  onPress={onGoWallet}
+                  accessibilityLabel="View all transactions"
+                  accessibilityHint="Open wallet transaction history"
+                  style={styles.linkBtn}
+                >
+                  <Text style={styles.link}>View all</Text>
+                </PressableCard>
+              }
+            />
 
-        <View style={styles.txCard}>
-          <FlatList
-            data={txPreview}
-            keyExtractor={(i) => String(i.id)}
-            scrollEnabled={false}
-            removeClippedSubviews={Platform.OS === "android"}
-            initialNumToRender={6}
-            ListEmptyComponent={<Text style={styles.empty}>No transactions yet.</Text>}
-            renderItem={({ item }) => (
-              <View style={styles.txRow}>
-                <TxBadge type={item.type} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.txAmount} numberOfLines={1}>
-                    NGN {formatNGN(item.amount)}
-                  </Text>
-                  <Text style={styles.txMeta} numberOfLines={1}>
-                    {item.counterpartyName ? `${item.counterpartyName} - ` : ""}
-                    {formatDateTime(item.created_at)}
-                    {item.reference ? ` - ${item.reference}` : ""}
-                  </Text>
-                </View>
-              </View>
-            )}
-          />
-        </View>
+            <View style={styles.txCard}>
+              <FlatList
+                data={txPreview}
+                keyExtractor={(i) => String(i.id)}
+                scrollEnabled={false}
+                removeClippedSubviews={Platform.OS === "android"}
+                initialNumToRender={6}
+                ListEmptyComponent={<Text style={styles.empty}>No transactions yet.</Text>}
+                renderItem={({ item }) => (
+                  <View style={styles.txRow}>
+                    <TxBadge type={item.type} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.txAmount} numberOfLines={1}>
+                        NGN {formatNGN(item.amount)}
+                      </Text>
+                      <Text style={styles.txMeta} numberOfLines={1}>
+                        {item.counterpartyName ? `${item.counterpartyName} - ` : ""}
+                        {formatDateTime(item.created_at)}
+                        {item.reference ? ` - ${item.reference}` : ""}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              />
+            </View>
+          </>
+        ) : null}
       </ScrollView>
     </LinearGradient>
   );

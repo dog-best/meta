@@ -13,6 +13,7 @@ import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurren
 import { payUsdcForOrder, payUsdtForOrder } from "@/services/market/usdcCheckout";
 import { getPreferredMarketChain } from "@/services/market/chainConfig";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -141,6 +142,7 @@ export default function Checkout() {
   const [contactNote, setContactNote] = useState("");
   const [savingContact, setSavingContact] = useState(false);
   const [chain, setChain] = useState<{ chain: string } | null>(null);
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
   const hasExplicitRoutes =
@@ -148,9 +150,11 @@ export default function Checkout() {
     typeof paymentOptions?.allow_usdc === "boolean" ||
     typeof paymentOptions?.allow_usdt === "boolean";
 
-  const allowNgn = hasExplicitRoutes
+  const allowNgnRaw = hasExplicitRoutes
     ? paymentOptions?.allow_ngn === true
     : listingCurrency === "NGN" || listingCurrency === "";
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+  const allowNgn = allowNgnRaw && isNigeria;
   const allowUsdc = hasExplicitRoutes
     ? paymentOptions?.allow_usdc === true
     : listingCurrency === "USDC";
@@ -228,6 +232,14 @@ export default function Checkout() {
     (async () => {
       const c = await getPreferredMarketChain().catch(() => null);
       if (mounted) setChain(c);
+    })();
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
     })();
     return () => {
       mounted = false;
@@ -669,22 +681,29 @@ export default function Checkout() {
         >
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Payment options</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-            • **NGN Wallet**: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).{"\n"}
-            • **USDC**: uses your smart account and deposits USDC into escrow on-chain.
+            {isNigeria ? "• NGN Wallet: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).\n" : ""}
+            • USDC/USDT: uses your smart account and deposits into escrow on-chain.
           </Text>
+          {!isNigeria && allowNgnRaw ? (
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+              NGN payments are available only to Nigeria users. Please use USDC/USDT.
+            </Text>
+          ) : null}
           {chain ? (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
               Network: {String(chain.chain).toUpperCase().replace("_", " ")}
             </Text>
           ) : null}
 
-          <Pill
-            icon="wallet-outline"
-            title="Pay with NGN wallet"
-            subtitle="Instant escrow lock from your in-app balance"
-            onPress={payWithWallet}
-            disabled={busy || !allowNgn}
-          />
+          {isNigeria ? (
+            <Pill
+              icon="wallet-outline"
+              title="Pay with NGN wallet"
+              subtitle="Instant escrow lock from your in-app balance"
+              onPress={payWithWallet}
+              disabled={busy || !allowNgn}
+            />
+          ) : null}
 
           <Pill
             icon="logo-bitcoin"

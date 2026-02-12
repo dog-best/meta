@@ -72,12 +72,10 @@ export async function getOrCreatePrivateKey(scope?: string | null): Promise<`0x$
 
   const existing = await SecureStore.getItemAsync(keyPrivate);
   if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
-  if (!scope) {
-    const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
-    if (globalExisting && globalExisting.startsWith("0x")) {
-      await SecureStore.setItemAsync(keyPrivate, globalExisting);
-      return globalExisting as `0x${string}`;
-    }
+  const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
+  if (globalExisting && globalExisting.startsWith("0x")) {
+    await SecureStore.setItemAsync(keyPrivate, globalExisting);
+    return globalExisting as `0x${string}`;
   }
 
   const created = Wallet.createRandom();
@@ -95,10 +93,8 @@ export async function getStoredPrivateKey(scope?: string | null): Promise<`0x${s
   const keyPrivate = scopeKey(KEY_PRIVATE, scope);
   const existing = await SecureStore.getItemAsync(keyPrivate);
   if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
-  if (!scope) {
-    const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
-    if (globalExisting && globalExisting.startsWith("0x")) return globalExisting as `0x${string}`;
-  }
+  const globalExisting = await SecureStore.getItemAsync(scopeKey(KEY_PRIVATE, null));
+  if (globalExisting && globalExisting.startsWith("0x")) return globalExisting as `0x${string}`;
   return null;
 }
 

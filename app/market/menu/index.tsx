@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -34,12 +35,35 @@ const MENU_ITEMS: Array<{
 ];
 
 export default function MarketMenuScreen() {
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const items = useMemo(() => {
+    if (isNigeria) return MENU_ITEMS;
+    return MENU_ITEMS.filter((i) => i.title !== "Wallet");
+  }, [isNigeria]);
+
   return (
     <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
       <AppHeader title="Menu" subtitle="Quick access to all market screens." />
       <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 }}>
-          {MENU_ITEMS.map((item) => (
+          {items.map((item) => (
             <Pressable
               key={item.title}
               onPress={() => router.push(item.route as any)}

@@ -2,7 +2,7 @@ import { createPublicClient, encodeFunctionData, http } from "viem";
 
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
+import { deriveSmartAccountAddress, getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
 const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
@@ -135,6 +135,18 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
     if (!localKey) {
       throw new Error("Saved wallet exists. Import your private key to use it on this device.");
     }
+    try {
+      const derived = await deriveSmartAccountAddress(chainConfig, localKey);
+      if (String(derived).toLowerCase() !== String(existingAny.address).toLowerCase()) {
+        throw new Error(
+          `Wallet key mismatch on this device.\n\nSaved wallet: ${existingAny.address}\nThis device: ${derived}\n\nImport the correct private key or replace the saved address.`,
+        );
+      }
+    } catch (e: any) {
+      if (String(e?.message || "").toLowerCase().includes("wallet key mismatch")) throw e;
+      // If derivation fails due to RPC issues, don't overwrite the saved address silently.
+      throw new Error(`Unable to verify wallet key for ${chainConfig.chain}. Check RPC settings and try again.`);
+    }
     await registerWallet(chainConfig.chain, existingAny.address);
     return { address: existingAny.address };
   }
@@ -204,7 +216,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   // Prevent sending from a different smart account than what we display/save in DB.
   if (wallet?.address && String(wallet.address).toLowerCase() !== String(address).toLowerCase()) {
     throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import your private key to restore the same wallet, or regenerate.`,
+      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import the private key for the saved wallet, or replace the saved address from Account > Import private key.`,
     );
   }
   const buyerAddress = String(address || "").toLowerCase();

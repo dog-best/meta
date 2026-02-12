@@ -7,6 +7,8 @@ import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Text, TextInp
 import AppHeader from "@/components/common/AppHeader";
 import SocialFeed from "@/components/market/SocialFeed";
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, resolveUserCountry } from "@/utils/country";
+import { listingAllowsCrypto } from "@/utils/marketVisibility";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -63,6 +65,7 @@ type Listing = {
   title: string | null;
   price_amount: number | string | null;
   currency: string | null;
+  payment_options?: any;
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
@@ -154,9 +157,12 @@ export default function PublicSellerProfile() {
         }
 
         // 2) Active listings (RLS policy allows)
+        const userCountry = await resolveUserCountry({ prompt: true });
+        const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
+
         const { data: ls, error: lsErr } = await supabase
           .from("market_listings")
-          .select("id,title,price_amount,currency,delivery_type,category,sub_category,created_at")
+          .select("id,title,price_amount,currency,payment_options,delivery_type,category,sub_category,created_at")
           .eq("seller_id", (sp as any).user_id)
           .eq("is_active", true)
           .order("created_at", { ascending: false })
@@ -165,7 +171,10 @@ export default function PublicSellerProfile() {
         if (lsErr) throw new Error(lsErr.message);
 
         // 3) Cover images (view)
-        const rows = ((ls as any) ?? []) as Listing[];
+        let rows = ((ls as any) ?? []) as Listing[];
+        if (restrictToCrypto) {
+          rows = rows.filter((r) => listingAllowsCrypto(r));
+        }
         const listingIds = rows.map((r) => r.id);
 
         const coverMap: Record<string, string | null> = {};

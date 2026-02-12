@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -17,6 +18,8 @@ export default function MarketWallet() {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState<number>(0);
   const [txs, setTxs] = useState<TxRow[]>([]);
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   async function load() {
     console.log("[MarketWallet] load start");
@@ -65,8 +68,60 @@ export default function MarketWallet() {
   }
 
   useEffect(() => {
-    load();
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isNigeria) {
+      setLoading(false);
+      return;
+    }
+    load();
+  }, [isNigeria]);
+
+  if (!loading && !isNigeria) {
+    return (
+      <LinearGradient
+        colors={[BG1, BG0]}
+        start={{ x: 0.15, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
+      >
+        <AppHeader title="Market Wallet" subtitle="Crypto-only outside Nigeria" />
+        <View style={{ marginTop: 18, borderRadius: 18, padding: 16, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>NGN wallet unavailable</Text>
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)" }}>
+            NGN wallets and utilities are available only in Nigeria. Use the crypto wallet instead.
+          </Text>
+          <Pressable
+            onPress={() => router.push("/fintech/(tabs)/wallet?action=crypto" as any)}
+            style={{
+              marginTop: 12,
+              borderRadius: 16,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "rgba(124,58,237,0.25)",
+              borderWidth: 1,
+              borderColor: "rgba(124,58,237,0.45)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Open crypto wallet</Text>
+          </Pressable>
+        </View>
+      </LinearGradient>
+    );
+  }
 
   return (
     <LinearGradient

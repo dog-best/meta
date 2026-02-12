@@ -20,6 +20,8 @@ import SocialFeed from "@/components/market/SocialFeed";
 import { CategoryItem, getCategoriesByMain, MarketMainCategory } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { listingAllowsCrypto } from "@/utils/marketVisibility";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -34,6 +36,7 @@ const LISTING_IMAGES_BUCKET = "market-listings";
 type SortBy = "newest" | "price_low" | "price_high";
 type FeedSection = "product" | "service" | "social";
 type DirectoryMode = "listings" | "featured" | "verified";
+type FeedScope = "country" | "global";
 
 type ListingRow = {
   id: string;
@@ -46,6 +49,8 @@ type ListingRow = {
   sub_category: string | null;
   created_at: string | null;
   payment_options?: any;
+  availability?: any;
+  stock_qty?: number | null;
   cover?: { public_url?: string | null; storage_path?: string | null } | null;
 };
 
@@ -220,6 +225,7 @@ export default function MarketHome() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("newest");
   const [directoryMode, setDirectoryMode] = useState<DirectoryMode>("listings");
+  const [feedScope, setFeedScope] = useState<FeedScope>("country");
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -229,6 +235,10 @@ export default function MarketHome() {
   const [statsMap, setStatsMap] = useState<Record<string, { completed: number; cancelled: number; failed: number }>>({});
   const [featuredSellers, setFeaturedSellers] = useState<SellerCard[]>([]);
   const [verifiedSellers, setVerifiedSellers] = useState<SellerCard[]>([]);
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const [countryErr, setCountryErr] = useState<string | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+  const restrictToCrypto = !!userCountry && !isNigeria;
 
   const main = section === "service" ? "service" : "product";
   const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main as MarketMainCategory), [main]);
@@ -266,7 +276,7 @@ export default function MarketHome() {
       let query = supabase
         .from(LISTINGS_TABLE)
         .select(
-          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)"
+          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,availability,stock_qty,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)"
         )
         .eq("is_active", true)
         .eq("category", main)
@@ -287,10 +297,21 @@ export default function MarketHome() {
         const t = new Date(exp).getTime();
         return Number.isFinite(t) ? t > Date.now() : true;
       });
-      setRows(items);
+      const scopedBase =
+        feedScope === "global"
+          ? items
+          : items.filter((r) =>
+              listingMatchesCountry(r.availability ?? r.payment_options?.availability, userCountry, false),
+            );
+      const scoped = restrictToCrypto ? scopedBase.filter((r) => listingAllowsCrypto(r)) : scopedBase;
+      const uniq = new Map<string, ListingRow>();
+      scoped.forEach((r) => {
+        if (!uniq.has(r.id)) uniq.set(r.id, r);
+      });
+      setRows(Array.from(uniq.values()));
 
-      const sellerIds = Array.from(new Set(items.map((r) => r.seller_id)));
-      const listingIds = items.map((r) => r.id);
+      const sellerIds = Array.from(new Set(scoped.map((r) => r.seller_id)));
+      const listingIds = scoped.map((r) => r.id);
 
       const [sellerRes, ordersRes] = await Promise.all([
         sellerIds.length
@@ -338,8 +359,23 @@ export default function MarketHome() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch (e: any) {
+        if (mounted) setCountryErr(String(e?.message || "We couldn't read your location."));
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (section !== "social") loadListings();
-  }, [section, selectedSlug, sortBy, q, directoryMode]);
+  }, [section, selectedSlug, sortBy, q, directoryMode, feedScope, userCountry?.code, userCountry?.name]);
 
   const directoryRows = useMemo(() => {
     const source = directoryMode === "featured" ? featuredSellers : verifiedSellers;
@@ -361,12 +397,14 @@ export default function MarketHome() {
     const displayPrice = resolveListingDisplayPrice(item);
     const showDiscount = displayPrice.discountOn && Number.isFinite(displayPrice.was) && displayPrice.was > displayPrice.now;
 
+    const isOutOfStock = item.category === "product" && typeof item.stock_qty === "number" && item.stock_qty <= 0;
+
     return (
       <Pressable
         onPress={() => router.push({ pathname: "/market/listing/[id]" as any, params: { id: item.id } })}
         style={{ width: "48%", borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", backgroundColor: CARD }}
       >
-        <View style={{ height: 140, backgroundColor: "rgba(255,255,255,0.06)" }}>
+        <View style={{ height: 180, backgroundColor: "rgba(255,255,255,0.06)" }}>
           {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : null}
           <View style={{ position: "absolute", bottom: 10, left: 10 }}>
             <View style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: "rgba(0,0,0,0.6)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
@@ -400,10 +438,20 @@ export default function MarketHome() {
               )}
             </View>
           </View>
+          {isOutOfStock ? (
+            <View style={{ position: "absolute", top: 10, right: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(239,68,68,0.75)" }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Out of stock</Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={{ padding: 12 }}>
           <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>{item.title ?? "Untitled"}</Text>
+          {item.category === "product" && typeof item.stock_qty === "number" ? (
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.7)", fontSize: 11 }}>
+              Stock left: {Math.max(0, item.stock_qty)}
+            </Text>
+          ) : null}
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.75)", fontSize: 11 }}>
             Sales {stats.completed} - Cancelled {stats.cancelled} - Failed {stats.failed}
           </Text>
@@ -480,6 +528,24 @@ export default function MarketHome() {
               </View>
             ) : (
               <>
+                {directoryMode === "listings" ? (
+                  <>
+                    <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
+                      <SectionPill label="My Country" active={feedScope === "country"} onPress={() => setFeedScope("country")} />
+                      <SectionPill label="Global" active={feedScope === "global"} onPress={() => setFeedScope("global")} />
+                    </View>
+                    {feedScope === "country" && !userCountry ? (
+                      <View style={{ marginTop: 10, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
+                        <Text style={{ color: MUTED }}>
+                          Enable location to see listings near you. You can still use the Global feed.
+                        </Text>
+                        {countryErr ? (
+                          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>{countryErr}</Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+                  </>
+                ) : null}
                 <View style={{ marginTop: 12, flexDirection: "row", gap: 10, alignItems: "center", borderRadius: 20, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
                   <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.75)" />
                   <TextInput

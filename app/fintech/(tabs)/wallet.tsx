@@ -19,6 +19,7 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { deriveSmartAccountAddress, getRpcUrlForChain, getStoredPrivateKey, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, importPrivateKey, markWalletBackedUp, normalizePrivateKey, regenerateWalletKey } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 type NgnSection = "fund" | "send" | "withdraw" | "history";
 type WalletMode = "ngn" | "crypto";
@@ -111,6 +112,8 @@ export default function WalletRoute() {
   const [chains, setChains] = useState<ChainItem[]>([]);
   const [chain, setChain] = useState<ChainItem | null>(null);
   const [chainErr, setChainErr] = useState<string | null>(null);
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   const [walletAddr, setWalletAddr] = useState<string>("");
   const [deviceAddress, setDeviceAddress] = useState<string>("");
@@ -149,6 +152,10 @@ export default function WalletRoute() {
   const tx = useWalletTxPaginated();
 
   useEffect(() => {
+    if (!isNigeria) {
+      setMode("crypto");
+      return;
+    }
     if (params.action === "fund" || params.action === "send" || params.action === "withdraw" || params.action === "history") {
       setMode("ngn");
       setSection(params.action as NgnSection);
@@ -156,7 +163,7 @@ export default function WalletRoute() {
     if (params.action === "crypto") {
       setMode("crypto");
     }
-  }, [params.action]);
+  }, [params.action, isNigeria]);
 
   useEffect(() => {
     (async () => {
@@ -164,6 +171,27 @@ export default function WalletRoute() {
       setMeId(data.user?.id ?? null);
     })();
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isNigeria && mode === "ngn") {
+      setMode("crypto");
+    }
+  }, [isNigeria, mode]);
 
   const ngnTabs: { key: NgnSection; label: string }[] = useMemo(
     () => [
@@ -305,9 +333,14 @@ export default function WalletRoute() {
 
       const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
       const normalized = normalizePrivateKey(importKey);
-      const derivedAddr = await deriveSmartAccountAddress(chain, normalized);
-      const derivedAddrLc = String(derivedAddr).toLowerCase();
-      if (savedAddr && savedAddr !== derivedAddrLc) {
+      let derivedAddr = "";
+      try {
+        derivedAddr = await deriveSmartAccountAddress(chain, normalized);
+      } catch (e: any) {
+        derivedAddr = "";
+      }
+      const derivedAddrLc = String(derivedAddr || "").toLowerCase();
+      if (derivedAddr && savedAddr && savedAddr !== derivedAddrLc) {
         const proceed = await new Promise<boolean>((resolve) => {
           Alert.alert(
             "Saved wallet mismatch",
@@ -322,20 +355,26 @@ export default function WalletRoute() {
       }
 
       await importPrivateKey(meId || undefined, importKey);
-      const addr = derivedAddr;
-      if (existing && existing.length > 0) {
-        const { error: updErr } = await supabase.from("crypto_wallets").update({ address: addr }).eq("user_id", meId);
-        if (updErr) throw updErr;
-      } else if (chain) {
-        const { error: insErr } = await supabase
-          .from("crypto_wallets")
-          .insert({ user_id: meId, chain: chain.chain, address: addr, wallet_type: "aa" });
-        if (insErr) throw insErr;
+      if (derivedAddr) {
+        if (existing && existing.length > 0) {
+          const { error: updErr } = await supabase.from("crypto_wallets").update({ address: derivedAddr }).eq("user_id", meId);
+          if (updErr) throw updErr;
+        } else if (chain) {
+          const { error: insErr } = await supabase
+            .from("crypto_wallets")
+            .insert({ user_id: meId, chain: chain.chain, address: derivedAddr, wallet_type: "aa" });
+          if (insErr) throw insErr;
+        }
       }
       setImportOpen(false);
       setImportKey("");
       await refreshCrypto(chain ?? undefined);
-      Alert.alert("Wallet imported", "Saved address updated.");
+      Alert.alert(
+        "Wallet imported",
+        derivedAddr
+          ? "Saved address updated."
+          : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
+      );
     } catch (e: any) {
       setImportErr(String(e?.message || e || "We couldn't import that private key."));
     } finally {
@@ -437,7 +476,7 @@ async function loadChains() {
   }
 
   const refreshAll = async () => {
-    if (mode === "ngn") {
+    if (mode === "ngn" && isNigeria) {
       await Promise.allSettled([reloadWallet(), tx.refresh()]);
       return;
     }
@@ -594,7 +633,7 @@ async function loadChains() {
         <View style={styles.topRow}>
           <View>
             <Text style={styles.title}>Wallet</Text>
-            <Text style={styles.subTitle}>NGN and Crypto in one place</Text>
+            <Text style={styles.subTitle}>{isNigeria ? "NGN and Crypto in one place" : "Crypto wallet"}</Text>
           </View>
           <View style={styles.topActions}>
             <Pressable style={styles.smallBtn} onPress={refreshAll}>
@@ -607,15 +646,23 @@ async function loadChains() {
         </View>
 
         <View style={styles.modeRow}>
-          <Pressable onPress={() => setMode("ngn")} style={[styles.modeBtn, mode === "ngn" ? styles.modeBtnActive : styles.modeBtnIdle]}>
-            <Text style={[styles.modeText, mode === "ngn" ? styles.modeTextActive : styles.modeTextIdle]}>NGN</Text>
-          </Pressable>
-          <Pressable onPress={() => setMode("crypto")} style={[styles.modeBtn, mode === "crypto" ? styles.modeBtnActive : styles.modeBtnIdle]}>
-            <Text style={[styles.modeText, mode === "crypto" ? styles.modeTextActive : styles.modeTextIdle]}>Crypto</Text>
-          </Pressable>
+          {isNigeria ? (
+            <>
+              <Pressable onPress={() => setMode("ngn")} style={[styles.modeBtn, mode === "ngn" ? styles.modeBtnActive : styles.modeBtnIdle]}>
+                <Text style={[styles.modeText, mode === "ngn" ? styles.modeTextActive : styles.modeTextIdle]}>NGN</Text>
+              </Pressable>
+              <Pressable onPress={() => setMode("crypto")} style={[styles.modeBtn, mode === "crypto" ? styles.modeBtnActive : styles.modeBtnIdle]}>
+                <Text style={[styles.modeText, mode === "crypto" ? styles.modeTextActive : styles.modeTextIdle]}>Crypto</Text>
+              </Pressable>
+            </>
+          ) : (
+            <View style={[styles.modeBtn, styles.modeBtnActive, { flex: 1 }]}>
+              <Text style={[styles.modeText, styles.modeTextActive]}>Crypto</Text>
+            </View>
+          )}
         </View>
 
-        {mode === "ngn" ? (
+        {isNigeria && mode === "ngn" ? (
           <View style={styles.card}>
             <View style={styles.pill}><Text style={styles.pillText}>NGN WALLET</Text></View>
             <Text style={styles.label}>Available balance</Text>
@@ -632,12 +679,12 @@ async function loadChains() {
         )}
       </View>
 
-      {!!walletSimpleErr && mode === "ngn" ? <Text style={styles.err}>{walletSimpleErr}</Text> : null}
+      {!!walletSimpleErr && isNigeria && mode === "ngn" ? <Text style={styles.err}>{walletSimpleErr}</Text> : null}
       {!!walletErr && mode === "crypto" ? <Text style={styles.err}>{walletErr}</Text> : null}
       {!!chainErr && mode === "crypto" ? <Text style={styles.err}>{chainErr}</Text> : null}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
-        {mode === "ngn" ? (
+        {isNigeria && mode === "ngn" ? (
           <>
             <View style={styles.tabRow}>
               {ngnTabs.map((t) => (

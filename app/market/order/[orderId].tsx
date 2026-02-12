@@ -14,7 +14,6 @@ import { supabase } from "@/services/supabase";
 import { releaseUsdcForOrder } from "@/services/market/usdcCheckout";
 import { getPreferredMarketChain } from "@/services/market/chainConfig";
 import { friendlyMarketError } from "@/utils/marketUx";
-import { callFn } from "@/services/functions";
 
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import {
@@ -40,8 +39,6 @@ const RPC_OTP_VERIFY = "market_otp_verify_rpc";
 const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
 const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
 const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
-const FN_ESCROW_REINDEX = "market-escrow-reindex";
-
 // Tables
 const ORDERS_TABLE = "market_orders";
 const LISTINGS_TABLE = "market_listings";
@@ -118,6 +115,7 @@ type ListingRow = {
   delivery_type: string | null;
   category: string | null;
   sub_category: string | null;
+  stock_qty?: number | null;
   website_url?: string | null;
 };
 
@@ -142,6 +140,7 @@ type CryptoIntent = {
   status: string;
   chain: string;
   tx_hash: string | null;
+  client_reference?: string | null;
   created_at: string;
 };
 
@@ -202,7 +201,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 async function safeLoadListing(listingId: string) {
   const attempt1 = await supabase
     .from(LISTINGS_TABLE)
-    .select("id,title,delivery_type,category,sub_category,website_url")
+    .select("id,title,delivery_type,category,sub_category,website_url,stock_qty")
     .eq("id", listingId)
     .maybeSingle();
 
@@ -212,7 +211,7 @@ async function safeLoadListing(listingId: string) {
   if (msg.includes("website_url") && msg.includes("does not exist")) {
     const attempt2 = await supabase
       .from(LISTINGS_TABLE)
-      .select("id,title,delivery_type,category,sub_category")
+      .select("id,title,delivery_type,category,sub_category,stock_qty")
       .eq("id", listingId)
       .maybeSingle();
     if (attempt2.error) throw new Error(attempt2.error.message);
@@ -263,7 +262,8 @@ export default function OrderDetails() {
   const otpVerified = !!otp?.verified_at;
   const latestDepositIntent = useMemo(() => {
     const dep = intents.filter((i) => String(i.intent_type || "").toUpperCase() === "DEPOSIT");
-    return dep.length ? dep[0] : null;
+    if (!dep.length) return null;
+    return dep.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
   }, [intents]);
   const isStableOrder = useMemo(
     () => ["USDC", "USDT"].includes(String(order?.currency || "").toUpperCase()),
@@ -277,9 +277,14 @@ export default function OrderDetails() {
     ) || navTx.startsWith("0x");
   }, [intents, navTx]);
   const defaultDepositTx = useMemo(() => {
-    const v = String(latestDepositIntent?.tx_hash || navTx || "").trim();
+    const v = String(
+      latestDepositIntent?.tx_hash ||
+        latestDepositIntent?.client_reference ||
+        navTx ||
+        ""
+    ).trim();
     return v.startsWith("0x") ? v : "";
-  }, [latestDepositIntent?.tx_hash, navTx]);
+  }, [latestDepositIntent?.tx_hash, latestDepositIntent?.client_reference, navTx]);
   // Note: `market_crypto_intents` can be temporarily empty (RLS, RPC not writing tx_hash, etc).
   // Resync must still be available for strict on-chain confirmation.
   const awaitingConfirmations =
@@ -375,7 +380,7 @@ export default function OrderDetails() {
 
       const { data: ints } = await supabase
         .from(CRYPTO_INTENTS_TABLE)
-        .select("id,intent_type,status,chain,tx_hash,created_at")
+        .select("id,intent_type,status,chain,tx_hash,client_reference,created_at")
         .eq("order_id", oid)
         .order("created_at", { ascending: false });
 
@@ -863,6 +868,11 @@ async function pickAndUpload(access: "preview" | "final") {
                   <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                     {listing?.category ?? "—"} • {listing?.delivery_type ?? "—"} • {listing?.sub_category ?? "—"}
                   </Text>
+                  {listing?.category === "product" && typeof listing?.stock_qty === "number" ? (
+                    <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                      Stock left: {Math.max(0, listing.stock_qty)}
+                    </Text>
+                  ) : null}
                   <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                     <Text style={{ color: "#fff", fontWeight: "900" }}>
                       Seller: {seller?.business_name || seller?.display_name || "Seller"}{" "}
@@ -922,6 +932,10 @@ async function pickAndUpload(access: "preview" | "final") {
                 <Pressable
                   onPress={() => {
                     if (awaitingConfirmations || canResyncDeposit) {
+                      if (!defaultDepositTx) {
+                        setReindexOpen(true);
+                        return;
+                      }
                       setReindexTx(defaultDepositTx);
                       reindexDeposit();
                     } else {
@@ -970,6 +984,28 @@ async function pickAndUpload(access: "preview" | "final") {
                 <Text style={{ color: "rgba(255,255,255,0.7)", lineHeight: 20 }}>
                   If your deposit is confirmed on-chain but the order is still Created, resync using the transaction hash.
                 </Text>
+                {defaultDepositTx ? (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                      Tx: {defaultDepositTx}
+                    </Text>
+                    <Pressable
+                      onPress={() => Clipboard.setStringAsync(defaultDepositTx)}
+                      style={{
+                        marginTop: 8,
+                        alignSelf: "flex-start",
+                        borderRadius: 10,
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        backgroundColor: "rgba(255,255,255,0.08)",
+                        borderWidth: 1,
+                        borderColor: "rgba(255,255,255,0.12)",
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>Copy hash</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 <Pressable
                   onPress={() => {
                     setReindexTx(defaultDepositTx);

@@ -12,6 +12,7 @@ import { createListing, getMySellerProfile, insertListingImages, setListingCover
 import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -43,6 +44,34 @@ function ensureExtFromMime(mime: string) {
 
 function isValidUrl(u: string) {
   return /^https?:\/\/.+/i.test(u.trim());
+}
+
+const BANNED_KEYWORDS = [
+  "cocaine",
+  "heroin",
+  "fentanyl",
+  "meth",
+  "methamphetamine",
+  "lsd",
+  "ecstasy",
+  "mdma",
+  "xanax",
+  "oxycodone",
+  "codeine",
+  "opioid",
+  "marijuana",
+  "weed",
+  "drug",
+  "drugs",
+  "pharmacy",
+  "medicine",
+  "medication",
+  "prescription",
+];
+
+function containsBannedContent(text: string) {
+  const t = String(text || "").toLowerCase();
+  return BANNED_KEYWORDS.find((w) => t.includes(w)) || null;
 }
 
 function isoFromPreset(preset: DurationPreset) {
@@ -181,7 +210,7 @@ export default function SellTab() {
   const [autoDeleteAt, setAutoDeleteAt] = useState("");
   const [autoDeletePreset, setAutoDeletePreset] = useState<DurationPreset>("none");
 
-  const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("global");
+  const [availabilityScope, setAvailabilityScope] = useState<AvailabilityScope>("country");
   const [availabilityContinents, setAvailabilityContinents] = useState<string[]>([]);
   const [availabilityCountryName, setAvailabilityCountryName] = useState("");
   const [availabilityCountryCode, setAvailabilityCountryCode] = useState("");
@@ -190,6 +219,8 @@ export default function SellTab() {
   const [availabilityRadiusKm, setAvailabilityRadiusKm] = useState("");
   const [availabilityCenter, setAvailabilityCenter] = useState<{ lat: number; lng: number; label: string } | null>(null);
   const [availabilityNote, setAvailabilityNote] = useState("");
+  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
   const [locatingAvailability, setLocatingAvailability] = useState(false);
 
   const [images, setImages] = useState<Img[]>([]);
@@ -301,6 +332,35 @@ export default function SellTab() {
     let mounted = true;
     (async () => {
       try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (!mounted) return;
+        setUserCountry(c);
+        if (c) {
+          if (!availabilityCountryName && !availabilityCountryCode) {
+            setAvailabilityCountryName(String(c.name || ""));
+            setAvailabilityCountryCode(String(c.code || ""));
+          }
+          if (availabilityScope === "global") {
+            setAvailabilityScope("country");
+          }
+          if (!isNigeriaCountry(c.code || c.name)) {
+            setPayMode("crypto");
+            setPriceBase("USD");
+          }
+        }
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
         const res = await fetch(
           "https://api.coingecko.com/api/v3/simple/price?ids=tether,usd-coin&vs_currencies=ngn",
         );
@@ -401,6 +461,8 @@ export default function SellTab() {
   function validate(): string | null {
     const t = title.trim();
     if (!t) return "Title is required";
+    const bad = containsBannedContent(`${title} ${description}`);
+    if (bad) return `This marketplace does not allow drugs or medical products. Remove: ${bad}`;
 
     const sc = finalSubCategory();
     if (!sc) return "Pick a sub-category (or type one in Other)";
@@ -416,8 +478,8 @@ export default function SellTab() {
     }
 
     if (category === "product") {
-      const q = stockQty.trim() ? safeNumber(stockQty) : NaN;
-      if (stockQty.trim() && (!Number.isFinite(q) || q < 0)) return "Stock must be 0 or more";
+      const q = safeNumber(stockQty);
+      if (!Number.isFinite(q) || q <= 0) return "Stock is required and must be at least 1";
     }
 
     // media requirements:
@@ -451,6 +513,7 @@ export default function SellTab() {
   }
 
   async function onSubmit() {
+    if (submitting) return;
     const err = validate();
     if (err) return Alert.alert("Fix this", err);
 
@@ -467,19 +530,24 @@ export default function SellTab() {
       const enteredPrice = safeNumber(price);
       let unitPrice = enteredPrice;
       const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
-      const listingCurrency: Currency = payMode === "ngn" ? "NGN" : "USDC";
+      const effectivePayMode = isNigeria ? payMode : "crypto";
+      const baseCurrency: "NGN" | "USD" = isNigeria ? priceBase : "USD";
+      const listingCurrency: Currency = effectivePayMode === "ngn" ? "NGN" : "USDC";
       const toNgn = (value: number) => {
-        if (priceBase === "NGN") return value;
+        if (!isNigeria) return NaN;
+        if (baseCurrency === "NGN") return value;
         if (!fxRate) throw new Error("Price feed unavailable. Try again.");
         return value * fxRate;
       };
       const toUsd = (value: number) => {
-        if (priceBase === "USD") return value;
+        if (baseCurrency === "USD") return value;
         if (!fxRate) throw new Error("Price feed unavailable. Try again.");
         return value / fxRate;
       };
       const enteredPriceNgn = toNgn(enteredPrice);
       const enteredPriceUsd = toUsd(enteredPrice);
+      const safeEnteredPriceNgn = Number.isFinite(enteredPriceNgn) ? Number(enteredPriceNgn.toFixed(2)) : null;
+      const safeEnteredPriceUsd = Number.isFinite(enteredPriceUsd) ? Number(enteredPriceUsd.toFixed(6)) : null;
       unitPrice = listingCurrency === "NGN" ? enteredPriceNgn : enteredPriceUsd;
       if (discountEnabled) {
         const op = safeNumber(discountOriginalPrice);
@@ -492,18 +560,20 @@ export default function SellTab() {
         const effectiveOriginalUsd = toUsd(op);
         const effectiveOriginal = listingCurrency === "NGN" ? effectiveOriginalNgn : effectiveOriginalUsd;
 
+        const safeDiscountedNgn = Number.isFinite(effectiveDiscountedNgn) ? Number(effectiveDiscountedNgn.toFixed(2)) : null;
+        const safeOriginalNgn = Number.isFinite(effectiveOriginalNgn) ? Number(effectiveOriginalNgn.toFixed(2)) : null;
         const paymentOptions = {
-          allow_ngn: payMode === "ngn" || payMode === "all",
-          allow_crypto: payMode === "crypto" || payMode === "all",
-          allow_usdc: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
-          allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
+          allow_ngn: isNigeria && (effectivePayMode === "ngn" || effectivePayMode === "all"),
+          allow_crypto: effectivePayMode === "crypto" || effectivePayMode === "all",
+          allow_usdc: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
+          allow_usdt: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
           chain_mode: cryptoNetworkMode,
           coin_mode: cryptoCoinMode,
-          base_currency: priceBase,
-          fx_rate_ngn_per_usd: fxRate ?? null,
+          base_currency: baseCurrency,
+          fx_rate_ngn_per_usd: isNigeria ? fxRate ?? null : null,
           price_book: {
-            ngn: Number(enteredPriceNgn.toFixed(2)),
-            usd: Number(enteredPriceUsd.toFixed(6)),
+            ngn: safeEnteredPriceNgn,
+            usd: safeEnteredPriceUsd,
           },
           discount: {
             enabled: true,
@@ -511,11 +581,11 @@ export default function SellTab() {
             originalPrice: Number(effectiveOriginal.toFixed(6)),
             discountedPrice: Number(effectiveDiscounted.toFixed(6)),
             // display + analytics
-            baseCurrency: priceBase,
+            baseCurrency: baseCurrency,
             originalPriceBase: op,
             discountedPriceBase: dp,
-            originalPriceNgn: Number(effectiveOriginalNgn.toFixed(2)),
-            discountedPriceNgn: Number(effectiveDiscountedNgn.toFixed(2)),
+            originalPriceNgn: safeOriginalNgn,
+            discountedPriceNgn: safeDiscountedNgn,
             originalPriceUsd: Number(effectiveOriginalUsd.toFixed(6)),
             discountedPriceUsd: Number(effectiveDiscountedUsd.toFixed(6)),
             startsAt: new Date().toISOString(),
@@ -533,17 +603,17 @@ export default function SellTab() {
         return;
       }
       const paymentOptions = {
-        allow_ngn: payMode === "ngn" || payMode === "all",
-        allow_crypto: payMode === "crypto" || payMode === "all",
-        allow_usdc: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
-        allow_usdt: (payMode === "crypto" || payMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
+        allow_ngn: isNigeria && (effectivePayMode === "ngn" || effectivePayMode === "all"),
+        allow_crypto: effectivePayMode === "crypto" || effectivePayMode === "all",
+        allow_usdc: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdc"),
+        allow_usdt: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
         chain_mode: cryptoNetworkMode,
         coin_mode: cryptoCoinMode,
-        base_currency: priceBase,
-        fx_rate_ngn_per_usd: fxRate ?? null,
+        base_currency: baseCurrency,
+        fx_rate_ngn_per_usd: isNigeria ? fxRate ?? null : null,
         price_book: {
-          ngn: Number(enteredPriceNgn.toFixed(2)),
-          usd: Number(enteredPriceUsd.toFixed(6)),
+          ngn: safeEnteredPriceNgn,
+          usd: safeEnteredPriceUsd,
         },
         discount: { enabled: false },
         expires_at: autoDeleteAt.trim() ? new Date(autoDeleteAt.trim()).toISOString() : null,
@@ -912,11 +982,22 @@ export default function SellTab() {
           <Input value={description} onChangeText={setDescription} placeholder="What the buyer gets, requirements, timeline..." multiline />
 
           <Label>Payment route</Label>
-          <Row>
-            <Pill active={payMode === "ngn"} label="NGN only" onPress={() => setPayMode("ngn")} />
-            <Pill active={payMode === "crypto"} label="Crypto only" onPress={() => setPayMode("crypto")} />
-            <Pill active={payMode === "all"} label="All" onPress={() => setPayMode("all")} />
-          </Row>
+          {isNigeria ? (
+            <Row>
+              <Pill active={payMode === "ngn"} label="NGN only" onPress={() => setPayMode("ngn")} />
+              <Pill active={payMode === "crypto"} label="Crypto only" onPress={() => setPayMode("crypto")} />
+              <Pill active={payMode === "all"} label="All" onPress={() => setPayMode("all")} />
+            </Row>
+          ) : (
+            <Row>
+              <Pill active label="Crypto only" onPress={() => setPayMode("crypto")} disabled />
+            </Row>
+          )}
+          {!isNigeria ? (
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              NGN checkout is available only for Nigeria-based accounts.
+            </Text>
+          ) : null}
 
           {(payMode === "crypto" || payMode === "all") ? (
             <>
@@ -936,16 +1017,26 @@ export default function SellTab() {
           ) : null}
 
           <Label>Price *</Label>
-          <Row>
-            <Pill active={priceBase === "NGN"} label="I enter NGN" onPress={() => setPriceBase("NGN")} />
-            <Pill active={priceBase === "USD"} label="I enter USD" onPress={() => setPriceBase("USD")} />
-          </Row>
+          {isNigeria ? (
+            <Row>
+              <Pill active={priceBase === "NGN"} label="I enter NGN" onPress={() => setPriceBase("NGN")} />
+              <Pill active={priceBase === "USD"} label="I enter USD" onPress={() => setPriceBase("USD")} />
+            </Row>
+          ) : (
+            <Row>
+              <Pill active label="I enter USD" onPress={() => setPriceBase("USD")} disabled />
+            </Row>
+          )}
           <Input value={price} onChangeText={setPrice} placeholder="e.g. 250000" keyboardType="numeric" />
           {Number.isFinite(safeNumber(price)) && safeNumber(price) > 0 ? (
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              {priceBase === "NGN"
-                ? `Approx USDC/USDT: ${fxRate ? (safeNumber(price) / fxRate).toFixed(2) : "..." }`
-                : `Approx NGN: ${fxRate ? (safeNumber(price) * fxRate).toFixed(0) : "..." }`}
+              {isNigeria ? (
+                priceBase === "NGN"
+                  ? `Approx USDC/USDT: ${fxRate ? (safeNumber(price) / fxRate).toFixed(2) : "..."}`
+                  : `Approx NGN: ${fxRate ? (safeNumber(price) * fxRate).toFixed(0) : "..."}`
+              ) : (
+                `Approx USDC/USDT: ${safeNumber(price).toFixed(2)}`
+              )}
             </Text>
           ) : null}
 
