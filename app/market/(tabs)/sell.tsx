@@ -13,6 +13,8 @@ import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { getCountryFx } from "@/utils/fx";
+import { formatCurrency } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -199,8 +201,10 @@ export default function SellTab() {
   const [cryptoCoinMode, setCryptoCoinMode] = useState<"all" | "usdc" | "usdt">("all");
   const [cryptoNetworkMode, setCryptoNetworkMode] = useState<"all" | "base_sepolia">("all");
   const [price, setPrice] = useState("");
-  const [priceBase, setPriceBase] = useState<"NGN" | "USD">("NGN");
-  const [fxRate, setFxRate] = useState<number | null>(null);
+  const [localCurrency, setLocalCurrency] = useState("NGN");
+  const [fxUsdToLocal, setFxUsdToLocal] = useState<number | null>(null);
+  const [fxUsdToNgn, setFxUsdToNgn] = useState<number | null>(null);
+  const [fxFetchedAt, setFxFetchedAt] = useState<string | null>(null);
   const [stockQty, setStockQty] = useState("");
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountOriginalPrice, setDiscountOriginalPrice] = useState("");
@@ -335,6 +339,13 @@ export default function SellTab() {
         const c = await resolveUserCountry({ prompt: true });
         if (!mounted) return;
         setUserCountry(c);
+        const fx = await getCountryFx(c);
+        if (!mounted) return;
+        setLocalCurrency(String(fx.localCurrency || "USD").toUpperCase());
+        setFxUsdToLocal(fx.usdToLocal);
+        setFxUsdToNgn(fx.usdToNgn);
+        setFxFetchedAt(fx.fetchedAt);
+
         if (c) {
           if (!availabilityCountryName && !availabilityCountryCode) {
             setAvailabilityCountryName(String(c.name || ""));
@@ -345,32 +356,18 @@ export default function SellTab() {
           }
           if (!isNigeriaCountry(c.code || c.name)) {
             setPayMode("crypto");
-            setPriceBase("USD");
+          } else {
+            setLocalCurrency("NGN");
           }
         }
       } catch {
-        if (mounted) setUserCountry(null);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=tether,usd-coin&vs_currencies=ngn",
-        );
-        const json = await res.json();
-        const usdc = Number(json?.["usd-coin"]?.ngn ?? 0);
-        const usdt = Number(json?.tether?.ngn ?? 0);
-        const avg = (usdc + usdt) / 2;
-        if (mounted && Number.isFinite(avg) && avg > 0) setFxRate(avg);
-      } catch {
-        if (mounted) setFxRate(null);
+        if (mounted) {
+          setUserCountry(null);
+          setLocalCurrency("USD");
+          setFxUsdToLocal(1);
+          setFxUsdToNgn(null);
+          setFxFetchedAt(null);
+        }
       }
     })();
     return () => {
@@ -527,41 +524,46 @@ export default function SellTab() {
       const user = auth?.user;
       if (!user) return router.replace("/(auth)/login" as any);
 
-      const enteredPrice = safeNumber(price);
-      let unitPrice = enteredPrice;
+      const enteredPriceLocal = safeNumber(price);
+      if (!Number.isFinite(enteredPriceLocal) || enteredPriceLocal <= 0) {
+        throw new Error("Enter a valid price.");
+      }
+      if (!fxUsdToLocal || fxUsdToLocal <= 0) {
+        throw new Error("FX is not ready. Please wait and try again.");
+      }
       const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
       const effectivePayMode = isNigeria ? payMode : "crypto";
-      const baseCurrency: "NGN" | "USD" = isNigeria ? priceBase : "USD";
+      const baseCurrency: "NGN" | "USD" = localCurrency === "NGN" ? "NGN" : "USD";
       const listingCurrency: Currency = effectivePayMode === "ngn" ? "NGN" : "USDC";
-      const toNgn = (value: number) => {
-        if (!isNigeria) return NaN;
-        if (baseCurrency === "NGN") return value;
-        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        return value * fxRate;
+      const toUsd = (valueLocal: number) => valueLocal / fxUsdToLocal;
+      const toNgn = (valueLocal: number) => {
+        if (localCurrency === "NGN") return valueLocal;
+        const usd = toUsd(valueLocal);
+        if (!fxUsdToNgn || fxUsdToNgn <= 0) return NaN;
+        return usd * fxUsdToNgn;
       };
-      const toUsd = (value: number) => {
-        if (baseCurrency === "USD") return value;
-        if (!fxRate) throw new Error("Price feed unavailable. Try again.");
-        return value / fxRate;
-      };
-      const enteredPriceNgn = toNgn(enteredPrice);
-      const enteredPriceUsd = toUsd(enteredPrice);
+
+      const enteredPriceUsd = toUsd(enteredPriceLocal);
+      const enteredPriceNgn = toNgn(enteredPriceLocal);
+      const safeEnteredPriceLocal = Number(enteredPriceLocal.toFixed(2));
       const safeEnteredPriceNgn = Number.isFinite(enteredPriceNgn) ? Number(enteredPriceNgn.toFixed(2)) : null;
       const safeEnteredPriceUsd = Number.isFinite(enteredPriceUsd) ? Number(enteredPriceUsd.toFixed(6)) : null;
-      unitPrice = listingCurrency === "NGN" ? enteredPriceNgn : enteredPriceUsd;
+      let unitPrice = listingCurrency === "NGN" ? enteredPriceNgn : enteredPriceUsd;
       if (discountEnabled) {
-        const op = safeNumber(discountOriginalPrice);
-        const dp = safeNumber(discountPrice);
-        const effectiveDiscountedNgn = toNgn(dp);
-        const effectiveDiscountedUsd = toUsd(dp);
+        const opLocal = safeNumber(discountOriginalPrice);
+        const dpLocal = safeNumber(discountPrice);
+        const effectiveDiscountedNgn = toNgn(dpLocal);
+        const effectiveDiscountedUsd = toUsd(dpLocal);
         const effectiveDiscounted = listingCurrency === "NGN" ? effectiveDiscountedNgn : effectiveDiscountedUsd;
         unitPrice = effectiveDiscounted;
-        const effectiveOriginalNgn = toNgn(op);
-        const effectiveOriginalUsd = toUsd(op);
+        const effectiveOriginalNgn = toNgn(opLocal);
+        const effectiveOriginalUsd = toUsd(opLocal);
         const effectiveOriginal = listingCurrency === "NGN" ? effectiveOriginalNgn : effectiveOriginalUsd;
 
         const safeDiscountedNgn = Number.isFinite(effectiveDiscountedNgn) ? Number(effectiveDiscountedNgn.toFixed(2)) : null;
         const safeOriginalNgn = Number.isFinite(effectiveOriginalNgn) ? Number(effectiveOriginalNgn.toFixed(2)) : null;
+        const safeDiscountedLocal = Number.isFinite(dpLocal) ? Number(dpLocal.toFixed(2)) : null;
+        const safeOriginalLocal = Number.isFinite(opLocal) ? Number(opLocal.toFixed(2)) : null;
         const paymentOptions = {
           allow_ngn: isNigeria && (effectivePayMode === "ngn" || effectivePayMode === "all"),
           allow_crypto: effectivePayMode === "crypto" || effectivePayMode === "all",
@@ -570,8 +572,19 @@ export default function SellTab() {
           chain_mode: cryptoNetworkMode,
           coin_mode: cryptoCoinMode,
           base_currency: baseCurrency,
-          fx_rate_ngn_per_usd: isNigeria ? fxRate ?? null : null,
+          fx_rate_ngn_per_usd: fxUsdToNgn ?? null,
+          fx: {
+            source: "open.er-api.com",
+            fetched_at: fxFetchedAt,
+            local_currency: localCurrency,
+            country_code: userCountry?.code ?? null,
+            usd_to_local: fxUsdToLocal,
+            local_to_usd: 1 / fxUsdToLocal,
+            usd_to_ngn: fxUsdToNgn ?? null,
+          },
           price_book: {
+            local_currency: localCurrency,
+            local: safeEnteredPriceLocal,
             ngn: safeEnteredPriceNgn,
             usd: safeEnteredPriceUsd,
           },
@@ -581,9 +594,10 @@ export default function SellTab() {
             originalPrice: Number(effectiveOriginal.toFixed(6)),
             discountedPrice: Number(effectiveDiscounted.toFixed(6)),
             // display + analytics
-            baseCurrency: baseCurrency,
-            originalPriceBase: op,
-            discountedPriceBase: dp,
+            baseCurrency,
+            localCurrency,
+            originalPriceLocal: safeOriginalLocal,
+            discountedPriceLocal: safeDiscountedLocal,
             originalPriceNgn: safeOriginalNgn,
             discountedPriceNgn: safeDiscountedNgn,
             originalPriceUsd: Number(effectiveOriginalUsd.toFixed(6)),
@@ -610,8 +624,19 @@ export default function SellTab() {
         chain_mode: cryptoNetworkMode,
         coin_mode: cryptoCoinMode,
         base_currency: baseCurrency,
-        fx_rate_ngn_per_usd: isNigeria ? fxRate ?? null : null,
+        fx_rate_ngn_per_usd: fxUsdToNgn ?? null,
+        fx: {
+          source: "open.er-api.com",
+          fetched_at: fxFetchedAt,
+          local_currency: localCurrency,
+          country_code: userCountry?.code ?? null,
+          usd_to_local: fxUsdToLocal,
+          local_to_usd: 1 / fxUsdToLocal,
+          usd_to_ngn: fxUsdToNgn ?? null,
+        },
         price_book: {
+          local_currency: localCurrency,
+          local: safeEnteredPriceLocal,
           ngn: safeEnteredPriceNgn,
           usd: safeEnteredPriceUsd,
         },
@@ -741,7 +766,7 @@ export default function SellTab() {
     setImages([]);
     setUseCustomSub(false);
     setCustomSub("");
-    setAvailabilityScope("global");
+    setAvailabilityScope("country");
     setAvailabilityContinents([]);
     setAvailabilityCountryName("");
     setAvailabilityCountryCode("");
@@ -754,6 +779,22 @@ export default function SellTab() {
 
     router.push("/market/(tabs)" as any);
   }
+
+  const liveLocalInput = safeNumber(price);
+  const liveUsdApprox =
+    Number.isFinite(liveLocalInput) && liveLocalInput > 0 && fxUsdToLocal && fxUsdToLocal > 0
+      ? liveLocalInput / fxUsdToLocal
+      : NaN;
+  const liveOriginalLocal = safeNumber(discountOriginalPrice);
+  const liveDiscountedLocal = safeNumber(discountPrice);
+  const liveOriginalUsd =
+    Number.isFinite(liveOriginalLocal) && liveOriginalLocal > 0 && fxUsdToLocal && fxUsdToLocal > 0
+      ? liveOriginalLocal / fxUsdToLocal
+      : NaN;
+  const liveDiscountedUsd =
+    Number.isFinite(liveDiscountedLocal) && liveDiscountedLocal > 0 && fxUsdToLocal && fxUsdToLocal > 0
+      ? liveDiscountedLocal / fxUsdToLocal
+      : NaN;
 
   if (checkingSeller) {
     return (
@@ -1017,26 +1058,18 @@ export default function SellTab() {
           ) : null}
 
           <Label>Price *</Label>
-          {isNigeria ? (
-            <Row>
-              <Pill active={priceBase === "NGN"} label="I enter NGN" onPress={() => setPriceBase("NGN")} />
-              <Pill active={priceBase === "USD"} label="I enter USD" onPress={() => setPriceBase("USD")} />
-            </Row>
-          ) : (
-            <Row>
-              <Pill active label="I enter USD" onPress={() => setPriceBase("USD")} disabled />
-            </Row>
-          )}
+          <Row>
+            <Pill active label={`I enter ${localCurrency}`} onPress={() => {}} disabled />
+          </Row>
           <Input value={price} onChangeText={setPrice} placeholder="e.g. 250000" keyboardType="numeric" />
-          {Number.isFinite(safeNumber(price)) && safeNumber(price) > 0 ? (
+          {Number.isFinite(liveLocalInput) && liveLocalInput > 0 ? (
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              {isNigeria ? (
-                priceBase === "NGN"
-                  ? `Approx USDC/USDT: ${fxRate ? (safeNumber(price) / fxRate).toFixed(2) : "..."}`
-                  : `Approx NGN: ${fxRate ? (safeNumber(price) * fxRate).toFixed(0) : "..."}`
-              ) : (
-                `Approx USDC/USDT: ${safeNumber(price).toFixed(2)}`
-              )}
+              {`Display: ${formatCurrency(localCurrency, liveLocalInput)} | Approx USD: ${formatCurrency("USD", liveUsdApprox)}`}
+            </Text>
+          ) : null}
+          {fxFetchedAt ? (
+            <Text style={{ marginTop: 6, color: MUTED, fontSize: 11 }}>
+              FX source: open.er-api.com ({new Date(fxFetchedAt).toLocaleString()})
             </Text>
           ) : null}
 
@@ -1051,6 +1084,16 @@ export default function SellTab() {
               <Input value={discountOriginalPrice} onChangeText={setDiscountOriginalPrice} placeholder="e.g. 50000" keyboardType="numeric" />
               <Label>Discounted price</Label>
               <Input value={discountPrice} onChangeText={setDiscountPrice} placeholder="e.g. 35000" keyboardType="numeric" />
+              {Number.isFinite(liveOriginalLocal) && liveOriginalLocal > 0 ? (
+                <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+                  Before: {formatCurrency(localCurrency, liveOriginalLocal)} | USD: {formatCurrency("USD", liveOriginalUsd)}
+                </Text>
+              ) : null}
+              {Number.isFinite(liveDiscountedLocal) && liveDiscountedLocal > 0 ? (
+                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
+                  After: {formatCurrency(localCurrency, liveDiscountedLocal)} | USD: {formatCurrency("USD", liveDiscountedUsd)}
+                </Text>
+              ) : null}
               <Label>Discount duration</Label>
               <View style={{ marginTop: 8, flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
                 <Chip label="No end" active={discountPreset === "none"} onPress={() => applyDiscountPreset("none")} />

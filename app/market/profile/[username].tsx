@@ -9,6 +9,7 @@ import SocialFeed from "@/components/market/SocialFeed";
 import { supabase } from "@/services/supabase";
 import { isNigeriaCountry, resolveUserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -732,6 +733,9 @@ export default function PublicSellerProfile() {
                 ) : (
                   <View style={{ marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
                     {listings.map((l) => (
+                      (() => {
+                        const dp = getListingPriceDisplay(l as any);
+                        return (
                       <Pressable
                         key={l.id}
                         onPress={() => router.push(`/market/listing/${l.id}` as any)}
@@ -750,8 +754,12 @@ export default function PublicSellerProfile() {
                         <View style={{ padding: 12 }}>
                           <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900" }}>{l.title || "Untitled"}</Text>
                           <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                            {l.currency || "NGN"}{" "}
-                            <Text style={{ color: "#fff", fontWeight: "900" }}>{Number(l.price_amount || 0).toLocaleString()}</Text>
+                            <Text style={{ color: "#fff", fontWeight: "900" }}>
+                              {formatCurrency(dp.localCurrency, dp.localNow)}
+                            </Text>
+                          </Text>
+                          <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                            USD {formatCurrency("USD", dp.usdNow)}
                           </Text>
 
                           <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -766,6 +774,8 @@ export default function PublicSellerProfile() {
                           </View>
                         </View>
                       </Pressable>
+                        );
+                      })()
                     ))}
                   </View>
                 )}

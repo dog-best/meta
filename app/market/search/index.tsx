@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "@/services/supabase";
 import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -46,13 +47,6 @@ type Listing = {
     sort_order: number | null;
   }> | null;
 };
-
-function money(currency: string | null, amt: any) {
-  const n = Number(amt ?? 0);
-  if (currency === "USDC") return `$${n.toLocaleString()}`;
-  // default NGN
-  return `₦${n.toLocaleString()}`;
-}
 
 function pickCoverUrl(
   imgs: Listing["market_listing_images"],
@@ -285,6 +279,7 @@ export default function MarketSearchScreen() {
           <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
             {rows.map((r) => {
               const cover = pickCoverUrl(r.market_listing_images ?? null, supabaseUrl);
+              const dp = getListingPriceDisplay(r as any);
               return (
                 <Pressable
                   key={r.id}
@@ -315,11 +310,11 @@ export default function MarketSearchScreen() {
 
                     <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
                       <Text style={{ color: "#fff", fontWeight: "900" }}>
-                        {money(r.currency, r.price_amount)}
+                        {formatCurrency(dp.localCurrency, dp.localNow)}
                       </Text>
                       {"  "}
                       <Text style={{ color: "rgba(255,255,255,0.55)" }}>
-                        • {r.delivery_type ?? "—"}
+                        USD {formatCurrency("USD", dp.usdNow)} - {r.delivery_type ?? "-"}
                       </Text>
                     </Text>
                   </View>

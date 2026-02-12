@@ -21,6 +21,7 @@ import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
+import { formatCurrency, getListingPriceDisplay, isDiscountActive } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -88,62 +89,6 @@ type Seller = {
   banner_path: string | null;
   is_verified: boolean | null;
 };
-
-function money(currency: string | null, amt: any) {
-  const n = Number(amt ?? 0);
-  if (currency === "USDC") return `$${n.toLocaleString()}`;
-  return `NGN ${n.toLocaleString()}`;
-}
-
-function moneyByDisplay(currency: "NGN" | "USDC", amt: any) {
-  const n = Number(amt ?? 0);
-  if (!Number.isFinite(n)) return currency === "USDC" ? "$0" : "NGN 0";
-  return currency === "USDC" ? `$${n.toLocaleString()}` : `NGN ${n.toLocaleString()}`;
-}
-
-function isDiscountActive(discount: any) {
-  if (!discount?.enabled) return false;
-  if (!discount?.endsAt) return true;
-  const end = new Date(String(discount.endsAt)).getTime();
-  return Number.isFinite(end) ? end > Date.now() : true;
-}
-
-function resolveDisplayPrice(listing: Listing) {
-  const po = (listing.payment_options ?? {}) as any;
-  const discount = po?.discount ?? {};
-  const fx = Number(po?.fx_rate_ngn_per_usd ?? 0);
-  const baseCurrency: "NGN" | "USDC" = po?.base_currency === "USD" ? "USDC" : "NGN";
-  const pbNgn = Number(po?.price_book?.ngn ?? NaN);
-  const pbUsd = Number(po?.price_book?.usd ?? NaN);
-  const itemCurrency = String(listing.currency ?? "").toUpperCase() === "NGN" ? "NGN" : "USDC";
-  const canonical = Number(listing.price_amount ?? 0);
-  const discountOn = isDiscountActive(discount);
-
-  const nowBase = baseCurrency === "NGN"
-    ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
-    : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
-  const wasBase = baseCurrency === "NGN"
-    ? Number(discount?.originalPriceNgn)
-    : Number(discount?.originalPriceUsd);
-
-  const fallbackNow = baseCurrency === "NGN"
-    ? itemCurrency === "NGN"
-      ? canonical
-      : Number.isFinite(fx) && fx > 0 ? canonical * fx : NaN
-    : itemCurrency === "USDC"
-      ? canonical
-      : Number.isFinite(fx) && fx > 0 ? canonical / fx : NaN;
-
-  const now = Number.isFinite(nowBase) && nowBase > 0 ? nowBase : fallbackNow;
-  const was = Number.isFinite(wasBase) && wasBase > 0 ? wasBase : NaN;
-
-  const altCurrency: "NGN" | "USDC" = baseCurrency === "NGN" ? "USDC" : "NGN";
-  const altNow = altCurrency === "NGN"
-    ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
-    : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
-
-  return { baseCurrency, now, was, altCurrency, altNow, discountOn };
-}
 
 
 function previewKind(k: string): "image" | "audio" | "video" | "file" | "link" {
@@ -533,8 +478,8 @@ export default function ListingDetails() {
   const availabilitySummary = formatAvailabilitySummary((listing as any)?.availability);
   const recentComments = comments.slice(0, 4);
   const showSeeMore = commentCount > 4;
-  const displayPrice = resolveDisplayPrice(listing);
-  const showDiscount = displayPrice.discountOn && Number.isFinite(displayPrice.was) && displayPrice.was > displayPrice.now;
+  const displayPrice = getListingPriceDisplay(listing as any);
+  const showDiscount = displayPrice.hasDiscount;
 
   return (
     <LinearGradient
@@ -620,27 +565,37 @@ export default function ListingDetails() {
             Price
           </Text>
           {showDiscount ? (
-            <Text
-              style={{
-                marginTop: 6,
-                color: "rgba(255,255,255,0.6)",
-                fontWeight: "800",
-                fontSize: 13,
-                textDecorationLine: "line-through",
-              }}
-            >
-              {moneyByDisplay(displayPrice.baseCurrency, displayPrice.was)}
-            </Text>
+            <>
+              <Text
+                style={{
+                  marginTop: 6,
+                  color: "rgba(255,255,255,0.6)",
+                  fontWeight: "800",
+                  fontSize: 13,
+                  textDecorationLine: "line-through",
+                }}
+              >
+                {formatCurrency(displayPrice.localCurrency, displayPrice.localWas)}
+              </Text>
+              <Text
+                style={{
+                  marginTop: 4,
+                  color: "rgba(255,255,255,0.55)",
+                  fontWeight: "800",
+                  fontSize: 12,
+                  textDecorationLine: "line-through",
+                }}
+              >
+                USD {formatCurrency("USD", displayPrice.usdWas)}
+              </Text>
+            </>
           ) : null}
           <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 28 }}>
-            {moneyByDisplay(displayPrice.baseCurrency, displayPrice.now)}
+            {formatCurrency(displayPrice.localCurrency, displayPrice.localNow)}
           </Text>
-          {Number.isFinite(displayPrice.altNow) ? (
-            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontWeight: "800", fontSize: 12 }}>
-              {displayPrice.altCurrency === "USDC" ? "Approx " : ""}
-              {moneyByDisplay(displayPrice.altCurrency, displayPrice.altNow)}
-            </Text>
-          ) : null}
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontWeight: "800", fontSize: 12 }}>
+            USD {formatCurrency("USD", displayPrice.usdNow)}
+          </Text>
 
           {listing.stock_qty !== null && listing.category === "product" ? (
             <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>

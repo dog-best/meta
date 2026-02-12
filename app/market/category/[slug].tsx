@@ -9,6 +9,7 @@ import { getCategoryBySlug } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -237,17 +238,24 @@ export default function CategoryFeed() {
                     )}
                   </View>
 
-                  <View style={{ padding: 12 }}>
+              <View style={{ padding: 12 }}>
+                    {(() => {
+                      const dp = getListingPriceDisplay(r as any);
+                      return (
+                        <>
                     <Text numberOfLines={1} style={{ color: "#fff", fontWeight: "900" }}>
                       {r.title ?? "Untitled"}
                     </Text>
 
                     <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-                      {r.currency ?? "NGN"}{" "}
-                      <Text style={{ color: "#fff", fontWeight: "900" }}>
-                        {Number(r.price_amount ?? 0).toLocaleString()}
-                      </Text>
+                      {formatCurrency(dp.localCurrency, dp.localNow)}
                     </Text>
+                    <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                      USD {formatCurrency("USD", dp.usdNow)}
+                    </Text>
+                        </>
+                      );
+                    })()}
                   </View>
                 </Pressable>
               );

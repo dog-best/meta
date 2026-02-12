@@ -22,6 +22,7 @@ import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -65,78 +66,6 @@ type SellerCard = {
   featured_enabled?: boolean | null;
   featured_until?: string | null;
 };
-
-function money(currency: string | null, amt: any) {
-  const n = Number(amt ?? 0);
-  const c = (currency ?? "NGN").toUpperCase();
-  if (c === "USDC" || c === "USDT") return `$${n.toLocaleString()}`;
-  return `NGN ${n.toLocaleString()}`;
-}
-
-function moneyByDisplay(currency: "NGN" | "USDC", amt: any) {
-  const n = Number(amt ?? 0);
-  if (!Number.isFinite(n)) return currency === "USDC" ? "$0" : "NGN 0";
-  return currency === "USDC" ? `$${n.toLocaleString()}` : `NGN ${n.toLocaleString()}`;
-}
-
-function isDiscountActive(discount: any) {
-  if (!discount?.enabled) return false;
-  if (!discount?.endsAt) return true;
-  const end = new Date(String(discount.endsAt)).getTime();
-  return Number.isFinite(end) ? end > Date.now() : true;
-}
-
-function resolveListingDisplayPrice(item: ListingRow) {
-  const po = (item.payment_options ?? {}) as any;
-  const discount = po?.discount ?? {};
-  const fx = Number(po?.fx_rate_ngn_per_usd ?? 0);
-  const baseCurrency: "NGN" | "USDC" = po?.base_currency === "USD" ? "USDC" : "NGN";
-  const pbNgn = Number(po?.price_book?.ngn ?? NaN);
-  const pbUsd = Number(po?.price_book?.usd ?? NaN);
-  const canonical = Number(item.price_amount ?? 0);
-  const itemCurrency = String(item.currency ?? "").toUpperCase() === "NGN" ? "NGN" : "USDC";
-  const discountOn = isDiscountActive(discount);
-
-  const nowBase =
-    baseCurrency === "NGN"
-      ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
-      : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
-  const wasBase =
-    baseCurrency === "NGN"
-      ? Number(discount?.originalPriceNgn)
-      : Number(discount?.originalPriceUsd);
-
-  const fallbackNowBase =
-    baseCurrency === "NGN"
-      ? itemCurrency === "NGN"
-        ? canonical
-        : Number.isFinite(fx) && fx > 0
-          ? canonical * fx
-          : NaN
-      : itemCurrency === "USDC"
-        ? canonical
-        : Number.isFinite(fx) && fx > 0
-          ? canonical / fx
-          : NaN;
-
-  const now = Number.isFinite(nowBase) && nowBase > 0 ? nowBase : fallbackNowBase;
-  const was = Number.isFinite(wasBase) && wasBase > 0 ? wasBase : NaN;
-
-  const altCurrency: "NGN" | "USDC" = baseCurrency === "NGN" ? "USDC" : "NGN";
-  const altNow =
-    altCurrency === "NGN"
-      ? Number(discountOn ? discount?.discountedPriceNgn : pbNgn)
-      : Number(discountOn ? discount?.discountedPriceUsd : pbUsd);
-
-  return {
-    baseCurrency,
-    now,
-    was,
-    altCurrency,
-    altNow,
-    discountOn,
-  };
-}
 
 function publicSellerLogo(path?: string | null) {
   if (!path) return null;
@@ -394,8 +323,8 @@ export default function MarketHome() {
     const coverUrl = item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
     const seller = sellersMap[item.seller_id];
     const stats = statsMap[item.id] ?? { completed: 0, cancelled: 0, failed: 0 };
-    const displayPrice = resolveListingDisplayPrice(item);
-    const showDiscount = displayPrice.discountOn && Number.isFinite(displayPrice.was) && displayPrice.was > displayPrice.now;
+    const displayPrice = getListingPriceDisplay(item as any);
+    const showDiscount = displayPrice.hasDiscount;
 
     const isOutOfStock = item.category === "product" && typeof item.stock_qty === "number" && item.stock_qty <= 0;
 
@@ -411,29 +340,26 @@ export default function MarketHome() {
               {showDiscount ? (
                 <>
                   <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 11 }}>
-                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.was)}
+                    {formatCurrency(displayPrice.localCurrency, displayPrice.localWas)}
+                  </Text>
+                  <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 10 }}>
+                    USD {formatCurrency("USD", displayPrice.usdWas)}
                   </Text>
                   <Text style={{ color: "#FCA5A5", fontWeight: "900", fontSize: 12 }}>
-                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.now)}
+                    {formatCurrency(displayPrice.localCurrency, displayPrice.localNow)}
                   </Text>
-                  {Number.isFinite(displayPrice.altNow) && (
-                    <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
-                      {displayPrice.altCurrency === "USDC" ? "Approx " : ""}
-                      {moneyByDisplay(displayPrice.altCurrency, displayPrice.altNow)}
-                    </Text>
-                  )}
+                  <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                    USD {formatCurrency("USD", displayPrice.usdNow)}
+                  </Text>
                 </>
               ) : (
                 <>
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                    {moneyByDisplay(displayPrice.baseCurrency, displayPrice.now)}
+                    {formatCurrency(displayPrice.localCurrency, displayPrice.localNow)}
                   </Text>
-                  {Number.isFinite(displayPrice.altNow) && (
-                    <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
-                      {displayPrice.altCurrency === "USDC" ? "Approx " : ""}
-                      {moneyByDisplay(displayPrice.altCurrency, displayPrice.altNow)}
-                    </Text>
-                  )}
+                  <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                    USD {formatCurrency("USD", displayPrice.usdNow)}
+                  </Text>
                 </>
               )}
             </View>
@@ -591,7 +517,7 @@ export default function MarketHome() {
                   </View>
                 ) : err ? (
                   <View style={{ marginTop: 14, borderRadius: 16, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
-                    <Text style={{ color: "#fff", fontWeight: "900" }}>Couldn't load data</Text>
+                    <Text style={{ color: "#fff", fontWeight: "900" }}>Couldn&apos;t load data</Text>
                     <Text style={{ marginTop: 6, color: MUTED }}>{err}</Text>
                   </View>
                 ) : null}

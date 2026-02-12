@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -49,6 +50,7 @@ type Listing = {
   description: string | null;
   price_amount: number | string;
   currency: string;
+  payment_options?: any;
   delivery_type: string;
   stock_qty: number | null;
   is_active: boolean;
@@ -66,12 +68,6 @@ type FilterTab = "all" | "product" | "service";
 type SortBy = "newest" | "price_low" | "price_high";
 type ActiveFilter = "all" | "active" | "disabled";
 type Mode = "mine" | "seller" | "invalid";
-
-function money(currency: string | null, amt: any) {
-  const n = Number(amt ?? 0);
-  if ((currency ?? "").toUpperCase() === "USDC") return `$${n.toLocaleString()}`;
-  return `₦${n.toLocaleString()}`;
-}
 
 function sortImages(imgs: ListingImage[] | null | undefined) {
   if (!imgs?.length) return [];
@@ -267,7 +263,7 @@ export default function ListingsFeed() {
           .from(LISTINGS_TABLE)
           .select(
             `
-            id,seller_id,category,sub_category,title,description,price_amount,currency,delivery_type,stock_qty,is_active,created_at,updated_at,cover_image_id,website_url,deleted_at,
+            id,seller_id,category,sub_category,title,description,price_amount,currency,payment_options,delivery_type,stock_qty,is_active,created_at,updated_at,cover_image_id,website_url,deleted_at,
             cover_image:${IMAGES_TABLE}!market_listings_cover_image_fk(*),
             images:${IMAGES_TABLE}!market_listing_images_listing_id_fkey(*)
           `,
@@ -695,6 +691,8 @@ export default function ListingsFeed() {
     ({ item }: { item: Listing }) => {
       const cover = pickCoverUrl(item, supabaseUrl);
       const busy = busyId === item.id;
+      const displayPrice = getListingPriceDisplay(item as any);
+      const showDiscount = displayPrice.hasDiscount;
 
       const statusBg = item.is_active ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.16)";
       const statusBd = item.is_active ? "rgba(16,185,129,0.35)" : "rgba(239,68,68,0.35)";
@@ -732,9 +730,31 @@ export default function ListingsFeed() {
                     borderColor: "rgba(255,255,255,0.10)",
                   }}
                 >
-                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                    {money(item.currency, item.price_amount)}
-                  </Text>
+                  {showDiscount ? (
+                    <>
+                      <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 11 }}>
+                        {formatCurrency(displayPrice.localCurrency, displayPrice.localWas)}
+                      </Text>
+                      <Text style={{ color: "rgba(255,255,255,0.65)", textDecorationLine: "line-through", fontWeight: "800", fontSize: 10 }}>
+                        USD {formatCurrency("USD", displayPrice.usdWas)}
+                      </Text>
+                      <Text style={{ color: "#FCA5A5", fontWeight: "900", fontSize: 12 }}>
+                        {formatCurrency(displayPrice.localCurrency, displayPrice.localNow)}
+                      </Text>
+                      <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                        USD {formatCurrency("USD", displayPrice.usdNow)}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                        {formatCurrency(displayPrice.localCurrency, displayPrice.localNow)}
+                      </Text>
+                      <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 10 }}>
+                        USD {formatCurrency("USD", displayPrice.usdNow)}
+                      </Text>
+                    </>
+                  )}
                 </View>
               </View>
 
@@ -762,8 +782,8 @@ export default function ListingsFeed() {
               </Text>
 
               <Text numberOfLines={1} style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-                {item.sub_category ?? "—"}
-                {item.delivery_type ? ` • ${item.delivery_type}` : ""}
+                {item.sub_category ?? "-"}
+                {item.delivery_type ? ` - ${item.delivery_type}` : ""}
               </Text>
 
               <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
