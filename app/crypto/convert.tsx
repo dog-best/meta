@@ -1,7 +1,7 @@
 import ConfirmPurchaseModal from "@/components/common/confirmpurchase";
 import { useCrypto } from "@/services/crypto/useCrypto";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
-import { router } from "expo-router";
+import { Redirect } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -65,20 +65,7 @@ export default function CryptoConvert() {
   }
 
   if (!isNigeria) {
-    return (
-      <View className="flex-1 bg-white p-4 gap-4">
-        <Text className="text-xl font-semibold">Convert Crypto to NGN</Text>
-        <Text className="text-gray-500">
-          This feature is available only for Nigeria users.
-        </Text>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          className="bg-black rounded-xl p-4"
-        >
-          <Text className="text-white text-center font-medium">Go Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
+    return <Redirect href="/crypto" />;
   }
 
   return (

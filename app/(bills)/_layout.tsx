@@ -9,6 +9,9 @@ export default function BillsLayout() {
 
   useEffect(() => {
     let mounted = true;
+    const fallback = setTimeout(() => {
+      if (mounted) setUserCountry(null);
+    }, 4000);
     (async () => {
       try {
         const c = await resolveUserCountry({ prompt: true });
@@ -16,9 +19,11 @@ export default function BillsLayout() {
       } catch {
         if (mounted) setUserCountry(null);
       }
+      clearTimeout(fallback);
     })();
     return () => {
       mounted = false;
+      clearTimeout(fallback);
     };
   }, []);
 

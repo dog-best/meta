@@ -31,8 +31,30 @@ export default function ProfileRoute() {
   const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     (async () => {
       if (!user?.id) return;
+      if (userCountry === undefined) return;
+      if (!isNigeria) {
+        setVa(null);
+        setVaErr(null);
+        setVaLoading(false);
+        return;
+      }
       setVaLoading(true);
       setVaErr(null);
       const res = await supabase
@@ -49,22 +71,7 @@ export default function ProfileRoute() {
       }
       setVaLoading(false);
     })();
-  }, [user?.id]);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const c = await resolveUserCountry({ prompt: true });
-        if (mounted) setUserCountry(c);
-      } catch {
-        if (mounted) setUserCountry(null);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  }, [user?.id, isNigeria, userCountry]);
 
   const name = profile?.full_name || profile?.username || "Account";
   const email = profile?.email || user?.email || "-";
