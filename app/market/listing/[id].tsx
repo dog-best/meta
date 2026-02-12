@@ -22,6 +22,7 @@ import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode }
 import { friendlyMarketError } from "@/utils/marketUx";
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
 import { formatCurrency, getListingPriceDisplay, isDiscountActive } from "@/utils/pricing";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -141,6 +142,7 @@ export default function ListingDetails() {
   const [showAllComments, setShowAllComments] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<PreviewPayload | null>(null);
+  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
 
   const supabaseUrl =
     (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
@@ -150,6 +152,21 @@ export default function ListingDetails() {
       const { data } = await supabase.auth.getUser();
       setMeId(data?.user?.id ?? null);
     })();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -369,6 +386,28 @@ export default function ListingDetails() {
         return;
       }
       if (!listing) return;
+      let effectiveCountry = userCountry;
+      if (effectiveCountry === undefined) {
+        effectiveCountry = await resolveUserCountry({ prompt: true }).catch(() => null);
+        setUserCountry(effectiveCountry);
+      }
+      const effectiveIsNigeria = isNigeriaCountry(effectiveCountry?.code || effectiveCountry?.name);
+      const paymentOptions = (listing.payment_options ?? {}) as any;
+      const hasExplicitRoutes =
+        typeof paymentOptions?.allow_ngn === "boolean" ||
+        typeof paymentOptions?.allow_usdc === "boolean" ||
+        typeof paymentOptions?.allow_usdt === "boolean";
+      const listingCurrency = String(listing.currency ?? "").toUpperCase();
+      const allowUsdc = hasExplicitRoutes
+        ? paymentOptions?.allow_usdc === true
+        : listingCurrency === "USDC";
+      const allowUsdt = hasExplicitRoutes
+        ? paymentOptions?.allow_usdt === true
+        : listingCurrency === "USDT";
+      if (!effectiveIsNigeria && !allowUsdc && !allowUsdt) {
+        Alert.alert("Crypto only", "This listing does not support USDC/USDT checkout for your region.");
+        return;
+      }
 
       const needsLocation = String(listing.delivery_type ?? "").toLowerCase() !== "digital";
       const finalDeliveryGeo =

@@ -1,5 +1,7 @@
 import ConfirmPurchaseModal from "@/components/common/confirmpurchase";
 import { useCrypto } from "@/services/crypto/useCrypto";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +21,23 @@ export default function CryptoConvert() {
   const [asset, setAsset] = useState<Asset>("USDT");
   const [amount, setAmount] = useState("");
   const [confirmVisible, setConfirmVisible] = useState(false);
+  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const canContinue = useMemo(() => {
     const n = Number(amount);
@@ -35,6 +54,32 @@ export default function CryptoConvert() {
       Alert.alert("Failed", e?.message ?? "Conversion failed.");
     }
   };
+
+  if (userCountry === undefined) {
+    return (
+      <View className="flex-1 bg-white p-4 gap-4">
+        <Text className="text-xl font-semibold">Convert Crypto to NGN</Text>
+        <View className="py-3"><ActivityIndicator /></View>
+      </View>
+    );
+  }
+
+  if (!isNigeria) {
+    return (
+      <View className="flex-1 bg-white p-4 gap-4">
+        <Text className="text-xl font-semibold">Convert Crypto to NGN</Text>
+        <Text className="text-gray-500">
+          This feature is available only for Nigeria users.
+        </Text>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          className="bg-black rounded-xl p-4"
+        >
+          <Text className="text-white text-center font-medium">Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View className="flex-1 bg-white p-4 gap-4">

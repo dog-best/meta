@@ -8,6 +8,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useAuth } from "@/hooks/authentication/useAuth";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const PURPLE = "#7C3AED";
 const BG0 = "#05040B";
@@ -26,6 +27,8 @@ export default function ProfileRoute() {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [publicName, setPublicName] = useState("");
+  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
 
   useEffect(() => {
     (async () => {
@@ -47,6 +50,21 @@ export default function ProfileRoute() {
       setVaLoading(false);
     })();
   }, [user?.id]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const name = profile?.full_name || profile?.username || "Account";
   const email = profile?.email || user?.email || "-";
@@ -128,7 +146,12 @@ export default function ProfileRoute() {
     <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title}>Profile</Text>
-        <Pressable style={styles.iconBtn} onPress={() => router.push("./wallet")}>
+        <Pressable
+          style={styles.iconBtn}
+          onPress={() =>
+            router.push({ pathname: "./wallet", params: { action: isNigeria ? "history" : "crypto" } } as any)
+          }
+        >
           <Ionicons name="wallet-outline" size={20} color="#fff" />
         </Pressable>
       </View>
@@ -140,18 +163,32 @@ export default function ProfileRoute() {
         <Text style={styles.line}>{email}</Text>
         <Text style={styles.line}>UID: {uid}</Text>
 
-        <View style={styles.divider} />
-
-        <Text style={styles.section}>Virtual Account</Text>
-        <Text style={styles.line}>
-          {vaLoading
-            ? "Loading virtual account..."
-            : va?.account_number
-            ? `${va.account_number} - ${va.bank_name}`
-            : vaErr
-            ? "Unable to load virtual account"
-            : "Not available yet (Paystack DVA disabled)"}
-        </Text>
+        {userCountry === undefined ? (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.line}>Checking region settings...</Text>
+          </>
+        ) : isNigeria ? (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.section}>Virtual Account</Text>
+            <Text style={styles.line}>
+              {vaLoading
+                ? "Loading virtual account..."
+                : va?.account_number
+                ? `${va.account_number} - ${va.bank_name}`
+                : vaErr
+                ? "Unable to load virtual account"
+                : "Not available yet (Paystack DVA disabled)"}
+            </Text>
+          </>
+        ) : (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.section}>Region Access</Text>
+            <Text style={styles.line}>You are on crypto-only mode outside Nigeria.</Text>
+          </>
+        )}
       </View>
 
       <View style={styles.card}>
@@ -205,8 +242,13 @@ export default function ProfileRoute() {
       <View style={styles.card}>
         <Text style={styles.section}>Account</Text>
 
-        <Pressable style={styles.row} onPress={() => router.push({ pathname: "./wallet", params: { action: "history" } })}>
-          <Text style={styles.rowText}>Wallet history</Text>
+        <Pressable
+          style={styles.row}
+          onPress={() =>
+            router.push({ pathname: "./wallet", params: { action: isNigeria ? "history" : "crypto" } } as any)
+          }
+        >
+          <Text style={styles.rowText}>{isNigeria ? "Wallet history" : "Crypto wallet"}</Text>
           <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
         </Pressable>
 

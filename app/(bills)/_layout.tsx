@@ -1,7 +1,30 @@
 // app/(bills)/_layout.tsx
-import { Stack } from "expo-router";
+import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { Redirect, Stack } from "expo-router";
+import React, { useEffect, useState } from "react";
 
 export default function BillsLayout() {
+  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
+  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const c = await resolveUserCountry({ prompt: true });
+        if (mounted) setUserCountry(c);
+      } catch {
+        if (mounted) setUserCountry(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (userCountry === undefined) return null;
+  if (!isNigeria) return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="electricity" />
