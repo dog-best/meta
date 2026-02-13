@@ -93,7 +93,7 @@ export default function MarketSearchScreen() {
       }
 
       const userCountry = await resolveUserCountry({ prompt: true });
-      const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
+      const restrictToCrypto = !isNigeriaCountry(userCountry?.code || userCountry?.name);
       // ✅ Search by title / description / sub_category
       // If you later add FTS, we replace this with a proper text search.
       const { data, error } = await supabase
@@ -118,7 +118,9 @@ export default function MarketSearchScreen() {
       if (error) throw new Error(error.message);
 
       const items = ((data as any) ?? []) as Listing[];
-      const scoped = items.filter((r) => listingMatchesCountry((r as any).availability, userCountry, false));
+      const scoped = userCountry
+        ? items.filter((r) => listingMatchesCountry((r as any).availability, userCountry, false))
+        : items;
       const filtered = restrictToCrypto ? scoped.filter((r) => listingAllowsCrypto(r)) : scoped;
       setRows(filtered);
     } catch (e: any) {

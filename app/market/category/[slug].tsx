@@ -58,7 +58,7 @@ export default function CategoryFeed() {
         // ✅ Correct: join cover image via FK:
         // market_listings.cover_image_id -> market_listing_images.id
         const userCountry = await resolveUserCountry({ prompt: true });
-        const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
+        const restrictToCrypto = !isNigeriaCountry(userCountry?.code || userCountry?.name);
         const { data, error } = await supabase
           .from(LISTINGS_TABLE)
           .select(
@@ -88,7 +88,9 @@ export default function CategoryFeed() {
 
         if (mounted) {
           const items = ((data as any) ?? []) as ListingRow[];
-          const scoped = items.filter((r) => listingMatchesCountry(r.availability, userCountry, false));
+          const scoped = userCountry
+            ? items.filter((r) => listingMatchesCountry(r.availability, userCountry, false))
+            : items;
           const filtered = restrictToCrypto ? scoped.filter((r) => listingAllowsCrypto(r)) : scoped;
           setRows(filtered);
         }

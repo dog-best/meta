@@ -4,11 +4,33 @@ import { getCurrentLocationWithGeocode } from "@/utils/location";
 
 const KEY_COUNTRY_CODE = "bc_user_country_code_v1";
 const KEY_COUNTRY_NAME = "bc_user_country_name_v1";
+const KEY_COUNTRY_REGION = "bc_user_country_region_v1";
+const KEY_COUNTRY_CITY = "bc_user_country_city_v1";
+const KEY_COUNTRY_CONTINENT = "bc_user_country_continent_v1";
+const KEY_COUNTRY_LAT = "bc_user_country_lat_v1";
+const KEY_COUNTRY_LNG = "bc_user_country_lng_v1";
 
-export type UserCountry = { code: string; name: string } | null;
+type CountryResolveResponse = Array<{ region?: string }>;
+
+export type UserCountry = {
+  code: string;
+  name: string;
+  region?: string;
+  city?: string;
+  continent?: string;
+  lat?: number;
+  lng?: number;
+} | null;
+
+const continentByCodeCache = new Map<string, string>();
 
 function norm(val?: string | null) {
   return String(val || "").trim();
+}
+
+function toNum(val?: string | null) {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : NaN;
 }
 
 export function isNigeriaCountry(codeOrName?: string | null) {
@@ -16,29 +38,89 @@ export function isNigeriaCountry(codeOrName?: string | null) {
   return v === "ng" || v === "nigeria";
 }
 
+async function resolveContinentByCountryCode(code?: string | null) {
+  const cc = norm(code).toUpperCase();
+  if (!cc) return "";
+  if (continentByCodeCache.has(cc)) return continentByCodeCache.get(cc) || "";
+
+  try {
+    const res = await fetch(`https://restcountries.com/v3.1/alpha/${cc}?fields=region`);
+    if (!res.ok) throw new Error("country-region lookup failed");
+    const rows = (await res.json()) as CountryResolveResponse;
+    const continent = norm(rows?.[0]?.region);
+    continentByCodeCache.set(cc, continent);
+    return continent;
+  } catch {
+    return "";
+  }
+}
+
 export async function getCachedCountry(): Promise<UserCountry> {
   const code = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CODE));
   const name = norm(await SecureStore.getItemAsync(KEY_COUNTRY_NAME));
+  const region = norm(await SecureStore.getItemAsync(KEY_COUNTRY_REGION));
+  const city = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CITY));
+  const continent = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CONTINENT));
+  const lat = toNum(await SecureStore.getItemAsync(KEY_COUNTRY_LAT));
+  const lng = toNum(await SecureStore.getItemAsync(KEY_COUNTRY_LNG));
+
   if (code || name) {
-    return { code, name };
+    return {
+      code,
+      name,
+      region,
+      city,
+      continent,
+      lat: Number.isFinite(lat) ? lat : undefined,
+      lng: Number.isFinite(lng) ? lng : undefined,
+    };
   }
   return null;
 }
 
-export async function setCachedCountry(code?: string | null, name?: string | null) {
+export async function setCachedCountry(
+  code?: string | null,
+  name?: string | null,
+  extras?: Partial<NonNullable<UserCountry>>
+) {
   const c = norm(code).toUpperCase();
   const n = norm(name);
+  const region = norm(extras?.region);
+  const city = norm(extras?.city);
+  const continent = norm(extras?.continent);
+  const lat = Number(extras?.lat);
+  const lng = Number(extras?.lng);
+
   if (c) await SecureStore.setItemAsync(KEY_COUNTRY_CODE, c);
   if (n) await SecureStore.setItemAsync(KEY_COUNTRY_NAME, n);
+  if (region) await SecureStore.setItemAsync(KEY_COUNTRY_REGION, region);
+  if (city) await SecureStore.setItemAsync(KEY_COUNTRY_CITY, city);
+  if (continent) await SecureStore.setItemAsync(KEY_COUNTRY_CONTINENT, continent);
+  if (Number.isFinite(lat)) await SecureStore.setItemAsync(KEY_COUNTRY_LAT, String(lat));
+  if (Number.isFinite(lng)) await SecureStore.setItemAsync(KEY_COUNTRY_LNG, String(lng));
   if (!c && !n) {
     await SecureStore.deleteItemAsync(KEY_COUNTRY_CODE);
     await SecureStore.deleteItemAsync(KEY_COUNTRY_NAME);
+    await SecureStore.deleteItemAsync(KEY_COUNTRY_REGION);
+    await SecureStore.deleteItemAsync(KEY_COUNTRY_CITY);
+    await SecureStore.deleteItemAsync(KEY_COUNTRY_CONTINENT);
+    await SecureStore.deleteItemAsync(KEY_COUNTRY_LAT);
+    await SecureStore.deleteItemAsync(KEY_COUNTRY_LNG);
   }
 }
 
 export async function resolveUserCountry(opts?: { prompt?: boolean }) {
   const cached = await getCachedCountry();
-  if (cached) return cached;
+  if (cached) {
+    if (!norm(cached.continent) && norm(cached.code)) {
+      const continent = await resolveContinentByCountryCode(cached.code);
+      if (continent) {
+        await setCachedCountry(cached.code, cached.name, { ...cached, continent });
+        return { ...cached, continent };
+      }
+    }
+    return cached;
+  }
 
   try {
     const { data: auth } = await supabase.auth.getUser();
@@ -52,9 +134,13 @@ export async function resolveUserCountry(opts?: { prompt?: boolean }) {
       const addr = (profile as any)?.address ?? {};
       const code = norm(addr?.countryCode);
       const name = norm(addr?.country);
+      const region = norm(addr?.region || addr?.state);
+      const city = norm(addr?.city);
       if (code || name) {
-        await setCachedCountry(code, name);
-        return { code, name };
+        const continent = await resolveContinentByCountryCode(code);
+        const out = { code, name, region, city, continent };
+        await setCachedCountry(code, name, out);
+        return out;
       }
     }
   } catch {
@@ -65,31 +151,109 @@ export async function resolveUserCountry(opts?: { prompt?: boolean }) {
     const loc = await getCurrentLocationWithGeocode();
     const code = norm(loc?.geo?.countryCode);
     const name = norm(loc?.geo?.country);
+    const region = norm(loc?.geo?.region);
+    const city = norm(loc?.geo?.city);
+    const lat = Number(loc?.coords?.lat);
+    const lng = Number(loc?.coords?.lng);
     if (code || name) {
-      await setCachedCountry(code, name);
-      return { code, name };
+      const continent = await resolveContinentByCountryCode(code);
+      const out = {
+        code,
+        name,
+        region,
+        city,
+        continent,
+        lat: Number.isFinite(lat) ? lat : undefined,
+        lng: Number.isFinite(lng) ? lng : undefined,
+      };
+      await setCachedCountry(code, name, out);
+      return out;
     }
   }
 
   return null;
 }
 
+function kmBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const R = 6371;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLng = ((bLng - aLng) * Math.PI) / 180;
+  const lat1 = (aLat * Math.PI) / 180;
+  const lat2 = (bLat * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 export function listingMatchesCountry(availability: any, country: UserCountry | null, includeGlobal = true) {
-  if (!country) return false;
-  const code = norm(country.code).toLowerCase();
-  const name = norm(country.name).toLowerCase();
   if (!availability || !availability.scope) {
     return includeGlobal;
   }
+
   const scope = String(availability.scope || "").toLowerCase();
   if (scope === "global") return includeGlobal;
-  if (scope === "continent") return includeGlobal;
+
+  if (!country) return false;
+
+  const code = norm(country.code).toLowerCase();
+  const name = norm(country.name).toLowerCase();
+  const region = norm(country.region).toLowerCase();
+  const city = norm(country.city).toLowerCase();
+  const continent = norm(country.continent).toLowerCase();
+
   const cCode = norm(availability?.country?.code).toLowerCase();
   const cName = norm(availability?.country?.name).toLowerCase();
+  const hasCountryTarget = !!(cCode || cName);
   const countryMatch =
-    (!!code && !!cCode && code === cCode) || (!!name && !!cName && name === cName);
+    !hasCountryTarget ||
+    ((!!code && !!cCode && code === cCode) || (!!name && !!cName && name === cName));
+
+  if (scope === "continent") {
+    const list = Array.isArray(availability?.continents)
+      ? availability.continents.map((v: any) => norm(v).toLowerCase()).filter(Boolean)
+      : [];
+    if (!list.length) return includeGlobal;
+    if (!continent) return false;
+    return list.includes(continent);
+  }
+
   if (scope === "country") return countryMatch;
-  if (scope === "state" || scope === "city" || scope === "radius") return countryMatch;
+
+  if (scope === "state") {
+    if (!countryMatch) return false;
+    const state = norm(availability?.state).toLowerCase();
+    if (!state) return true;
+    return !!region && region === state;
+  }
+
+  if (scope === "city") {
+    if (!countryMatch) return false;
+    const state = norm(availability?.state).toLowerCase();
+    const cityTarget = norm(availability?.city).toLowerCase();
+    if (state && (!region || state !== region)) return false;
+    if (!cityTarget) return true;
+    return !!city && city === cityTarget;
+  }
+
+  if (scope === "radius") {
+    if (!countryMatch) return false;
+    const centerLat = Number(availability?.center?.lat);
+    const centerLng = Number(availability?.center?.lng);
+    const radiusKm = Number(availability?.radiusKm);
+    const myLat = Number(country.lat);
+    const myLng = Number(country.lng);
+    if (
+      !Number.isFinite(centerLat) ||
+      !Number.isFinite(centerLng) ||
+      !Number.isFinite(radiusKm) ||
+      radiusKm <= 0
+    ) {
+      return countryMatch;
+    }
+    if (!Number.isFinite(myLat) || !Number.isFinite(myLng)) return false;
+    return kmBetween(centerLat, centerLng, myLat, myLng) <= radiusKm;
+  }
+
   return includeGlobal;
 }
-

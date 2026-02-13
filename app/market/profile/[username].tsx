@@ -159,7 +159,7 @@ export default function PublicSellerProfile() {
 
         // 2) Active listings (RLS policy allows)
         const userCountry = await resolveUserCountry({ prompt: true });
-        const restrictToCrypto = !!userCountry && !isNigeriaCountry(userCountry.code || userCountry.name);
+        const restrictToCrypto = !isNigeriaCountry(userCountry?.code || userCountry?.name);
 
         const { data: ls, error: lsErr } = await supabase
           .from("market_listings")

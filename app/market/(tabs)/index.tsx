@@ -167,7 +167,8 @@ export default function MarketHome() {
   const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
   const [countryErr, setCountryErr] = useState<string | null>(null);
   const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
-  const restrictToCrypto = !!userCountry && !isNigeria;
+  // Fail-safe: if country is unresolved, treat as non-Nigeria for payment visibility.
+  const restrictToCrypto = !isNigeria;
 
   const main = section === "service" ? "service" : "product";
   const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main as MarketMainCategory), [main]);
@@ -227,7 +228,7 @@ export default function MarketHome() {
         return Number.isFinite(t) ? t > Date.now() : true;
       });
       const scopedBase =
-        feedScope === "global"
+        feedScope === "global" || !userCountry
           ? items
           : items.filter((r) =>
               listingMatchesCountry(r.availability ?? r.payment_options?.availability, userCountry, false),
