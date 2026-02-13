@@ -10,7 +10,7 @@ const KEY_COUNTRY_CONTINENT = "bc_user_country_continent_v1";
 const KEY_COUNTRY_LAT = "bc_user_country_lat_v1";
 const KEY_COUNTRY_LNG = "bc_user_country_lng_v1";
 
-type CountryResolveResponse = Array<{ region?: string }>;
+type CountryResolveResponse = Array<{ region?: string; subregion?: string }>;
 
 export type UserCountry = {
   code: string;
@@ -44,10 +44,22 @@ async function resolveContinentByCountryCode(code?: string | null) {
   if (continentByCodeCache.has(cc)) return continentByCodeCache.get(cc) || "";
 
   try {
-    const res = await fetch(`https://restcountries.com/v3.1/alpha/${cc}?fields=region`);
+    const res = await fetch(`https://restcountries.com/v3.1/alpha/${cc}?fields=region,subregion`);
     if (!res.ok) throw new Error("country-region lookup failed");
     const rows = (await res.json()) as CountryResolveResponse;
-    const continent = norm(rows?.[0]?.region);
+    const region = norm(rows?.[0]?.region).toLowerCase();
+    const subregion = norm(rows?.[0]?.subregion).toLowerCase();
+    let continent = norm(rows?.[0]?.region);
+
+    if (region === "americas") {
+      if (subregion.includes("south")) continent = "South America";
+      else if (subregion.includes("north") || subregion.includes("central") || subregion.includes("caribbean")) {
+        continent = "North America";
+      } else {
+        continent = "Americas";
+      }
+    }
+
     continentByCodeCache.set(cc, continent);
     return continent;
   } catch {
@@ -90,14 +102,26 @@ export async function setCachedCountry(
   const continent = norm(extras?.continent);
   const lat = Number(extras?.lat);
   const lng = Number(extras?.lng);
+  const hasExtras = extras !== undefined;
 
   if (c) await SecureStore.setItemAsync(KEY_COUNTRY_CODE, c);
   if (n) await SecureStore.setItemAsync(KEY_COUNTRY_NAME, n);
-  if (region) await SecureStore.setItemAsync(KEY_COUNTRY_REGION, region);
-  if (city) await SecureStore.setItemAsync(KEY_COUNTRY_CITY, city);
-  if (continent) await SecureStore.setItemAsync(KEY_COUNTRY_CONTINENT, continent);
-  if (Number.isFinite(lat)) await SecureStore.setItemAsync(KEY_COUNTRY_LAT, String(lat));
-  if (Number.isFinite(lng)) await SecureStore.setItemAsync(KEY_COUNTRY_LNG, String(lng));
+  if (hasExtras) {
+    if (region) await SecureStore.setItemAsync(KEY_COUNTRY_REGION, region);
+    else await SecureStore.deleteItemAsync(KEY_COUNTRY_REGION);
+
+    if (city) await SecureStore.setItemAsync(KEY_COUNTRY_CITY, city);
+    else await SecureStore.deleteItemAsync(KEY_COUNTRY_CITY);
+
+    if (continent) await SecureStore.setItemAsync(KEY_COUNTRY_CONTINENT, continent);
+    else await SecureStore.deleteItemAsync(KEY_COUNTRY_CONTINENT);
+
+    if (Number.isFinite(lat)) await SecureStore.setItemAsync(KEY_COUNTRY_LAT, String(lat));
+    else await SecureStore.deleteItemAsync(KEY_COUNTRY_LAT);
+
+    if (Number.isFinite(lng)) await SecureStore.setItemAsync(KEY_COUNTRY_LNG, String(lng));
+    else await SecureStore.deleteItemAsync(KEY_COUNTRY_LNG);
+  }
   if (!c && !n) {
     await SecureStore.deleteItemAsync(KEY_COUNTRY_CODE);
     await SecureStore.deleteItemAsync(KEY_COUNTRY_NAME);
@@ -186,6 +210,22 @@ function kmBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+function continentMatches(selectedContinents: string[], userContinentRaw: string) {
+  const userContinent = norm(userContinentRaw).toLowerCase();
+  if (!userContinent) return false;
+
+  const list = selectedContinents.map((v) => norm(v).toLowerCase()).filter(Boolean);
+  if (!list.length) return false;
+
+  if (userContinent === "americas") {
+    return list.includes("americas") || list.includes("north america") || list.includes("south america");
+  }
+  if (userContinent === "north america" || userContinent === "south america") {
+    return list.includes(userContinent) || list.includes("americas");
+  }
+  return list.includes(userContinent);
+}
+
 export function listingMatchesCountry(availability: any, country: UserCountry | null, includeGlobal = true) {
   if (!availability || !availability.scope) {
     return includeGlobal;
@@ -210,12 +250,10 @@ export function listingMatchesCountry(availability: any, country: UserCountry | 
     ((!!code && !!cCode && code === cCode) || (!!name && !!cName && name === cName));
 
   if (scope === "continent") {
-    const list = Array.isArray(availability?.continents)
-      ? availability.continents.map((v: any) => norm(v).toLowerCase()).filter(Boolean)
-      : [];
+    const list = Array.isArray(availability?.continents) ? availability.continents : [];
     if (!list.length) return includeGlobal;
     if (!continent) return false;
-    return list.includes(continent);
+    return continentMatches(list, continent);
   }
 
   if (scope === "country") return countryMatch;
