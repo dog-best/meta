@@ -614,6 +614,10 @@ async function releaseFunds() {
       if (cfgErr || !cfg?.rpc_url) throw new Error("Chain config missing.");
 
       const client = createPublicClient({ transport: http(cfg.rpc_url) });
+      const requestCustomRpc = async (method: string, params: unknown[]) => {
+        const req = client.request as unknown as (args: { method: string; params?: unknown[] }) => Promise<any>;
+        return req({ method, params });
+      };
       let finalTxHash = txHash as `0x${string}`;
       let receipt: any = null;
       try {
@@ -622,8 +626,8 @@ async function releaseFunds() {
         // If user pasted a UserOp hash, try to resolve it to a tx hash.
         try {
           const uo: any =
-            (await client.request({ method: "eth_getUserOperationReceipt", params: [finalTxHash] })) ??
-            (await client.request({ method: "alchemy_getUserOperationReceipt", params: [finalTxHash] }));
+            (await requestCustomRpc("eth_getUserOperationReceipt", [finalTxHash])) ??
+            (await requestCustomRpc("alchemy_getUserOperationReceipt", [finalTxHash]));
           const opTx = String(uo?.receipt?.transactionHash || uo?.transactionHash || "");
           if (opTx.startsWith("0x")) {
             finalTxHash = opTx as `0x${string}`;

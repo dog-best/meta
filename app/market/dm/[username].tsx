@@ -325,7 +325,7 @@ export default function DMChat() {
       if (audioSound) {
         await audioSound.unloadAsync();
       }
-      const { sound } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status) => {
+      const { sound } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true }, (status: any) => {
         if (!status.isLoaded) return;
         setAudioPlaying(status.isPlaying);
       });

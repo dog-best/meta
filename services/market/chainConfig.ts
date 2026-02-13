@@ -60,7 +60,7 @@ export async function fetchMarketChains() {
     throw new Error("Chain config payload missing token addresses");
   } catch (e: any) {
     // Last fallback so UI is usable even if policies/functions are misconfigured.
-    return [
+    const fallback: MarketChainConfig[] = [
       {
         chain: "base_sepolia",
         chain_id: 84532,
@@ -71,7 +71,30 @@ export async function fetchMarketChains() {
         confirmations_required: 3,
         active: true,
       },
-    ] satisfies MarketChainConfig[];
+    ];
+
+    const amoyRpc =
+      process.env.EXPO_PUBLIC_POLYGON_AMOY_RPC_URL ??
+      process.env.EXPO_PUBLIC_RPC_URL_POLYGON_AMOY ??
+      null;
+    const amoyUsdc = process.env.EXPO_PUBLIC_USDC_ADDRESS_POLYGON_AMOY ?? "";
+    const amoyUsdt = process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON_AMOY ?? null;
+    const amoyEscrow = process.env.EXPO_PUBLIC_ESCROW_ADDRESS_POLYGON_AMOY ?? "";
+
+    if (amoyRpc || amoyUsdc || amoyUsdt || amoyEscrow) {
+      fallback.push({
+        chain: "polygon_amoy",
+        chain_id: 80002,
+        rpc_url: amoyRpc,
+        usdc_address: amoyUsdc,
+        usdt_address: amoyUsdt,
+        escrow_address: amoyEscrow,
+        confirmations_required: 3,
+        active: true,
+      });
+    }
+
+    return fallback;
   }
 }
 
