@@ -62,7 +62,14 @@ serve(async (req) => {
         })
         .select()
         .single();
-      ngnAccount = created!;
+      if (!created?.id) {
+        return new Response("Failed to create NGN account", { status: 500 });
+      }
+      ngnAccount = created;
+    }
+
+    if (!ngnAccount?.id) {
+      return new Response("NGN account unavailable", { status: 500 });
     }
 
     const reference = `convert_${cryptoAccount.id}_${Date.now()}`;

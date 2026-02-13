@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 /* Symbols we care about */
-const SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "USDTUSDT","SUI","APTUSDT", "USDCUSDT"];
+const SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "USDTUSDT", "SUIUSDT", "APTUSDT", "USDCUSDT"];
 
 const MARGIN = 0.02; // 2%
 
@@ -57,11 +57,12 @@ serve(async () => {
       }),
       { headers: { "Content-Type": "application/json" } }
     );
-  } catch (err) {
+  } catch (err: unknown) {
+    const details = err instanceof Error ? err.message : String(err);
     return new Response(
       JSON.stringify({
         error: "Failed to fetch prices",
-        details: err.message,
+        details,
       }),
       { status: 500 }
     );

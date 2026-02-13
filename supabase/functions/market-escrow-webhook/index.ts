@@ -29,9 +29,24 @@ function json(status: number, body: unknown) {
 }
 
 function normalizeChain(input: unknown): string {
-  const raw = String(input ?? "").toLowerCase();
-  if (raw.includes("base-sepolia") || raw.includes("base_sepolia") || raw.includes("84532")) return "base_sepolia";
-  if (raw.includes("base")) return "base";
+  const raw = String(input ?? "").toLowerCase().trim();
+  if (!raw) return "base_sepolia";
+
+  if (raw.includes("80002") || raw.includes("polygon-amoy") || raw.includes("polygon_amoy") || raw.includes("amoy")) {
+    return "polygon_amoy";
+  }
+  if (raw.includes("84532") || raw.includes("base-sepolia") || raw.includes("base_sepolia")) return "base_sepolia";
+  if (raw.includes("421614") || raw.includes("arbitrum-sepolia") || raw.includes("arbitrum_sepolia")) {
+    return "arbitrum_sepolia";
+  }
+  if (raw.includes("97") || raw.includes("bnb-testnet") || raw.includes("bnb_testnet")) return "bnb_testnet";
+  if (raw.includes("8453") || raw === "base") return "base";
+  if (raw.includes("42161") || raw === "arbitrum") return "arbitrum";
+  if (raw.includes("137") || raw === "polygon") return "polygon";
+  if (raw.includes("56") || raw === "bnb") return "bnb";
+  if (raw.includes("10") || raw === "optimism") return "optimism";
+  if (raw.includes("1") || raw === "ethereum") return "ethereum";
+
   return "base_sepolia";
 }
 

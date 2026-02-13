@@ -28,6 +28,12 @@ function arbiterKeyForChain(chain: string) {
   return envAny(`ARBITER_PRIVATE_KEY_${upper}`, "ARBITER_PRIVATE_KEY");
 }
 
+function rpcUrlForChain(chain: string, configured: string | null | undefined) {
+  if (configured && configured.trim().length > 0) return configured;
+  const upper = chain.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  return envAny(`${upper}_RPC_URL`, `${upper}_ALCHEMY_RPC_URL`, "BASE_RPC_URL", "ALCHEMY_RPC_URL");
+}
+
 // Minimal ABI for refund()
 const escrowAbi = [
   "function refund(bytes32 orderKey) external",
@@ -80,7 +86,7 @@ serve(async (req) => {
     .eq("chain", esc.chain)
     .maybeSingle();
 
-  const rpcUrl = cfg?.rpc_url || envAny("BASE_RPC_URL");
+  const rpcUrl = rpcUrlForChain(esc.chain, cfg?.rpc_url);
   const arbiterKey = arbiterKeyForChain(esc.chain);
 
   if (!rpcUrl || !arbiterKey) {
@@ -137,8 +143,8 @@ serve(async (req) => {
       tx_hash: tx.hash,
       message: "Refund tx submitted. Indexer will finalize status once confirmed.",
     });
-  } catch (e) {
-    const msg = e?.message ? String(e.message) : "refund_failed";
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "refund_failed";
     await admin.rpc("market_set_crypto_intent", {
       p_order_id: order_id,
       p_intent_type: "REFUND",

@@ -51,6 +51,6 @@ Deno.serve(async (req) => {
       },
     });
   } catch (e) {
-    return bad(String(e.message ?? e));
+    return bad(e instanceof Error ? e.message : String(e));
   }
 });

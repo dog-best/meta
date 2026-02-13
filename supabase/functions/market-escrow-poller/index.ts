@@ -81,7 +81,7 @@ function decodeData(dataHex?: string) {
 }
 
 async function processLogs(
-  admin: ReturnType<typeof createClient>,
+  admin: any,
   cfg: ChainConfig,
   logs: RpcLog[],
 ) {
@@ -107,7 +107,8 @@ async function processLogs(
       .in("order_key", [orderKey, orderKeyNo0x])
       .maybeSingle();
 
-    if (!esc?.order_id) continue;
+    const escrowRow = esc as { order_id: string; order_key: string } | null;
+    if (!escrowRow?.order_id) continue;
 
     const txHash = String(log.transactionHash ?? "");
     const logIndex = toNum(log.logIndex as any);
@@ -115,7 +116,7 @@ async function processLogs(
 
     if (isDeposit) {
       await admin.rpc("market_apply_chain_deposit", {
-        p_order_id: esc.order_id,
+        p_order_id: escrowRow.order_id,
         p_buyer_wallet: buyer,
         p_seller_wallet: seller,
         p_amount_raw: amountRaw ? amountRaw.toString() : null,
@@ -131,7 +132,7 @@ async function processLogs(
 
     if (isRelease) {
       await admin.rpc("market_apply_chain_release", {
-        p_order_id: esc.order_id,
+        p_order_id: escrowRow.order_id,
         p_tx_hash: txHash,
         p_log_index: logIndex,
         p_block_number: blockNumber,
@@ -142,7 +143,7 @@ async function processLogs(
 
     if (isRefund) {
       await admin.rpc("market_apply_chain_refund", {
-        p_order_id: esc.order_id,
+        p_order_id: escrowRow.order_id,
         p_tx_hash: txHash,
         p_log_index: logIndex,
         p_block_number: blockNumber,

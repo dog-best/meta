@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
   if (oe || !order) return bad("Order not found");
   if (order.buyer_id !== u.user.id) return bad("Not your order");
 
-  const listing = order.market_listings;
+  const listing = Array.isArray(order.market_listings) ? order.market_listings[0] : order.market_listings;
   if (!listing) return bad("Listing missing");
 
   // Only for digital services

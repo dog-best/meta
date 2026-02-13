@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
   const role = getRole(order, u.user.id);
   if (role === "none") return bad("Not allowed");
 
-  const listing = order.market_listings;
+  const listing = Array.isArray(order.market_listings) ? order.market_listings[0] : order.market_listings;
   if (!listing) return bad("Listing missing");
 
   const status = String(order.status);

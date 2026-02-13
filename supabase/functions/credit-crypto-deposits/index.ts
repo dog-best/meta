@@ -21,7 +21,7 @@ serve(async () => {
     return new Response("error", { status: 500 });
   }
 
-  for (const deposit of deposits) {
+  for (const deposit of deposits ?? []) {
     const { user_id, asset_symbol, amount, tx_hash } = deposit;
 
     // 2. Ensure user ledger account exists
@@ -45,8 +45,11 @@ serve(async () => {
         .select()
         .single();
 
-      account = created!;
+      if (!created?.id) continue;
+      account = created;
     }
+
+    if (!account?.id) continue;
 
     // 3. Credit ledger
     await supabase.from("ledger_entries").insert({
