@@ -199,7 +199,7 @@ export default function SellTab() {
   const [description, setDescription] = useState("");
   const [payMode, setPayMode] = useState<"ngn" | "crypto" | "all">("ngn");
   const [cryptoCoinMode, setCryptoCoinMode] = useState<"all" | "usdc" | "usdt">("all");
-  const [cryptoNetworkMode, setCryptoNetworkMode] = useState<"all" | "base_sepolia">("all");
+  const [cryptoNetworkMode, setCryptoNetworkMode] = useState<"all" | "base_sepolia" | "polygon_amoy">("all");
   const [price, setPrice] = useState("");
   const [localCurrency, setLocalCurrency] = useState("NGN");
   const [fxUsdToLocal, setFxUsdToLocal] = useState<number | null>(null);
@@ -1053,6 +1053,7 @@ export default function SellTab() {
               <Row>
                 <Pill active={cryptoNetworkMode === "all"} label="All active networks" onPress={() => setCryptoNetworkMode("all")} />
                 <Pill active={cryptoNetworkMode === "base_sepolia"} label="Base Sepolia only" onPress={() => setCryptoNetworkMode("base_sepolia")} />
+                <Pill active={cryptoNetworkMode === "polygon_amoy"} label="Polygon Amoy only" onPress={() => setCryptoNetworkMode("polygon_amoy")} />
               </Row>
             </>
           ) : null}

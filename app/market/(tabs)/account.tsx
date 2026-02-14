@@ -46,6 +46,9 @@ const MUTED = "rgba(255,255,255,0.62)";
 const BLUE = "#3B82F6";
 const USDT_BY_CHAIN: Record<string, string | undefined> = {
   base_sepolia: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA,
+  polygon_amoy: process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON_AMOY,
+  arbitrum_sepolia: process.env.EXPO_PUBLIC_USDT_ADDRESS_ARBITRUM_SEPOLIA,
+  bnb_testnet: process.env.EXPO_PUBLIC_USDT_ADDRESS_BNB_TESTNET,
   base: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE,
   arbitrum: process.env.EXPO_PUBLIC_USDT_ADDRESS_ARBITRUM,
   polygon: process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON,
