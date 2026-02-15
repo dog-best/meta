@@ -447,6 +447,45 @@ export default function MarketHome() {
               <SectionPill label="Social Feed" active={section === "social"} onPress={() => setSection("social")} />
             </View>
 
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+              <Pressable
+                onPress={() => router.push("/market/search" as any)}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  paddingVertical: 11,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 7,
+                  backgroundColor: "rgba(255,255,255,0.07)",
+                  borderWidth: 1,
+                  borderColor: BORDER,
+                }}
+              >
+                <Ionicons name="search-outline" size={16} color="#fff" />
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Search</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => router.push("/market/stock" as any)}
+                style={{
+                  flex: 1,
+                  borderRadius: 14,
+                  paddingVertical: 11,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 7,
+                  backgroundColor: "rgba(45,212,191,0.20)",
+                  borderWidth: 1,
+                  borderColor: "rgba(45,212,191,0.50)",
+                }}
+              >
+                <Ionicons name="trending-up-outline" size={16} color="#ECFEFF" />
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>Digital Stock</Text>
+              </Pressable>
+            </View>
+
             {section === "social" ? (
               <View style={{ marginTop: 10, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
                 <Text style={{ color: "#fff", fontWeight: "900" }}>Followers feed</Text>
