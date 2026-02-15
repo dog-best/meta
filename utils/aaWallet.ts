@@ -161,9 +161,9 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: st
   let account: any;
   try {
     account = await createLightAccount({
-      chain,
+      chain: chain as any,
       signer,
-      transport: http(rpcUrl),
+      transport: http(rpcUrl) as any,
     });
   } catch (e: any) {
     const msg = String(e?.message || "Unknown error");
@@ -218,9 +218,9 @@ export async function deriveSmartAccountAddress(chainConfig: MarketChainConfig, 
   }
   const signer = LocalAccountSigner.privateKeyToAccountSigner(privateKey as Hex);
   const account = await createLightAccount({
-    chain,
+    chain: chain as any,
     signer,
-    transport: http(rpcUrl),
+    transport: http(rpcUrl) as any,
   });
   return account.address as `0x${string}`;
 }

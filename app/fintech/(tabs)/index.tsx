@@ -268,12 +268,6 @@ export default function Dashboard() {
     }
   }, [authLoading, user]);
 
-  // Prevent UI flicker while redirecting.
-  if (!authLoading && !user) return null;
-  if (userCountry !== undefined && !isNigeria) {
-    return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
-  }
-
   const refreshing = useMemo(() => authLoading || walletLoading, [authLoading, walletLoading]);
   const txPreview = useMemo(() => ((tx ?? []) as TxItem[]).slice(0, 6), [tx]);
 
@@ -315,6 +309,12 @@ export default function Dashboard() {
     goWallet("withdraw");
   }, [isNigeria]);
   const onRefresh = useCallback(() => reload(), [reload]);
+
+  // Prevent UI flicker while redirecting.
+  if (!authLoading && !user) return null;
+  if (userCountry !== undefined && !isNigeria) {
+    return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+  }
 
   return (
     <LinearGradient

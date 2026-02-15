@@ -299,14 +299,15 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
       const rpcUrl = chain.rpc_url || "";
       if (rpcUrl) {
         const publicClient = createPublicClient({ transport: http(rpcUrl) });
+        const requestAny = publicClient.request as any;
         const receipt: any =
-          (await publicClient.request({
-            method: "eth_getUserOperationReceipt",
-            params: [userOpHash],
+          (await requestAny({
+            method: "eth_getUserOperationReceipt" as any,
+            params: [userOpHash as `0x${string}`],
           })) ??
-          (await publicClient.request({
-            method: "alchemy_getUserOperationReceipt",
-            params: [userOpHash],
+          (await requestAny({
+            method: "alchemy_getUserOperationReceipt" as any,
+            params: [userOpHash as `0x${string}`],
           }));
         const opTx = String(receipt?.receipt?.transactionHash || receipt?.transactionHash || "");
         if (opTx.startsWith("0x")) resolvedTxHash = opTx;

@@ -20,9 +20,13 @@ export function useVirtualAccount() {
     setErrorText(null);
 
     try {
-      const data = await callFn("paystack-dva", {});
+      const data = await callFn<{
+        success?: boolean;
+        message?: string;
+        account?: VirtualAccount | null;
+      }>("paystack-dva", {});
       if (!data?.success) throw new Error(data?.message ?? "Failed to load account");
-      setAccount(data.account);
+      setAccount(data.account ?? null);
     } catch (e: any) {
       setAccount(null);
       setErrorText(e?.message ?? "Failed to load account");

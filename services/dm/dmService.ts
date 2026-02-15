@@ -220,11 +220,13 @@ export async function fetchMessages(threadId: string, limit = 50) {
     .limit(limit);
 
   if (error) throw new Error(error.message);
-  const rows = ((data ?? []) as DMMessage[]).map((m) => ({
-    ...m,
-    dm_message_attachments: [],
-    reply_to: null,
-  }));
+  const rows: DMMessage[] = ((data ?? []) as DMMessage[]).map(
+    (m): DMMessage => ({
+      ...m,
+      dm_message_attachments: [] as DMAttachment[],
+      reply_to: null,
+    }),
+  );
   const messageIds = rows.map((m) => m.id);
   const replyIds = Array.from(
     new Set(rows.map((m) => m.reply_to_message_id).filter(Boolean) as string[]),
@@ -242,7 +244,7 @@ export async function fetchMessages(threadId: string, limit = 50) {
       list.push(a as DMAttachment);
       attMap.set(a.message_id, list);
     });
-    rows.forEach((m) => {
+    rows.forEach((m: DMMessage) => {
       m.dm_message_attachments = attMap.get(m.id) ?? [];
     });
   }
@@ -255,7 +257,7 @@ export async function fetchMessages(threadId: string, limit = 50) {
     if (repErr) throw new Error(repErr.message);
     const repMap = new Map<string, any>();
     (replies ?? []).forEach((r: any) => repMap.set(r.id, r));
-    rows.forEach((m) => {
+    rows.forEach((m: DMMessage) => {
       const rid = m.reply_to_message_id ?? "";
       m.reply_to = rid ? (repMap.get(rid) ?? null) : null;
     });
@@ -274,10 +276,10 @@ export async function fetchMessages(threadId: string, limit = 50) {
     });
   }
   const hydrated = await Promise.all(
-    rows.map(async (m) => {
+    rows.map(async (m: DMMessage): Promise<DMMessage> => {
       if (!m.dm_message_attachments?.length) return m;
       const att = await Promise.all(
-        m.dm_message_attachments.map(async (a) => {
+        m.dm_message_attachments.map(async (a: DMAttachment): Promise<DMAttachment> => {
           if (a.public_url) return a;
           try {
             const { data: signed } = await supabase.storage
@@ -289,7 +291,7 @@ export async function fetchMessages(threadId: string, limit = 50) {
           }
         }),
       );
-      return { ...m, dm_message_attachments: att };
+      return { ...m, dm_message_attachments: att as DMAttachment[] };
     }),
   );
   return hydrated.map((m) => ({ ...m, reactions: reactionsMap.get(m.id) ?? [] }));
@@ -365,6 +367,7 @@ export async function sendMedia(params: {
 
   try {
     const fileInfo = await FileSystem.getInfoAsync(uri);
+    const fileSize = fileInfo && "size" in fileInfo ? fileInfo.size ?? null : null;
     const ext = uri.split(".").pop() || "file";
     const path = `${threadId}/${messageId}/${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`;
 
@@ -387,7 +390,7 @@ export async function sendMedia(params: {
         mime_type: mime_type ?? null,
         duration_sec: duration_sec ?? null,
         meta: {
-          size: fileInfo?.size ?? null,
+          size: fileSize,
         },
       });
 

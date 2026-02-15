@@ -44,6 +44,10 @@ export default function CryptoConvert() {
     return Number.isFinite(n) && n > 0 && !loading;
   }, [amount, loading]);
 
+  const confirmMessage = useMemo(() => {
+    return `Asset: ${asset}\nAmount: ${amount}`;
+  }, [asset, amount]);
+
   const submit = async () => {
     setConfirmVisible(false);
     try {
@@ -107,12 +111,9 @@ export default function CryptoConvert() {
 
       <ConfirmPurchaseModal
         visible={confirmVisible}
-        lines={[
-          { label: "Asset", value: asset },
-          { label: "Amount", value: amount },
-        ]}
-        loading={loading}
-        onClose={() => setConfirmVisible(false)}
+        title="Confirm conversion"
+        message={confirmMessage}
+        onCancel={() => setConfirmVisible(false)}
         onConfirm={submit}
       />
 

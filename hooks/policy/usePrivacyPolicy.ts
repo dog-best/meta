@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/services/supabase";
-import { useAuth } from "./useAuth";
+import { useAuth } from "@/hooks/authentication/useAuth";
 
 export function usePrivacyPolicy() {
   const { user } = useAuth();
@@ -69,7 +69,7 @@ export function usePrivacyPolicy() {
   };
 
   const reject = async () => {
-    console.log("[policy-acceptance] rejected — signing out");
+    console.log("[policy-acceptance] rejected - signing out");
     await supabase.auth.signOut();
   };
 
