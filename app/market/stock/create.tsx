@@ -226,8 +226,8 @@ export default function CreateStockIdentityScreen() {
         <View style={{ marginTop: 12, borderRadius: 14, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Creation Economics</Text>
           <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Creation fee: $50 USDC</Text>
-          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$45 -> initial liquidity</Text>
-          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$5 -> store reserve balance</Text>
+          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$45 {"->"} initial liquidity</Text>
+          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$5 {"->"} store reserve balance</Text>
           <View style={{ marginTop: 8, flexDirection: "row", gap: 6, alignItems: "center" }}>
             <Ionicons name="shield-checkmark-outline" size={15} color={MINT} />
             <Text style={{ color: MUTED, fontSize: 11 }}>
