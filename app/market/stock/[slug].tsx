@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   LayoutChangeEvent,
   Pressable,
   ScrollView,
@@ -11,7 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import Svg, { Line, Rect } from "react-native-svg";
+import Svg, { Defs, Line, LinearGradient as SvgGradient, Path, Rect, Stop, Text as SvgText } from "react-native-svg";
 
 import AppHeader from "@/components/common/AppHeader";
 import {
@@ -45,34 +46,74 @@ type Candle = {
   trades_count: number;
 };
 
+function sellerLogoUrl(path?: string | null) {
+  if (!path) return null;
+  const { data } = supabase.storage.from("market-sellers").getPublicUrl(path);
+  return data?.publicUrl ?? null;
+}
+
 function CandleChart({ candles }: { candles: Candle[] }) {
   const [width, setWidth] = useState(0);
-  const height = 210;
-  const pad = 14;
-  const plotW = Math.max(10, width - pad * 2);
-  const plotH = height - pad * 2;
-  const rows = candles.slice(-90);
+  const height = 262;
+  const left = 12;
+  const right = 56;
+  const top = 14;
+  const bottom = 12;
+  const volumeHeight = 58;
+  const priceBottom = height - volumeHeight - 8;
+  const volumeTop = priceBottom + 6;
+  const rows = candles.slice(-100);
+  const plotW = Math.max(10, width - left - right);
+  const priceH = Math.max(10, priceBottom - top);
+  const volH = Math.max(8, height - bottom - volumeTop);
 
-  const [high, low] = useMemo(() => {
-    if (!rows.length) return [1, 0];
-    let hi = Number.MIN_VALUE;
-    let lo = Number.MAX_VALUE;
+  const stats = useMemo(() => {
+    if (!rows.length) {
+      return { high: 1, low: 0, maxVolume: 1 };
+    }
+    let high = Number.MIN_VALUE;
+    let low = Number.MAX_VALUE;
+    let maxVolume = 0;
     for (const c of rows) {
-      hi = Math.max(hi, Number(c.high_price_usdc || 0));
-      lo = Math.min(lo, Number(c.low_price_usdc || 0));
+      high = Math.max(high, Number(c.high_price_usdc || 0));
+      low = Math.min(low, Number(c.low_price_usdc || 0));
+      maxVolume = Math.max(maxVolume, Number(c.volume_usdc || 0));
     }
-    if (!Number.isFinite(hi) || !Number.isFinite(lo) || hi <= lo) {
-      hi = Math.max(1, Number(rows[0]?.high_price_usdc || 1));
-      lo = Math.max(0, Number(rows[0]?.low_price_usdc || 0));
+    if (!Number.isFinite(high) || !Number.isFinite(low) || high <= low) {
+      high = Math.max(1, Number(rows[0]?.high_price_usdc || 1));
+      low = Math.max(0, Number(rows[0]?.low_price_usdc || 0));
     }
-    return [hi, lo];
+    return { high, low, maxVolume: Math.max(1, maxVolume) };
   }, [rows]);
 
-  function y(price: number) {
-    const range = Math.max(0.0000001, high - low);
-    const t = (price - low) / range;
-    return pad + (1 - t) * plotH;
+  const xStep = plotW / Math.max(1, rows.length);
+
+  function xAt(index: number) {
+    return left + index * xStep + xStep / 2;
   }
+
+  function yPrice(price: number) {
+    const range = Math.max(0.0000001, stats.high - stats.low);
+    const t = (price - stats.low) / range;
+    return top + (1 - t) * priceH;
+  }
+
+  function yVolume(volume: number) {
+    const t = Math.max(0, Math.min(1, volume / stats.maxVolume));
+    return volumeTop + (1 - t) * volH;
+  }
+
+  const closeLine = (() => {
+    if (!rows.length) return { linePath: "", areaPath: "" };
+    const points = rows.map((c, i) => `${xAt(i)},${yPrice(Number(c.close_price_usdc || 0))}`);
+    const [first] = points;
+    const last = points[points.length - 1];
+    const linePath = `M ${points.join(" L ")}`;
+    const firstX = Number(first.split(",")[0]);
+    const lastX = Number(last.split(",")[0]);
+    const areaPath = `${linePath} L ${lastX},${priceBottom} L ${firstX},${priceBottom} Z`;
+    return { linePath, areaPath };
+  })();
 
   function onLayout(e: LayoutChangeEvent) {
     setWidth(Math.floor(e.nativeEvent.layout.width));
@@ -87,47 +128,76 @@ function CandleChart({ candles }: { candles: Candle[] }) {
         overflow: "hidden",
         borderWidth: 1,
         borderColor: BORDER,
-        backgroundColor: "rgba(255,255,255,0.03)",
+        backgroundColor: "rgba(255,255,255,0.035)",
       }}
     >
       {width > 0 && rows.length > 0 ? (
         <Svg width={width} height={height}>
+          <Defs>
+            <SvgGradient id="stockAreaGradient" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor="rgba(45,212,191,0.35)" />
+              <Stop offset="100%" stopColor="rgba(45,212,191,0.02)" />
+            </SvgGradient>
+          </Defs>
+
           {[0, 1, 2, 3, 4].map((i) => {
-            const yy = pad + (plotH * i) / 4;
+            const yy = top + (priceH * i) / 4;
+            const price = stats.high - ((stats.high - stats.low) * i) / 4;
             return (
-              <Line
-                key={`grid-${i}`}
-                x1={pad}
-                y1={yy}
-                x2={pad + plotW}
-                y2={yy}
-                stroke="rgba(255,255,255,0.10)"
-                strokeWidth={1}
+              <React.Fragment key={`grid-${i}`}>
+                <Line x1={left} y1={yy} x2={left + plotW} y2={yy} stroke="rgba(255,255,255,0.10)" strokeWidth={1} />
+                <SvgText x={width - 4} y={yy + 3} fontSize={10} fill="rgba(255,255,255,0.55)" textAnchor="end">
+                  {price.toFixed(4)}
+                </SvgText>
+              </React.Fragment>
+            );
+          })}
+
+          {rows.map((_, idx) => {
+            if (idx % 12 !== 0) return null;
+            const xx = xAt(idx);
+            return <Line key={`v-${idx}`} x1={xx} y1={top} x2={xx} y2={priceBottom} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />;
+          })}
+
+          <Path d={closeLine.areaPath} fill="url(#stockAreaGradient)" />
+          <Path d={closeLine.linePath} stroke="rgba(45,212,191,0.85)" strokeWidth={1.5} fill="none" />
+
+          {rows.map((c, idx) => {
+            const barX = left + idx * xStep + xStep * 0.24;
+            const barW = Math.max(1, xStep * 0.5);
+            const vy = yVolume(Number(c.volume_usdc || 0));
+            return (
+              <Rect
+                key={`vol-${idx}`}
+                x={barX}
+                y={vy}
+                width={barW}
+                height={Math.max(1, height - bottom - vy)}
+                fill="rgba(148,163,184,0.22)"
               />
             );
           })}
 
           {rows.map((c, idx) => {
-            const xStep = plotW / rows.length;
-            const candleW = Math.max(2, xStep * 0.64);
-            const x = pad + idx * xStep + (xStep - candleW) / 2;
+            const candleW = Math.max(2, xStep * 0.62);
+            const x = left + idx * xStep + (xStep - candleW) / 2;
             const o = Number(c.open_price_usdc || 0);
             const h = Number(c.high_price_usdc || 0);
             const l = Number(c.low_price_usdc || 0);
             const cl = Number(c.close_price_usdc || 0);
             const up = cl >= o;
             const color = up ? MINT : RED;
-            const yOpen = y(o);
-            const yClose = y(cl);
+            const yOpen = yPrice(o);
+            const yClose = yPrice(cl);
             const top = Math.min(yOpen, yClose);
             const bodyH = Math.max(1, Math.abs(yOpen - yClose));
             return (
               <React.Fragment key={`${c.bucket_start}-${idx}`}>
                 <Line
                   x1={x + candleW / 2}
-                  y1={y(h)}
+                  y1={yPrice(h)}
                   x2={x + candleW / 2}
-                  y2={y(l)}
+                  y2={yPrice(l)}
                   stroke={color}
                   strokeWidth={1}
                 />
@@ -339,6 +409,10 @@ export default function StockDetailScreen() {
   const launchGuard = !!detail?.stats?.launch_guard_active;
   const candles = (detail?.candles ?? []) as Candle[];
   const trades = detail?.trades ?? [];
+  const sellerLogo = sellerLogoUrl(detail?.seller?.logo_path);
+  const latestCandle = candles.length ? candles[candles.length - 1] : null;
+  const chartHigh = candles.length ? Math.max(...candles.map((c) => Number(c.high_price_usdc || 0))) : 0;
+  const chartLow = candles.length ? Math.min(...candles.map((c) => Number(c.low_price_usdc || 0))) : 0;
 
   return (
     <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
@@ -360,12 +434,60 @@ export default function StockDetailScreen() {
         {!loading && !err && detail ? (
           <>
             <View style={{ marginTop: 10, borderRadius: 15, padding: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }}>
-                {title} <Text style={{ color: "#99F6E4" }}>({symbol})</Text>
-              </Text>
-              <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
-                @{detail?.seller?.market_username || "store"} - {detail?.seller?.business_name || "Store"}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: 16,
+                    overflow: "hidden",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.2)",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {sellerLogo ? (
+                    <Image source={{ uri: sellerLogo }} style={{ width: 52, height: 52 }} />
+                  ) : (
+                    <Ionicons name="storefront-outline" size={20} color="rgba(255,255,255,0.75)" />
+                  )}
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }} numberOfLines={1}>
+                    {title} <Text style={{ color: "#99F6E4" }}>({symbol})</Text>
+                  </Text>
+                  <View style={{ marginTop: 4, flexDirection: "row", alignItems: "center", gap: 5 }}>
+                    <Text style={{ color: MUTED, fontSize: 12, flexShrink: 1 }} numberOfLines={1}>
+                      @{detail?.seller?.market_username || "store"} - {detail?.seller?.business_name || "Store"}
+                    </Text>
+                    {detail?.seller?.is_verified ? <Ionicons name="checkmark-circle" size={13} color="#60A5FA" /> : null}
+                  </View>
+                </View>
+
+                <Pressable
+                  disabled={!detail?.seller?.market_username}
+                  onPress={() =>
+                    detail?.seller?.market_username
+                      ? router.push(`/market/profile/${detail.seller.market_username}` as any)
+                      : undefined
+                  }
+                  style={{
+                    borderRadius: 10,
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    borderWidth: 1,
+                    borderColor: BORDER,
+                    opacity: detail?.seller?.market_username ? 1 : 0.5,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontSize: 11, fontWeight: "900" }}>Store</Text>
+                </Pressable>
+              </View>
+
               <View style={{ marginTop: 9, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                 <View style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: BORDER }}>
                   <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>{chainText}</Text>
@@ -415,6 +537,23 @@ export default function StockDetailScreen() {
                   <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>{tf}</Text>
                 </Pressable>
               ))}
+            </View>
+
+            <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
+              <View style={{ flex: 1, borderRadius: 11, padding: 9, backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: BORDER }}>
+                <Text style={{ color: MUTED, fontSize: 10 }}>Last</Text>
+                <Text style={{ marginTop: 3, color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                  ${Number(latestCandle?.close_price_usdc ?? price).toFixed(6)}
+                </Text>
+              </View>
+              <View style={{ flex: 1, borderRadius: 11, padding: 9, backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: BORDER }}>
+                <Text style={{ color: MUTED, fontSize: 10 }}>High</Text>
+                <Text style={{ marginTop: 3, color: "#fff", fontWeight: "900", fontSize: 12 }}>${chartHigh.toFixed(6)}</Text>
+              </View>
+              <View style={{ flex: 1, borderRadius: 11, padding: 9, backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: BORDER }}>
+                <Text style={{ color: MUTED, fontSize: 10 }}>Low</Text>
+                <Text style={{ marginTop: 3, color: "#fff", fontWeight: "900", fontSize: 12 }}>${chartLow.toFixed(6)}</Text>
+              </View>
             </View>
 
             <CandleChart candles={candles} />

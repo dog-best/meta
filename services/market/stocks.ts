@@ -1,6 +1,22 @@
 import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
+function isMissingFunctionError(err: unknown) {
+  const msg = String((err as any)?.message ?? err ?? "");
+  return /requested function was not found|function was not found|edge function not found/i.test(msg);
+}
+
+async function callStockFn<T>(primary: string, body: any, fallback?: string) {
+  try {
+    return await callFn<T>(primary, body);
+  } catch (e) {
+    if (fallback && isMissingFunctionError(e)) {
+      return await callFn<T>(fallback, body);
+    }
+    throw e;
+  }
+}
+
 export type StockOverviewItem = {
   identity_id: string;
   store_id: string;
@@ -10,8 +26,10 @@ export type StockOverviewItem = {
   chain: string;
   status: string;
   market_username: string | null;
+  display_name?: string | null;
   business_name: string | null;
   is_verified: boolean;
+  logo_path?: string | null;
   price: number;
   market_cap: number;
   volume_24h_quote: number;
@@ -20,13 +38,13 @@ export type StockOverviewItem = {
 };
 
 export async function fetchStocksOverview(limit = 30, offset = 0) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     mode: "list";
     items: StockOverviewItem[];
     chains: any[];
     pagination: { limit: number; offset: number };
-  }>("stock-feed", { mode: "list", limit, offset });
+  }>("stock-feed", { mode: "list", limit, offset }, "stocks-market-data");
 }
 
 export async function fetchStockDetail(params: {
@@ -36,7 +54,7 @@ export async function fetchStockDetail(params: {
   candle_limit?: number;
   trade_limit?: number;
 }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     mode: "detail";
     timeframe: string;
@@ -63,7 +81,7 @@ export async function fetchStockDetail(params: {
     timeframe: params.timeframe ?? "1m",
     candle_limit: params.candle_limit ?? 180,
     trade_limit: params.trade_limit ?? 80,
-  });
+  }, "stocks-market-data");
 }
 
 export async function createStockIdentity(input: {
@@ -73,7 +91,7 @@ export async function createStockIdentity(input: {
   slug?: string | null;
   initial_price_usdc?: number;
 }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     created: boolean;
     identity: any;
@@ -83,7 +101,7 @@ export async function createStockIdentity(input: {
       liquidity_usdc: number;
       reserve_usdc: number;
     };
-  }>("stock-create-identity", input);
+  }>("stock-create-identity", input, "stocks-create-identity");
 }
 
 export async function getStockQuote(input: {
@@ -94,7 +112,7 @@ export async function getStockQuote(input: {
   quantity?: number;
   max_slippage_bps?: number;
 }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     identity: any;
     wallet: any;
@@ -111,7 +129,7 @@ export async function submitStockOrder(input: {
   quantity?: number;
   max_slippage_bps?: number;
 }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     order_id: string;
     trade: any;
@@ -119,7 +137,7 @@ export async function submitStockOrder(input: {
     identity: any;
     wallet: any;
     execution: any;
-  }>("stock-submit-order", input);
+  }>("stock-submit-order", input, "stocks-place-trade");
 }
 
 export async function listStockChat(input: {
@@ -128,7 +146,7 @@ export async function listStockChat(input: {
   limit?: number;
   before?: string;
 }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     action: "list";
     stock: any;
@@ -139,11 +157,11 @@ export async function listStockChat(input: {
     slug: input.slug,
     limit: input.limit ?? 50,
     before: input.before ?? null,
-  });
+  }, "stocks-chat");
 }
 
 export async function postStockChat(input: { stock_id?: string; slug?: string; body: string }) {
-  return await callFn<{
+  return await callStockFn<{
     ok: boolean;
     action: "post";
     stock: any;
@@ -153,7 +171,7 @@ export async function postStockChat(input: { stock_id?: string; slug?: string; b
     stock_id: input.stock_id,
     slug: input.slug,
     body: input.body,
-  });
+  }, "stocks-chat");
 }
 
 export async function fetchMyStockPortfolio() {

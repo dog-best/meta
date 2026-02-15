@@ -44,7 +44,7 @@ Deno.serve(async (req) => {
       storeIds.length
         ? admin
           .from("market_seller_profiles")
-          .select("user_id,market_username,business_name,is_verified")
+          .select("user_id,market_username,display_name,business_name,is_verified,logo_path")
           .in("user_id", storeIds)
         : Promise.resolve({ data: [] as any[], error: null } as any),
       stockIds.length
@@ -114,8 +114,10 @@ Deno.serve(async (req) => {
         chain: String(r.chain),
         status,
         market_username: seller?.market_username ?? null,
+        display_name: seller?.display_name ?? null,
         business_name: seller?.business_name ?? null,
         is_verified: Boolean(seller?.is_verified),
+        logo_path: seller?.logo_path ?? null,
         price: toNum(point?.last_price_usdc, 0.01),
         market_cap: toNum(point?.market_cap_usdc, 0),
         volume_24h_quote: agg.volume,

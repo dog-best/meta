@@ -6,6 +6,7 @@ import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Text, TextInp
 
 import AppHeader from "@/components/common/AppHeader";
 import SocialFeed from "@/components/market/SocialFeed";
+import { fetchStocksOverview } from "@/services/market/stocks";
 import { supabase } from "@/services/supabase";
 import { isNigeriaCountry, resolveUserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
@@ -74,6 +75,19 @@ type Listing = {
   cover_url?: string | null;
 };
 
+type StoreStock = {
+  id: string;
+  slug: string;
+  name: string;
+  symbol: string;
+  chain: string;
+  status: "ACTIVE" | "BOOTSTRAP" | "PAUSED";
+  price_usdc: number;
+  market_cap_usdc: number;
+  volume_24h_usdc: number;
+  trades_24h: number;
+};
+
 type Review = {
   id: string;
   seller_id: string;
@@ -112,6 +126,7 @@ export default function PublicSellerProfile() {
   const [loading, setLoading] = useState(true);
   const [seller, setSeller] = useState<Seller | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
+  const [storeStock, setStoreStock] = useState<StoreStock | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [meId, setMeId] = useState<string | null>(null);
 
@@ -303,6 +318,30 @@ export default function PublicSellerProfile() {
     setCanReview(!!data?.length);
   }
 
+  async function loadStoreStock(storeId: string) {
+    const feed = await fetchStocksOverview(100, 0);
+    const row = (feed.items ?? []).find((i) => String(i.store_id) === storeId);
+    if (!row) {
+      setStoreStock(null);
+      return;
+    }
+
+    const status = String(row.status || "ACTIVE").toUpperCase();
+
+    setStoreStock({
+      id: String(row.identity_id),
+      slug: String(row.slug),
+      name: String(row.token_name),
+      symbol: String(row.token_symbol),
+      chain: String(row.chain),
+      status: status === "PAUSED" || status === "BOOTSTRAP" ? status : "ACTIVE",
+      price_usdc: Number(row.price || 0),
+      market_cap_usdc: Number(row.market_cap || 0),
+      volume_24h_usdc: Number(row.volume_24h_quote || 0),
+      trades_24h: Number(row.trades_24h || 0),
+    });
+  }
+
   useEffect(() => {
     if (!seller?.user_id) return;
     loadFollowers();
@@ -323,6 +362,24 @@ export default function PublicSellerProfile() {
       supabase.removeChannel(ch);
     };
   }, [seller?.user_id, meId]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!seller?.user_id) {
+      setStoreStock(null);
+      return;
+    }
+    (async () => {
+      try {
+        await loadStoreStock(seller.user_id);
+      } catch {
+        if (mounted) setStoreStock(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [seller?.user_id]);
 
   async function toggleFollow() {
     if (!meId) {
@@ -533,6 +590,49 @@ export default function PublicSellerProfile() {
                 {seller.bio || "No bio yet."}
               </Text>
             </View>
+
+            {storeStock ? (
+              <Pressable
+                onPress={() => router.push(`/market/stock/${storeStock.slug}` as any)}
+                style={{
+                  marginTop: 12,
+                  borderRadius: 14,
+                  padding: 12,
+                  borderWidth: 1,
+                  borderColor: "rgba(45,212,191,0.45)",
+                  backgroundColor: "rgba(45,212,191,0.14)",
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <View>
+                    <Text style={{ color: "#ECFEFF", fontWeight: "900", fontSize: 14 }}>
+                      {storeStock.name} ({storeStock.symbol})
+                    </Text>
+                    <Text style={{ marginTop: 4, color: "rgba(236,254,255,0.78)", fontSize: 11 }}>
+                      {String(storeStock.chain).toUpperCase().replace("_", " ")} • {storeStock.status}
+                    </Text>
+                  </View>
+                  <Ionicons name="trending-up-outline" size={18} color="#99F6E4" />
+                </View>
+                <View style={{ marginTop: 8, flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
+                  <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
+                    Price ${storeStock.price_usdc.toFixed(6)}
+                  </Text>
+                  <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: "800" }}>
+                    MCap ${storeStock.market_cap_usdc.toFixed(2)}
+                  </Text>
+                  <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: "800" }}>
+                    24h ${storeStock.volume_24h_usdc.toFixed(2)}
+                  </Text>
+                  <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: "800" }}>
+                    Trades {storeStock.trades_24h}
+                  </Text>
+                </View>
+                <Text style={{ marginTop: 8, color: "#ECFEFF", fontSize: 12, fontWeight: "900" }}>
+                  Open Stock Market
+                </Text>
+              </Pressable>
+            ) : null}
 
             {socialItems.length ? (
               <View style={{ marginTop: 12 }}>
