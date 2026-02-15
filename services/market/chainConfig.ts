@@ -15,7 +15,7 @@ export type MarketChainConfig = {
 
 const KEY_CHAIN = "bc_market_chain_pref_v2";
 
-export async function fetchMarketChains() {
+export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
   const normalize = (input: any): MarketChainConfig => ({
     chain: String(input?.chain ?? ""),
     chain_id: Number(input?.chain_id ?? 0),
@@ -53,7 +53,7 @@ export async function fetchMarketChains() {
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json?.message || json?.error || "Failed to load chains");
-    const fromFn = (json?.chains ?? []).map(normalize);
+    const fromFn: MarketChainConfig[] = (json?.chains ?? []).map(normalize);
     // Guard against stale function deployments returning empty token addresses.
     const hasValidTokens = fromFn.some((c) => /^0x[a-fA-F0-9]{40}$/.test(c.usdc_address || ""));
     if (fromFn.length && hasValidTokens) return fromFn;
@@ -101,11 +101,11 @@ export async function fetchMarketChains() {
 export async function getPreferredMarketChain() {
   const saved = await SecureStore.getItemAsync(KEY_CHAIN);
   const chains = await fetchMarketChains();
-  const active = chains.find((c) => c.active) ?? null;
+  const active = chains.find((c: MarketChainConfig) => c.active) ?? null;
   const fallback = chains[0] ?? null;
 
   if (saved) {
-    const match = chains.find((c) => c.chain === saved);
+    const match = chains.find((c: MarketChainConfig) => c.chain === saved);
     if (match?.active) return match;
   }
 
