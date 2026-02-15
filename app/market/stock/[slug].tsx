@@ -232,6 +232,10 @@ export default function StockDetailScreen() {
   const [quoteErr, setQuoteErr] = useState<string | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [quickAmount, setQuickAmount] = useState(25);
+  const [quickQuote, setQuickQuote] = useState<any | null>(null);
+  const [quickQuoteErr, setQuickQuoteErr] = useState<string | null>(null);
+  const [quickSubmitting, setQuickSubmitting] = useState(false);
 
   const [chatLoading, setChatLoading] = useState(false);
   const [chatErr, setChatErr] = useState<string | null>(null);
@@ -346,6 +350,38 @@ export default function StockDetailScreen() {
     };
   }, [slug, side, amountUsdc, quantity, detail?.identity?.id]);
 
+  useEffect(() => {
+    const paused = !!detail?.stats?.trading_paused;
+    if (!slug || paused) {
+      setQuickQuote(null);
+      setQuickQuoteErr(null);
+      return;
+    }
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      try {
+        setQuickQuoteErr(null);
+        const res = await getStockQuote({
+          slug,
+          side: "buy",
+          amount_usdc: quickAmount,
+          max_slippage_bps: 1200,
+        });
+        if (!cancelled) setQuickQuote(res.quote ?? null);
+      } catch (e: any) {
+        if (!cancelled) {
+          setQuickQuote(null);
+          setQuickQuoteErr(friendlyMarketError(e, "Quick quote unavailable"));
+        }
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [slug, quickAmount, detail?.stats?.trading_paused]);
+
   async function onSubmitTrade() {
     if (!slug) return;
     setQuoteErr(null);
@@ -395,6 +431,26 @@ export default function StockDetailScreen() {
     }
   }
 
+  async function onQuickBuy() {
+    if (!slug || tradingPaused) return;
+    try {
+      setQuickSubmitting(true);
+      setQuickQuoteErr(null);
+      await submitStockOrder({
+        slug,
+        side: "buy",
+        amount_usdc: quickAmount,
+        max_slippage_bps: 1200,
+      });
+      await loadDetail(true);
+      setPanel("trades");
+    } catch (e: any) {
+      setQuickQuoteErr(friendlyMarketError(e, "Quick buy failed"));
+    } finally {
+      setQuickSubmitting(false);
+    }
+  }
+
   const title = detail?.identity?.name || "Stock";
   const symbol = detail?.identity?.symbol || "";
   const chainText = String(detail?.identity?.chain || "")
@@ -417,7 +473,7 @@ export default function StockDetailScreen() {
   return (
     <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
       <AppHeader title="Stock Detail" subtitle="Realtime market + chat + buy/sell execution." />
-      <ScrollView contentContainerStyle={{ paddingBottom: 36 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 148 }}>
         {loading ? (
           <View style={{ marginTop: 28, alignItems: "center" }}>
             <ActivityIndicator />
@@ -817,6 +873,79 @@ export default function StockDetailScreen() {
           </>
         ) : null}
       </ScrollView>
+
+      {!loading && !err && detail ? (
+        <View
+          style={{
+            position: "absolute",
+            left: 14,
+            right: 14,
+            bottom: 14,
+            borderRadius: 14,
+            padding: 10,
+            backgroundColor: "rgba(3,7,18,0.92)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.16)",
+          }}
+        >
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Quick Buy</Text>
+            <Text style={{ color: MUTED, fontSize: 11 }}>
+              {quickQuote ? `~${Number(quickQuote.quantity || 0).toFixed(4)} ${symbol}` : "Live quote"}
+            </Text>
+          </View>
+
+          <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
+            {[10, 25, 50, 100].map((v) => (
+              <Pressable
+                key={v}
+                onPress={() => setQuickAmount(v)}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 8,
+                  alignItems: "center",
+                  backgroundColor: quickAmount === v ? "rgba(45,212,191,0.20)" : "rgba(255,255,255,0.05)",
+                  borderWidth: 1,
+                  borderColor: quickAmount === v ? "rgba(45,212,191,0.52)" : BORDER,
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>${v}</Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={{ marginTop: 8, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <View style={{ flex: 1 }}>
+              {quickQuote ? (
+                <Text style={{ color: MUTED, fontSize: 11 }}>
+                  Exec ${Number(quickQuote.price_execution_usdc || 0).toFixed(6)} - Impact {Number(quickQuote.price_impact_bps || 0).toFixed(2)} bps
+                </Text>
+              ) : quickQuoteErr ? (
+                <Text style={{ color: "#FCA5A5", fontSize: 11, fontWeight: "700" }}>{quickQuoteErr}</Text>
+              ) : (
+                <Text style={{ color: MUTED, fontSize: 11 }}>Preparing quote...</Text>
+              )}
+            </View>
+            <Pressable
+              onPress={onQuickBuy}
+              disabled={quickSubmitting || tradingPaused}
+              style={{
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                backgroundColor: tradingPaused ? "rgba(255,255,255,0.14)" : "rgba(45,212,191,0.34)",
+                borderWidth: 1,
+                borderColor: tradingPaused ? "rgba(255,255,255,0.26)" : "rgba(45,212,191,0.58)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
+                {quickSubmitting ? "Submitting..." : tradingPaused ? "Paused" : `Buy $${quickAmount}`}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </LinearGradient>
   );
 }

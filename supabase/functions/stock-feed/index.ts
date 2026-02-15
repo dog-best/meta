@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
       stockIds.length
         ? admin
           .from("market_stock_trades")
-          .select("stock_id,notional_usdc,traded_at")
+          .select("stock_id,notional_usdc,price_usdc,traded_at")
           .in("stock_id", stockIds)
           .gte("traded_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
           .order("traded_at", { ascending: false })
@@ -76,13 +76,34 @@ Deno.serve(async (req) => {
 
     const sellerMap = new Map<string, any>((sellerRes.data ?? []).map((s: any) => [String(s.user_id), s]));
     const pointMap = new Map<string, any>((pointRes.data ?? []).map((p: any) => [String(p.stock_id), p]));
-    const tradeAgg = new Map<string, { volume: number; trades: number; last: string | null }>();
+    const tradeAgg = new Map<
+      string,
+      {
+        volume: number;
+        trades: number;
+        last: string | null;
+        latestPrice: number | null;
+        oldestPrice: number | null;
+        sparkline: number[];
+      }
+    >();
     for (const row of (tradesRes.data ?? [])) {
       const key = String((row as any).stock_id);
-      const cur = tradeAgg.get(key) ?? { volume: 0, trades: 0, last: null };
+      const cur = tradeAgg.get(key) ?? {
+        volume: 0,
+        trades: 0,
+        last: null,
+        latestPrice: null,
+        oldestPrice: null,
+        sparkline: [],
+      };
       cur.volume += toNum((row as any).notional_usdc, 0);
       cur.trades += 1;
       const t = String((row as any).traded_at ?? "");
+      const p = toNum((row as any).price_usdc, 0);
+      if (cur.latestPrice == null && p > 0) cur.latestPrice = p;
+      if (p > 0) cur.oldestPrice = p;
+      if (p > 0 && cur.sparkline.length < 24) cur.sparkline.push(p);
       if (!cur.last || new Date(t).getTime() > new Date(cur.last).getTime()) cur.last = t;
       tradeAgg.set(key, cur);
     }
@@ -91,7 +112,14 @@ Deno.serve(async (req) => {
       const stockId = String(r.id);
       const point = pointMap.get(stockId);
       const seller = sellerMap.get(String(r.store_id));
-      const agg = tradeAgg.get(stockId) ?? { volume: 0, trades: 0, last: null };
+      const agg = tradeAgg.get(stockId) ?? {
+        volume: 0,
+        trades: 0,
+        last: null,
+        latestPrice: null,
+        oldestPrice: null,
+        sparkline: [] as number[],
+      };
       const paused = isTradingPaused({
         ...r,
         chain_id: 0,
@@ -105,6 +133,9 @@ Deno.serve(async (req) => {
         creation_lp_usdc: 45,
       } as any);
       const status = paused ? "PAUSED" : guard ? "BOOTSTRAP" : "ACTIVE";
+      const lastPrice = toNum(point?.last_price_usdc, 0.01);
+      const oldPrice = toNum(agg.oldestPrice, lastPrice);
+      const changePct = oldPrice > 0 ? ((lastPrice - oldPrice) / oldPrice) * 100 : 0;
       return {
         identity_id: stockId,
         store_id: String(r.store_id),
@@ -118,11 +149,14 @@ Deno.serve(async (req) => {
         business_name: seller?.business_name ?? null,
         is_verified: Boolean(seller?.is_verified),
         logo_path: seller?.logo_path ?? null,
-        price: toNum(point?.last_price_usdc, 0.01),
+        price: lastPrice,
         market_cap: toNum(point?.market_cap_usdc, 0),
         volume_24h_quote: agg.volume,
         trades_24h: agg.trades,
         last_trade_at: agg.last,
+        change_24h_pct: Number.isFinite(changePct) ? changePct : 0,
+        sparkline_prices: agg.sparkline.length ? [...agg.sparkline].reverse() : [lastPrice],
+        created_at: String(r.created_at),
       };
     }).sort((a, b) => {
       if (b.volume_24h_quote !== a.volume_24h_quote) return b.volume_24h_quote - a.volume_24h_quote;

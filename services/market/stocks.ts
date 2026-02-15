@@ -35,6 +35,9 @@ export type StockOverviewItem = {
   volume_24h_quote: number;
   trades_24h: number;
   last_trade_at: string | null;
+  change_24h_pct?: number;
+  sparkline_prices?: number[];
+  created_at?: string;
 };
 
 export async function fetchStocksOverview(limit = 30, offset = 0) {
