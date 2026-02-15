@@ -7,6 +7,8 @@ export type StockIdentity = {
   store_id: string;
   chain: string;
   chain_id: number;
+  token_address: string | null;
+  pool_address: string | null;
   slug: string;
   name: string;
   symbol: string;
@@ -100,7 +102,7 @@ export async function resolveStockIdentity(
   let q = admin
     .from("market_stock_identities")
     .select(
-      "id,store_id,chain,chain_id,slug,name,symbol,total_supply,creation_lp_usdc,launch_guard_until,trading_paused_until,active,launched_at",
+      "id,store_id,chain,chain_id,token_address,pool_address,slug,name,symbol,total_supply,creation_lp_usdc,launch_guard_until,trading_paused_until,active,launched_at",
     )
     .limit(1);
 
@@ -116,6 +118,8 @@ export async function resolveStockIdentity(
     store_id: String(data.store_id),
     chain: String(data.chain),
     chain_id: toNum(data.chain_id, 0),
+    token_address: data.token_address ? String(data.token_address) : null,
+    pool_address: data.pool_address ? String(data.pool_address) : null,
     slug: String(data.slug),
     name: String(data.name),
     symbol: String(data.symbol),

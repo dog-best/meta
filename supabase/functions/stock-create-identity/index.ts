@@ -55,6 +55,13 @@ Deno.serve(async (req) => {
   const symbol = normalizeSymbol(String(body?.symbol ?? body?.token_symbol ?? ""));
   const slugInput = String(body?.slug ?? `${name}-${symbol}`);
   const initialPrice = Number(body?.initial_price_usdc ?? body?.initial_price ?? 0.01);
+  const txHash = String(body?.tx_hash ?? "").trim();
+  const userOpHash = String(body?.user_op_hash ?? "").trim();
+  const tokenAddress = String(body?.token_address ?? "").trim();
+  const poolAddress = String(body?.pool_address ?? "").trim();
+  const vaultAddress = String(body?.vault_address ?? "").trim();
+  const stakingAddress = String(body?.staking_address ?? "").trim();
+  const storeKey = String(body?.store_key ?? "").trim();
 
   if (!name || name.length < 3) return bad("name must be at least 3 characters");
   if (!symbol || symbol.length < 2) return bad("symbol must be at least 2 characters");
@@ -170,6 +177,8 @@ Deno.serve(async (req) => {
       slug,
       name,
       symbol,
+      token_address: tokenAddress || null,
+      pool_address: poolAddress || null,
       launch_guard_until: launchGuardUntil,
       launched_at: now.toISOString(),
     })
@@ -177,7 +186,19 @@ Deno.serve(async (req) => {
     .single();
   if (createErr || !identity) return bad(createErr?.message ?? "Failed to create stock identity");
 
-  const reserveUsdc = Number(identity.creation_reserve_usdc ?? 5);
+  const { error: lockPermErr } = await admin
+    .from("store_identity_permissions")
+    .upsert(
+      {
+        store_id: user.id,
+        can_create: false,
+      },
+      { onConflict: "store_id" },
+    );
+  if (lockPermErr) return bad(lockPermErr.message);
+
+  const reserveUsdc = 0;
+  const platformUsdc = Number(identity.creation_reserve_usdc ?? 5);
   const creationLp = Number(identity.creation_lp_usdc ?? 45);
 
   const { error: reserveErr2 } = await admin
@@ -198,11 +219,12 @@ Deno.serve(async (req) => {
       stock_id: identity.id,
       store_id: user.id,
       source_type: "creation_fee",
-      gross_usdc: creationLp,
-      platform_usdc: 0,
+      gross_usdc: creationLp + platformUsdc,
+      platform_usdc: platformUsdc,
       liquidity_usdc: creationLp,
       staking_usdc: 0,
       chain: identity.chain,
+      tx_hash: txHash || null,
       status: "confirmed",
       idempotency_key: `stock:create:${identity.id}`,
     });
@@ -228,6 +250,15 @@ Deno.serve(async (req) => {
       creation_fee_usdc: 50,
       liquidity_usdc: creationLp,
       reserve_usdc: reserveUsdc,
+    },
+    onchain: {
+      tx_hash: txHash || null,
+      user_op_hash: userOpHash || null,
+      token_address: tokenAddress || null,
+      pool_address: poolAddress || null,
+      vault_address: vaultAddress || null,
+      staking_address: stakingAddress || null,
+      store_key: storeKey || null,
     },
   });
 });

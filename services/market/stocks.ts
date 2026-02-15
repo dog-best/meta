@@ -93,6 +93,13 @@ export async function createStockIdentity(input: {
   chain?: string | null;
   slug?: string | null;
   initial_price_usdc?: number;
+  tx_hash?: string;
+  user_op_hash?: string;
+  token_address?: string;
+  pool_address?: string;
+  vault_address?: string;
+  staking_address?: string;
+  store_key?: string;
 }) {
   return await callStockFn<{
     ok: boolean;
@@ -131,10 +138,14 @@ export async function submitStockOrder(input: {
   amount_usdc?: number;
   quantity?: number;
   max_slippage_bps?: number;
+  tx_hash?: string;
+  user_op_hash?: string;
+  execution_mode?: "backend_fill" | "onchain";
+  quote_snapshot?: any;
 }) {
   return await callStockFn<{
     ok: boolean;
-    order_id: string;
+    order_id: string | null;
     trade: any;
     quote: any;
     identity: any;

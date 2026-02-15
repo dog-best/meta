@@ -4,6 +4,8 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
+  Modal,
   Pressable,
   ScrollView,
   Text,
@@ -13,7 +15,7 @@ import {
 
 import AppHeader from "@/components/common/AppHeader";
 import { fetchMarketChains } from "@/services/market/chainConfig";
-import { createStockIdentity } from "@/services/market/stocks";
+import { createStockIdentityOnchain } from "@/services/market/stockOnchain";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -29,6 +31,10 @@ export default function CreateStockIdentityScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [txExplorer, setTxExplorer] = useState<string | null>(null);
+  const [successVisible, setSuccessVisible] = useState(false);
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [slug, setSlug] = useState("");
@@ -41,7 +47,10 @@ export default function CreateStockIdentityScreen() {
   });
 
   const chainRows = useMemo(
-    () => (chains ?? []).filter((c: any) => c?.active).sort((a: any, b: any) => Number(b.chain_id || 0) - Number(a.chain_id || 0)),
+    () =>
+      (chains ?? [])
+        .filter((c: any) => c?.active && c?.identity_factory && c?.identity_router && (c?.identity_stable_address || c?.usdc_address))
+        .sort((a: any, b: any) => Number(b.chain_id || 0) - Number(a.chain_id || 0)),
     [chains],
   );
 
@@ -67,8 +76,9 @@ export default function CreateStockIdentityScreen() {
         if (sellerErr) throw sellerErr;
 
         if (!mounted) return;
+        const chainRows = (chainData ?? []).filter((c: any) => c.active && c.identity_factory && c.identity_router && (c.identity_stable_address || c.usdc_address));
         setChains(chainData ?? []);
-        setChain((chainData ?? []).find((c: any) => c.active)?.chain || "");
+        setChain(chainRows[0]?.chain || "");
         setSellerState({
           exists: !!seller?.user_id,
           verified: !!seller?.is_verified,
@@ -94,21 +104,26 @@ export default function CreateStockIdentityScreen() {
       if (!symbol.trim() || symbol.trim().length < 2) throw new Error("Symbol must be at least 2 characters");
       if (!chain.trim()) throw new Error("Select a chain");
 
+      setConfirmVisible(false);
       setSubmitting(true);
-      const res = await createStockIdentity({
+      const res = await createStockIdentityOnchain({
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
         chain,
-        slug: slug.trim() || undefined,
+        slug: slug.trim() || null,
       });
 
       if (!res?.ok) throw new Error("Identity creation failed");
       const createdSlug = String(res.identity?.slug || "");
-      setOkMsg("Stock identity created. Initial liquidity and reserve recorded.");
+      const createdTxHash = String(res?.tx_hash || "").trim();
+      setTxHash(createdTxHash || null);
+      setTxExplorer(String(res?.explorer_url || "").trim() || null);
+      setOkMsg("Stock identity created on-chain. Fees split: $45 liquidity / $5 fee receiver.");
+      setSuccessVisible(true);
       if (createdSlug) {
         setTimeout(() => {
           router.replace(`/market/stock/${createdSlug}` as any);
-        }, 400);
+        }, 700);
       }
     } catch (e: any) {
       setErr(friendlyMarketError(e, "Could not create stock identity."));
@@ -227,7 +242,7 @@ export default function CreateStockIdentityScreen() {
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Creation Economics</Text>
           <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Creation fee: $50 USDC</Text>
           <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$45 {"->"} initial liquidity</Text>
-          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$5 {"->"} store reserve balance</Text>
+          <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>$5 {"->"} platform fee receiver wallet</Text>
           <View style={{ marginTop: 8, flexDirection: "row", gap: 6, alignItems: "center" }}>
             <Ionicons name="shield-checkmark-outline" size={15} color={MINT} />
             <Text style={{ color: MUTED, fontSize: 11 }}>
@@ -249,7 +264,21 @@ export default function CreateStockIdentityScreen() {
         ) : null}
 
         <Pressable
-          onPress={onCreate}
+          onPress={() => {
+            if (!name.trim() || name.trim().length < 3) {
+              setErr("Name must be at least 3 characters");
+              return;
+            }
+            if (!symbol.trim() || symbol.trim().length < 2) {
+              setErr("Symbol must be at least 2 characters");
+              return;
+            }
+            if (!chain.trim()) {
+              setErr("Select a chain");
+              return;
+            }
+            setConfirmVisible(true);
+          }}
           disabled={submitting || loading || !!blockReason}
           style={{
             marginTop: 14,
@@ -266,6 +295,70 @@ export default function CreateStockIdentityScreen() {
           </Text>
         </Pressable>
       </ScrollView>
+
+      <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => setConfirmVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.62)", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <View style={{ width: "100%", maxWidth: 420, borderRadius: 16, padding: 14, backgroundColor: "#0B1220", borderWidth: 1, borderColor: BORDER }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Confirm On-Chain Creation</Text>
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>Name: {name.trim()}</Text>
+            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>Symbol: {symbol.trim().toUpperCase()}</Text>
+            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>Chain: {chain.toUpperCase().replace("_", " ")}</Text>
+            <Text style={{ marginTop: 8, color: "#E2E8F0", fontWeight: "800", fontSize: 12 }}>
+              This will execute on-chain and charge $50 USDC from your wallet.
+            </Text>
+            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>$45 -> liquidity, $5 -> platform fee receiver</Text>
+
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+              <Pressable
+                onPress={() => setConfirmVisible(false)}
+                style={{ flex: 1, borderRadius: 11, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: BORDER }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={onCreate}
+                disabled={submitting}
+                style={{ flex: 1, borderRadius: 11, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(45,212,191,0.34)", borderWidth: 1, borderColor: "rgba(45,212,191,0.60)" }}
+              >
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>{submitting ? "Submitting..." : "Confirm"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={successVisible} transparent animationType="fade" onRequestClose={() => setSuccessVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.62)", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <View style={{ width: "100%", maxWidth: 420, borderRadius: 16, padding: 14, backgroundColor: "#052019", borderWidth: 1, borderColor: "rgba(45,212,191,0.4)" }}>
+            <Text style={{ color: "#A7F3D0", fontWeight: "900", fontSize: 16 }}>Creation Successful</Text>
+            <Text style={{ marginTop: 8, color: "#ECFEFF", fontSize: 12 }}>
+              Stock identity was created on-chain and synced to BestCity.
+            </Text>
+            {!!txHash ? (
+              <Text style={{ marginTop: 8, color: "#99F6E4", fontSize: 11 }} numberOfLines={2}>
+                Tx: {txHash}
+              </Text>
+            ) : null}
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+              <Pressable
+                onPress={() => setSuccessVisible(false)}
+                style={{ flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Close</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (txExplorer) Linking.openURL(txExplorer);
+                }}
+                disabled={!txExplorer}
+                style={{ flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: "center", backgroundColor: txExplorer ? "rgba(45,212,191,0.28)" : "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: txExplorer ? "rgba(45,212,191,0.56)" : "rgba(255,255,255,0.16)" }}
+              >
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>View On Explorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }

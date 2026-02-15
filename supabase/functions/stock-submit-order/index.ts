@@ -16,6 +16,22 @@ function round8(n: number) {
   return Math.round(n * 100000000) / 100000000;
 }
 
+async function rpcCall(rpcUrl: string, method: string, params: unknown[]) {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`RPC ${method} failed: ${res.status}`);
+  if (json?.error) throw new Error(String(json.error?.message || `RPC ${method} error`));
+  return json?.result;
+}
+
+function isHexTxHash(v: string) {
+  return /^0x[a-fA-F0-9]{64}$/.test(v);
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed();
 
@@ -33,11 +49,17 @@ Deno.serve(async (req) => {
   const quantityInput = toNum(body?.quantity, 0);
   const maxSlippageBps = toNum(body?.max_slippage_bps, 1200);
   const feeBps = toNum(body?.fee_bps, 50);
+  const executionMode = String(body?.execution_mode ?? "backend_fill").trim().toLowerCase();
+  const txHash = String(body?.tx_hash ?? "").trim();
+  const userOpHash = String(body?.user_op_hash ?? "").trim();
+  const quoteSnapshot = body?.quote_snapshot ?? null;
 
   if (!side) return bad("side must be buy or sell");
   const identity = await resolveStockIdentity(admin as any, { stockId, slug });
   if (!identity) return bad("Stock identity not found");
   if (isTradingPaused(identity)) return bad("Trading is paused for this stock");
+  const onchainMode = executionMode === "onchain";
+  if (onchainMode && !isHexTxHash(txHash)) return bad("tx_hash is required for onchain execution");
 
   const { data: wallet, error: walletErr } = await admin
     .from("crypto_wallets")
@@ -58,6 +80,41 @@ Deno.serve(async (req) => {
   if (recentErr) return bad(recentErr.message);
   if ((recentCount ?? 0) > 0) return bad("Cooldown active. Wait a few seconds before placing another order");
 
+  if (onchainMode) {
+    const { data: existingTrade, error: existingErr } = await admin
+      .from("market_stock_trades")
+      .select("id,stock_id,user_id,side,price_usdc,quantity,notional_usdc,fee_usdc,chain_tx_hash,traded_at,created_at")
+      .eq("stock_id", identity.id)
+      .eq("chain_tx_hash", txHash)
+      .maybeSingle();
+    if (existingErr) return bad(existingErr.message);
+    if (existingTrade) {
+      return ok({
+        ok: true,
+        order_id: null,
+        trade: existingTrade,
+        quote: quoteSnapshot ?? null,
+        identity: {
+          id: identity.id,
+          slug: identity.slug,
+          name: identity.name,
+          symbol: identity.symbol,
+          chain: identity.chain,
+        },
+        wallet: {
+          address: wallet.address,
+          chain: wallet.chain,
+        },
+        execution: {
+          mode: "onchain",
+          tx_hash: txHash,
+          user_op_hash: userOpHash || null,
+          indexed_existing: true,
+        },
+      });
+    }
+  }
+
   const [spotPrice, liquidityUsdc] = await Promise.all([
     resolveSpotPriceUsdc(admin as any, identity.id, 0.01),
     resolveLiquidityUsdc(admin as any, identity),
@@ -65,16 +122,33 @@ Deno.serve(async (req) => {
 
   let quote: ReturnType<typeof buildQuote>;
   try {
-    quote = buildQuote({
-      side,
-      spotPriceUsdc: spotPrice,
-      liquidityUsdc,
-      amountUsdc: amountUsdcInput,
-      quantity: quantityInput,
-      feeBps,
-      maxSlippageBps,
-      launchGuardActive: isLaunchGuardActive(identity),
-    });
+    if (quoteSnapshot && typeof quoteSnapshot === "object") {
+      quote = {
+        side,
+        price_spot_usdc: toNum((quoteSnapshot as any)?.price_spot_usdc, spotPrice),
+        price_execution_usdc: toNum((quoteSnapshot as any)?.price_execution_usdc, spotPrice),
+        quantity: toNum((quoteSnapshot as any)?.quantity, side === "buy" ? 0 : quantityInput),
+        notional_usdc: toNum((quoteSnapshot as any)?.notional_usdc, side === "buy" ? amountUsdcInput : quantityInput * spotPrice),
+        fee_usdc: toNum((quoteSnapshot as any)?.fee_usdc, 0),
+        price_impact_bps: toNum((quoteSnapshot as any)?.price_impact_bps, 0),
+        slippage_bps: toNum((quoteSnapshot as any)?.slippage_bps, 0),
+        max_trade_usdc: toNum((quoteSnapshot as any)?.max_trade_usdc, liquidityUsdc * 0.2),
+        cooldown_seconds: toNum((quoteSnapshot as any)?.cooldown_seconds, 10),
+        liquidity_usdc: toNum((quoteSnapshot as any)?.liquidity_usdc, liquidityUsdc),
+        launch_guard_active: Boolean((quoteSnapshot as any)?.launch_guard_active),
+      };
+    } else {
+      quote = buildQuote({
+        side,
+        spotPriceUsdc: spotPrice,
+        liquidityUsdc,
+        amountUsdc: amountUsdcInput,
+        quantity: quantityInput,
+        feeBps,
+        maxSlippageBps,
+        launchGuardActive: isLaunchGuardActive(identity),
+      });
+    }
   } catch (e: any) {
     return bad(String(e?.message ?? e));
   }
@@ -91,6 +165,30 @@ Deno.serve(async (req) => {
     if (balance < quote.quantity) return bad(`Insufficient balance (${balance.toFixed(6)} ${identity.symbol})`);
   }
 
+  if (onchainMode) {
+    const { data: cfg, error: cfgErr } = await admin
+      .from("market_chain_config")
+      .select("rpc_url,confirmations_required,active")
+      .eq("chain", identity.chain)
+      .eq("active", true)
+      .maybeSingle();
+    if (cfgErr) return bad(cfgErr.message);
+    if (!cfg?.rpc_url) return bad(`rpc_url missing for ${identity.chain}`);
+
+    const receipt: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionReceipt", [txHash]);
+    if (!receipt) return bad("Transaction receipt not found on chain yet");
+    if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain trade transaction failed");
+
+    const latestBlockHex = await rpcCall(String(cfg.rpc_url), "eth_blockNumber", []);
+    const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
+    const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
+    const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 1;
+    const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
+    if (confirmations < required) {
+      return bad(`Awaiting confirmations (${confirmations}/${required})`);
+    }
+  }
+
   const { data: order, error: orderErr } = await admin
     .from("market_stock_orders")
     .insert({
@@ -103,6 +201,7 @@ Deno.serve(async (req) => {
       slippage_bps: Math.round(maxSlippageBps),
       max_price_impact_bps: Math.round(quote.price_impact_bps),
       status: "submitted",
+      submitted_tx_hash: onchainMode ? txHash : null,
     })
     .select("*")
     .single();
@@ -120,7 +219,7 @@ Deno.serve(async (req) => {
         quantity: round8(quote.quantity),
         notional_usdc: round8(quote.notional_usdc),
         fee_usdc: round8(quote.fee_usdc),
-        chain_tx_hash: null,
+        chain_tx_hash: onchainMode ? txHash : null,
         traded_at: nowIso,
       })
       .select("*")
@@ -247,8 +346,12 @@ Deno.serve(async (req) => {
         chain: wallet.chain,
       },
       execution: {
-        mode: "backend_fill",
-        note: "Execution is currently backend-filled. Switch to on-chain settlement in next phase.",
+        mode: onchainMode ? "onchain" : "backend_fill",
+        tx_hash: onchainMode ? txHash : null,
+        user_op_hash: onchainMode ? (userOpHash || null) : null,
+        note: onchainMode
+          ? "On-chain execution recorded and indexed."
+          : "Execution is currently backend-filled. Switch to on-chain settlement in next phase.",
       },
     });
   } catch (e: any) {

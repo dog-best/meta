@@ -9,6 +9,10 @@ export type MarketChainConfig = {
   usdc_address: string;
   usdt_address: string | null;
   escrow_address: string;
+  identity_factory?: string | null;
+  identity_router?: string | null;
+  identity_name_registry?: string | null;
+  identity_stable_address?: string | null;
   confirmations_required: number;
   active: boolean;
 };
@@ -23,6 +27,10 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
     usdc_address: String(input?.usdc_address ?? ""),
     usdt_address: input?.usdt_address ? String(input.usdt_address) : null,
     escrow_address: String(input?.escrow_address ?? ""),
+    identity_factory: input?.identity_factory ? String(input.identity_factory) : null,
+    identity_router: input?.identity_router ? String(input.identity_router) : null,
+    identity_name_registry: input?.identity_name_registry ? String(input.identity_name_registry) : null,
+    identity_stable_address: input?.identity_stable_address ? String(input.identity_stable_address) : null,
     confirmations_required: Number(input?.confirmations_required ?? 3),
     active: Boolean(input?.active),
   });
@@ -31,7 +39,7 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
     // Prefer direct DB query to avoid stale/misconfigured edge function responses.
     const { data: direct, error: directErr } = await supabase
       .from("market_chain_config")
-      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
+      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,identity_factory,identity_router,identity_name_registry,identity_stable_address,confirmations_required,active")
       .order("active", { ascending: false });
     if (!directErr && direct && direct.length) {
       const directNorm = direct.map(normalize);
@@ -68,6 +76,10 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
         usdc_address: process.env.EXPO_PUBLIC_USDC_ADDRESS_BASE_SEPOLIA ?? "",
         usdt_address: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA ?? null,
         escrow_address: process.env.EXPO_PUBLIC_ESCROW_ADDRESS_BASE_SEPOLIA ?? "",
+        identity_factory: process.env.EXPO_PUBLIC_IDENTITY_FACTORY_BASE_SEPOLIA ?? null,
+        identity_router: process.env.EXPO_PUBLIC_IDENTITY_ROUTER_BASE_SEPOLIA ?? null,
+        identity_name_registry: process.env.EXPO_PUBLIC_IDENTITY_NAME_REGISTRY_BASE_SEPOLIA ?? null,
+        identity_stable_address: process.env.EXPO_PUBLIC_IDENTITY_STABLE_BASE_SEPOLIA ?? process.env.EXPO_PUBLIC_USDC_ADDRESS_BASE_SEPOLIA ?? null,
         confirmations_required: 3,
         active: true,
       },
@@ -89,6 +101,10 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
         usdc_address: amoyUsdc,
         usdt_address: amoyUsdt,
         escrow_address: amoyEscrow,
+        identity_factory: process.env.EXPO_PUBLIC_IDENTITY_FACTORY_POLYGON_AMOY ?? null,
+        identity_router: process.env.EXPO_PUBLIC_IDENTITY_ROUTER_POLYGON_AMOY ?? null,
+        identity_name_registry: process.env.EXPO_PUBLIC_IDENTITY_NAME_REGISTRY_POLYGON_AMOY ?? null,
+        identity_stable_address: process.env.EXPO_PUBLIC_IDENTITY_STABLE_POLYGON_AMOY ?? amoyUsdc ?? null,
         confirmations_required: 3,
         active: true,
       });

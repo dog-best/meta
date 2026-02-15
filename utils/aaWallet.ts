@@ -14,6 +14,10 @@ export type MarketChainConfig = {
   rpc_url: string | null;
   usdc_address: string;
   escrow_address: string;
+  identity_factory?: string | null;
+  identity_router?: string | null;
+  identity_name_registry?: string | null;
+  identity_stable_address?: string | null;
   confirmations_required: number;
   active: boolean;
 };

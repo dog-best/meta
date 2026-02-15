@@ -6,6 +6,8 @@ import {
   ActivityIndicator,
   Image,
   LayoutChangeEvent,
+  Linking,
+  Modal,
   Pressable,
   ScrollView,
   Text,
@@ -20,8 +22,8 @@ import {
   getStockQuote,
   listStockChat,
   postStockChat,
-  submitStockOrder,
 } from "@/services/market/stocks";
+import { submitStockTradeOnchain } from "@/services/market/stockOnchain";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -232,10 +234,18 @@ export default function StockDetailScreen() {
   const [quoteErr, setQuoteErr] = useState<string | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [pendingTrade, setPendingTrade] = useState<{
+    side: "buy" | "sell";
+    amount_usdc?: number;
+    quantity?: number;
+  } | null>(null);
+  const [successVisible, setSuccessVisible] = useState(false);
+  const [successTxHash, setSuccessTxHash] = useState<string | null>(null);
+  const [successExplorer, setSuccessExplorer] = useState<string | null>(null);
   const [quickAmount, setQuickAmount] = useState(25);
   const [quickQuote, setQuickQuote] = useState<any | null>(null);
   const [quickQuoteErr, setQuickQuoteErr] = useState<string | null>(null);
-  const [quickSubmitting, setQuickSubmitting] = useState(false);
 
   const [chatLoading, setChatLoading] = useState(false);
   const [chatErr, setChatErr] = useState<string | null>(null);
@@ -382,33 +392,55 @@ export default function StockDetailScreen() {
     };
   }, [slug, quickAmount, detail?.stats?.trading_paused]);
 
-  async function onSubmitTrade() {
-    if (!slug) return;
+  async function executeTrade() {
+    if (!slug || !pendingTrade) return;
     setQuoteErr(null);
     try {
-      const amt = Number(amountUsdc || 0);
-      const qty = Number(quantity || 0);
-      if (side === "buy" && (!Number.isFinite(amt) || amt <= 0)) throw new Error("Enter valid USDC amount");
-      if (side === "sell" && (!Number.isFinite(qty) || qty <= 0)) throw new Error("Enter valid token quantity");
-
       setSubmitting(true);
-      await submitStockOrder({
+      const res = await submitStockTradeOnchain({
         slug,
-        side,
-        amount_usdc: side === "buy" ? amt : undefined,
-        quantity: side === "sell" ? qty : undefined,
+        side: pendingTrade.side,
+        amount_usdc: pendingTrade.amount_usdc,
+        quantity: pendingTrade.quantity,
         max_slippage_bps: 1200,
       });
 
+      setSuccessTxHash(String(res?.tx_hash || "") || null);
+      setSuccessExplorer(String(res?.explorer_url || "") || null);
+      setSuccessVisible(true);
       setAmountUsdc("");
       setQuantity("");
       setQuote(null);
+      setPendingTrade(null);
       await loadDetail(true);
+      setPanel("trades");
     } catch (e: any) {
       setQuoteErr(friendlyMarketError(e, "Trade failed"));
     } finally {
       setSubmitting(false);
+      setConfirmVisible(false);
     }
+  }
+
+  function onSubmitTrade() {
+    if (!slug) return;
+    setQuoteErr(null);
+    const amt = Number(amountUsdc || 0);
+    const qty = Number(quantity || 0);
+    if (side === "buy" && (!Number.isFinite(amt) || amt <= 0)) {
+      setQuoteErr("Enter valid USDC amount");
+      return;
+    }
+    if (side === "sell" && (!Number.isFinite(qty) || qty <= 0)) {
+      setQuoteErr("Enter valid token quantity");
+      return;
+    }
+    setPendingTrade({
+      side,
+      amount_usdc: side === "buy" ? amt : undefined,
+      quantity: side === "sell" ? qty : undefined,
+    });
+    setConfirmVisible(true);
   }
 
   async function onPostChat() {
@@ -431,24 +463,14 @@ export default function StockDetailScreen() {
     }
   }
 
-  async function onQuickBuy() {
+  function onQuickBuy() {
     if (!slug || tradingPaused) return;
-    try {
-      setQuickSubmitting(true);
-      setQuickQuoteErr(null);
-      await submitStockOrder({
-        slug,
-        side: "buy",
-        amount_usdc: quickAmount,
-        max_slippage_bps: 1200,
-      });
-      await loadDetail(true);
-      setPanel("trades");
-    } catch (e: any) {
-      setQuickQuoteErr(friendlyMarketError(e, "Quick buy failed"));
-    } finally {
-      setQuickSubmitting(false);
-    }
+    setQuickQuoteErr(null);
+    setPendingTrade({
+      side: "buy",
+      amount_usdc: quickAmount,
+    });
+    setConfirmVisible(true);
   }
 
   const title = detail?.identity?.name || "Stock";
@@ -469,6 +491,9 @@ export default function StockDetailScreen() {
   const latestCandle = candles.length ? candles[candles.length - 1] : null;
   const chartHigh = candles.length ? Math.max(...candles.map((c) => Number(c.high_price_usdc || 0))) : 0;
   const chartLow = candles.length ? Math.min(...candles.map((c) => Number(c.low_price_usdc || 0))) : 0;
+  const confirmQuote = pendingTrade?.side === "buy" && pendingTrade?.amount_usdc === quickAmount
+    ? (quickQuote ?? quote)
+    : quote;
 
   return (
     <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
@@ -929,7 +954,7 @@ export default function StockDetailScreen() {
             </View>
             <Pressable
               onPress={onQuickBuy}
-              disabled={quickSubmitting || tradingPaused}
+              disabled={submitting || tradingPaused}
               style={{
                 borderRadius: 10,
                 paddingHorizontal: 14,
@@ -940,12 +965,85 @@ export default function StockDetailScreen() {
               }}
             >
               <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                {quickSubmitting ? "Submitting..." : tradingPaused ? "Paused" : `Buy $${quickAmount}`}
+                {submitting ? "Submitting..." : tradingPaused ? "Paused" : `Buy $${quickAmount}`}
               </Text>
             </Pressable>
           </View>
         </View>
       ) : null}
+
+      <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => setConfirmVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.62)", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <View style={{ width: "100%", maxWidth: 420, borderRadius: 16, padding: 14, backgroundColor: "#0B1220", borderWidth: 1, borderColor: BORDER }}>
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Confirm On-Chain Trade</Text>
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              Side: {(pendingTrade?.side || side).toUpperCase()}
+            </Text>
+            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
+              {pendingTrade?.side === "buy"
+                ? `Amount: $${Number(pendingTrade?.amount_usdc || 0).toFixed(2)} USDC`
+                : `Quantity: ${Number(pendingTrade?.quantity || 0).toFixed(6)} ${symbol}`}
+            </Text>
+            {confirmQuote ? (
+              <Text style={{ marginTop: 6, color: "#E2E8F0", fontSize: 12 }}>
+                Est. exec ${Number(confirmQuote.price_execution_usdc || 0).toFixed(6)} | Fee ${Number(confirmQuote.fee_usdc || 0).toFixed(6)}
+              </Text>
+            ) : null}
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              This sends a real on-chain transaction from your wallet.
+            </Text>
+
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+              <Pressable
+                onPress={() => setConfirmVisible(false)}
+                style={{ flex: 1, borderRadius: 11, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: BORDER }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={executeTrade}
+                disabled={submitting}
+                style={{ flex: 1, borderRadius: 11, paddingVertical: 10, alignItems: "center", backgroundColor: "rgba(45,212,191,0.34)", borderWidth: 1, borderColor: "rgba(45,212,191,0.58)" }}
+              >
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>{submitting ? "Submitting..." : "Confirm"}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={successVisible} transparent animationType="fade" onRequestClose={() => setSuccessVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.62)", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <View style={{ width: "100%", maxWidth: 420, borderRadius: 16, padding: 14, backgroundColor: "#052019", borderWidth: 1, borderColor: "rgba(45,212,191,0.45)" }}>
+            <Text style={{ color: "#A7F3D0", fontWeight: "900", fontSize: 16 }}>Trade Successful</Text>
+            <Text style={{ marginTop: 8, color: "#ECFEFF", fontSize: 12 }}>
+              Your order executed on-chain and was recorded in market history.
+            </Text>
+            {!!successTxHash ? (
+              <Text style={{ marginTop: 8, color: "#99F6E4", fontSize: 11 }} numberOfLines={2}>
+                Tx: {successTxHash}
+              </Text>
+            ) : null}
+            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+              <Pressable
+                onPress={() => setSuccessVisible(false)}
+                style={{ flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Close</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (successExplorer) Linking.openURL(successExplorer);
+                }}
+                disabled={!successExplorer}
+                style={{ flex: 1, borderRadius: 10, paddingVertical: 9, alignItems: "center", backgroundColor: successExplorer ? "rgba(45,212,191,0.28)" : "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: successExplorer ? "rgba(45,212,191,0.58)" : "rgba(255,255,255,0.16)" }}
+              >
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>View On Explorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </LinearGradient>
   );
 }

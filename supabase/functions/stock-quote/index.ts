@@ -35,6 +35,15 @@ Deno.serve(async (req) => {
   if (!identity) return bad("Stock identity not found");
   if (isTradingPaused(identity)) return bad("Trading is paused for this stock");
 
+  const { data: chainConfig, error: chainErr } = await admin
+    .from("market_chain_config")
+    .select("chain,chain_id,rpc_url,confirmations_required,identity_factory,identity_router,identity_name_registry,identity_stable_address,usdc_address")
+    .eq("chain", identity.chain)
+    .eq("active", true)
+    .maybeSingle();
+  if (chainErr) return bad(chainErr.message);
+  if (!chainConfig) return bad(`Chain config missing for ${identity.chain}`);
+
   const { data: wallet, error: walletErr } = await admin
     .from("crypto_wallets")
     .select("id,address,chain")
@@ -88,15 +97,20 @@ Deno.serve(async (req) => {
       ok: true,
       identity: {
         id: identity.id,
+        store_id: identity.store_id,
         slug: identity.slug,
         name: identity.name,
         symbol: identity.symbol,
         chain: identity.chain,
+        chain_id: identity.chain_id,
+        token_address: identity.token_address,
+        pool_address: identity.pool_address,
       },
       wallet: {
         address: wallet.address,
         chain: wallet.chain,
       },
+      chain_config: chainConfig,
       quote,
       guardrails: {
         max_slippage_bps: maxSlippageBps,
