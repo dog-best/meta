@@ -79,8 +79,12 @@ export default function CreateStockIdentityScreen() {
 
         if (!mounted) return;
         const chainRows = (chainData ?? []).filter((c: any) => c.active && c.identity_factory && c.identity_router && (c.identity_stable_address || c.usdc_address));
+        const defaultChain =
+          chainRows.find((c: any) => String(c.chain || "").toLowerCase() === "base_sepolia")?.chain ||
+          chainRows[0]?.chain ||
+          "";
         setChains(chainData ?? []);
-        setChain(chainRows[0]?.chain || "");
+        setChain(String(defaultChain));
         setSellerState({
           exists: !!seller?.user_id,
           verified: !!seller?.is_verified,

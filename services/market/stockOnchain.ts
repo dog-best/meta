@@ -75,6 +75,10 @@ const IDENTITY_ROUTER_ABI = [
   },
 ] as const;
 
+const IDENTITY_CREATED_EVENT_SIG =
+  "IdentityCreated(bytes32,address,address,address,address,address,uint24,string,string)";
+const IDENTITY_CREATED_TOPIC0 = keccak256(stringToHex(IDENTITY_CREATED_EVENT_SIG));
+
 function toNumber(input: unknown, fallback = 0) {
   const n = Number(input);
   return Number.isFinite(n) ? n : fallback;
@@ -165,6 +169,66 @@ async function resolveStockChain(chainName: string) {
   return chain;
 }
 
+function toHexBlock(n: bigint) {
+  return `0x${n.toString(16)}`;
+}
+
+async function findLatestIdentityCreatedTxHash(
+  publicClient: any,
+  factoryAddress: `0x${string}`,
+  storeKey: `0x${string}`,
+) {
+  try {
+    const latest = await publicClient.getBlockNumber();
+    const span = 200_000n;
+    const from = latest > span ? latest - span : 0n;
+    const logs = await publicClient.request({
+      method: "eth_getLogs",
+      params: [
+        {
+          address: factoryAddress,
+          fromBlock: toHexBlock(from),
+          toBlock: "latest",
+          topics: [IDENTITY_CREATED_TOPIC0, storeKey],
+        },
+      ],
+    }) as Array<{ transactionHash?: string }>;
+
+    const last = Array.isArray(logs) && logs.length ? logs[logs.length - 1] : null;
+    const txHash = String(last?.transactionHash || "");
+    return txHash.startsWith("0x") ? txHash : null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForIdentityInfo(
+  publicClient: any,
+  factoryAddress: `0x${string}`,
+  storeKey: `0x${string}`,
+  timeoutMs = 120_000,
+) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const info = await publicClient.readContract({
+      abi: IDENTITY_FACTORY_ABI,
+      address: factoryAddress,
+      functionName: "identities",
+      args: [storeKey],
+    }) as any;
+
+    const tokenAddress = String(info?.token || "");
+    const poolAddress = String(info?.pool || "");
+    const vaultAddress = String(info?.vault || "");
+    const stakingAddress = String(info?.staking || "");
+    if (isAddress(tokenAddress) && isAddress(poolAddress)) {
+      return { tokenAddress, poolAddress, vaultAddress, stakingAddress };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return null;
+}
+
 export async function createStockIdentityOnchain(input: {
   name: string;
   symbol: string;
@@ -230,45 +294,67 @@ export async function createStockIdentityOnchain(input: {
     to: factoryAddress,
     data: createData,
   });
-  const { txHash, userOpHash } = await resolveTxHash(chain, createResult);
+  let { txHash, userOpHash } = await resolveTxHash(chain, createResult);
 
   const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
-  if (txHash.startsWith("0x")) {
-    await publicClient.waitForTransactionReceipt({
+  if (!txHash.startsWith("0x")) {
+    throw new Error("Create transaction submitted, but hash is not available yet. Wait a moment and retry.");
+  }
+
+  const createReceipt = await publicClient.waitForTransactionReceipt({
       hash: txHash as `0x${string}`,
       confirmations: Math.max(1, Number(chain.confirmations_required || 1)),
       timeout: 180_000,
     });
+  if ((createReceipt as any)?.status && String((createReceipt as any).status).toLowerCase() !== "success") {
+    throw new Error(
+      `On-chain create transaction failed on ${chain.chain}. Check wallet USDC balance and ensure this store has not already created on-chain.`,
+    );
   }
 
-  const info = await publicClient.readContract({
-    abi: IDENTITY_FACTORY_ABI,
-    address: factoryAddress,
-    functionName: "identities",
-    args: [storeKey as `0x${string}`],
-  }) as any;
-
-  const tokenAddress = String(info?.token || "");
-  const poolAddress = String(info?.pool || "");
-  const vaultAddress = String(info?.vault || "");
-  const stakingAddress = String(info?.staking || "");
-  if (!isAddress(tokenAddress) || !isAddress(poolAddress)) {
-    throw new Error("On-chain identity addresses not found after creation.");
+  const info = await waitForIdentityInfo(publicClient, factoryAddress, storeKey as `0x${string}`);
+  if (!info) {
+    throw new Error("On-chain identity addresses not found yet after confirmed transaction. Please retry in a few seconds.");
   }
 
-  const db = await createStockIdentity({
-    name: input.name.trim(),
-    symbol: input.symbol.trim().toUpperCase(),
-    chain: input.chain,
-    slug: input.slug ?? undefined,
-    tx_hash: txHash || undefined,
-    user_op_hash: userOpHash || undefined,
-    token_address: tokenAddress,
-    pool_address: poolAddress,
-    vault_address: vaultAddress,
-    staking_address: stakingAddress,
-    store_key: storeKey,
-  });
+  let tokenAddress = info.tokenAddress;
+  let poolAddress = info.poolAddress;
+  const vaultAddress = info.vaultAddress;
+  const stakingAddress = info.stakingAddress;
+
+  const upsertFromTx = async (useTxHash: string) =>
+    await createStockIdentity({
+      name: input.name.trim(),
+      symbol: input.symbol.trim().toUpperCase(),
+      chain: input.chain,
+      slug: input.slug ?? undefined,
+      tx_hash: useTxHash,
+      user_op_hash: userOpHash || undefined,
+      token_address: tokenAddress,
+      pool_address: poolAddress,
+      vault_address: vaultAddress,
+      staking_address: stakingAddress,
+      store_key: storeKey,
+    });
+
+  let db: any;
+  try {
+    db = await upsertFromTx(txHash);
+  } catch (e: any) {
+    const m = String(e?.message ?? e ?? "").toLowerCase();
+    // Recovery path for AA timing: use latest successful IdentityCreated tx for this store.
+    if (m.includes("on-chain create transaction failed") || m.includes("transaction receipt not found")) {
+      const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
+      if (recoveredTx && recoveredTx.toLowerCase() !== txHash.toLowerCase()) {
+        txHash = recoveredTx;
+        db = await upsertFromTx(txHash);
+      } else {
+        throw e;
+      }
+    } else {
+      throw e;
+    }
+  }
 
   return {
     ...db,
