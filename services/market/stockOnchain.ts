@@ -5,7 +5,7 @@ import { fetchMarketChains, MarketChainConfig } from "@/services/market/chainCon
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
-import { ensureWalletAddressOnChain, getMyWalletForChain } from "@/services/market/usdcCheckout";
+import { ensureWalletAddressOnChain, getMyWalletForChain, registerWallet } from "@/services/market/usdcCheckout";
 
 const ERC20_ABI = [
   {
@@ -200,9 +200,7 @@ export async function createStockIdentityOnchain(input: {
   const { client, account, address } = await getSmartAccount(chain, user.id);
   const savedWallet = await getMyWalletForChain(chain.chain);
   if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
-    throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${savedWallet.address}\nThis device: ${address}\n\nImport the correct private key or use Wallet > Use this device wallet.`,
-    );
+    await registerWallet(chain.chain, address);
   }
   const storeKey = storeKeyFromStoreId(user.id);
   const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
@@ -310,9 +308,7 @@ export async function submitStockTradeOnchain(input: {
   const { client, account, address } = await getSmartAccount(chain, user.id);
   const savedWallet = await getMyWalletForChain(chain.chain);
   if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
-    throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${savedWallet.address}\nThis device: ${address}\n\nImport the correct private key or use Wallet > Use this device wallet.`,
-    );
+    await registerWallet(chain.chain, address);
   }
   const routerAddress = chain.identity_router as `0x${string}`;
   const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;

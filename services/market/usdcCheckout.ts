@@ -159,6 +159,20 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   // Reuse an existing address for this user first to avoid accidental address drift across chains.
   const existingForChain = await getMyWalletForChain(chainConfig.chain);
   if (existingForChain?.address) {
+    const localKey = await getStoredPrivateKey(user.id);
+    if (!localKey) {
+      return { address: existingForChain.address };
+    }
+    let derived = "";
+    try {
+      derived = await deriveSmartAccountAddress(chainConfig, localKey);
+    } catch {
+      throw new Error(`Unable to verify wallet key for ${chainConfig.chain}. Check RPC settings and try again.`);
+    }
+    if (String(derived).toLowerCase() !== String(existingForChain.address).toLowerCase()) {
+      await registerWallet(chainConfig.chain, derived);
+      return { address: derived };
+    }
     return { address: existingForChain.address };
   }
 
@@ -175,17 +189,18 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
     if (!localKey) {
       throw new Error("Saved wallet exists. Import your private key to use it on this device.");
     }
+    let derived = "";
     try {
-      const derived = await deriveSmartAccountAddress(chainConfig, localKey);
-      if (String(derived).toLowerCase() !== String(existingAny.address).toLowerCase()) {
-        throw new Error(
-          `Wallet key mismatch on this device.\n\nSaved wallet: ${existingAny.address}\nThis device: ${derived}\n\nImport the correct private key or replace the saved address from Wallet > Use this device wallet.`,
-        );
-      }
+      derived = await deriveSmartAccountAddress(chainConfig, localKey);
     } catch (e: any) {
-      if (String(e?.message || "").toLowerCase().includes("wallet key mismatch")) throw e;
       // If derivation fails due to RPC issues, don't overwrite the saved address silently.
       throw new Error(`Unable to verify wallet key for ${chainConfig.chain}. Check RPC settings and try again.`);
+    }
+    if (String(derived).toLowerCase() !== String(existingAny.address).toLowerCase()) {
+      // User imported a different key on this device.
+      // Make this chain use the current device key so transactions can proceed.
+      await registerWallet(chainConfig.chain, derived);
+      return { address: derived };
     }
     await registerWallet(chainConfig.chain, existingAny.address);
     return { address: existingAny.address };
@@ -290,13 +305,22 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const chain = await getPreferredMarketChain();
   if (!chain) throw new Error("No active chain configuration found.");
 
-  const wallet = await getMyWalletForChain(chain.chain);
-  if (!wallet) {
-    throw new Error("No wallet address found. Generate a wallet in Market Account first.");
-  }
-
   const localAuth = await requireLocalAuth(`Confirm ${symbol} deposit`);
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
+
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const localKey = await getStoredPrivateKey(user.id);
+  if (!localKey) {
+    throw new Error("No private key found on this device. Import your wallet key to continue.");
+  }
+
+  const { client, account, address } = await getSmartAccount(chain, user.id);
+  // Ensure strict escrow intent reads the same active wallet that will sign the tx.
+  await registerWallet(chain.chain, address);
 
   const intent: {
     ok: boolean;
@@ -329,24 +353,6 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
 
   if (!tokenAddress) {
     throw new Error(`${symbol} token address is not configured for this network.`);
-  }
-
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  const user = auth?.user;
-  if (!user) throw new Error("Not authenticated");
-
-  const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey) {
-    throw new Error("No private key found on this device. Import your wallet key to continue.");
-  }
-
-  const { client, account, address } = await getSmartAccount(chain, user.id);
-  // Prevent sending from a different smart account than what we display/save in DB.
-  if (wallet?.address && String(wallet.address).toLowerCase() !== String(address).toLowerCase()) {
-    throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import the private key for the saved wallet, or replace the saved address from Wallet > Use this device wallet.`,
-    );
   }
   const buyerAddress = String(address || "").toLowerCase();
   const sellerAddress = String(intent.seller_wallet || "").toLowerCase();
@@ -497,13 +503,21 @@ export async function releaseUsdcForOrder(orderId: string) {
   const chain = await getPreferredMarketChain();
   if (!chain) throw new Error("No active chain configuration found.");
 
-  const wallet = await getMyWalletForChain(chain.chain);
-  if (!wallet) {
-    throw new Error("No wallet address found. Generate a wallet in Market Account first.");
-  }
-
   const localAuth = await requireLocalAuth("Release escrow to seller");
   if (!localAuth.ok) throw new Error(localAuth.message || "Authentication required");
+
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const localKey = await getStoredPrivateKey(user.id);
+  if (!localKey) {
+    throw new Error("No private key found on this device. Import your wallet key to continue.");
+  }
+
+  const { client, account, address } = await getSmartAccount(chain, user.id);
+  await registerWallet(chain.chain, address);
 
   const intent: {
     ok: boolean;
@@ -519,13 +533,6 @@ export async function releaseUsdcForOrder(orderId: string) {
     if (error) throw new Error(error.message || "Could not create release intent.");
     return data as any;
   })();
-
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  const user = auth?.user;
-  if (!user) throw new Error("Not authenticated");
-
-  const { client, account, address } = await getSmartAccount(chain, user.id);
 
   const data = encodeFunctionData({
     abi: ESCROW_ABI,
