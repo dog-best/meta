@@ -360,23 +360,14 @@ export default function WalletRoute() {
       }
 
       await importPrivateKey(meId || undefined, importKey);
-      if (derivedAddr) {
-        if (existing && existing.length > 0) {
-          const { error: updErr } = await supabase.from("crypto_wallets").update({ address: derivedAddr }).eq("user_id", meId);
-          if (updErr) throw updErr;
-        } else if (chain) {
-          const { error: insErr } = await supabase
-            .from("crypto_wallets")
-            .insert({ user_id: meId, chain: chain.chain, address: derivedAddr, wallet_type: "aa" });
-          if (insErr) throw insErr;
-        }
-      }
+      const synced = await replaceSavedWalletWithDevice(chain);
+      setWalletAddr(synced.address);
       setImportOpen(false);
       setImportKey("");
       await refreshCrypto(chain ?? undefined);
       Alert.alert(
         "Wallet imported",
-        derivedAddr
+        synced?.address
           ? "Saved address updated."
           : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
       );

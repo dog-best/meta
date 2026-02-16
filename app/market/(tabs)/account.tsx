@@ -365,26 +365,14 @@ export default function MarketAccountTab() {
       }
 
       await importPrivateKey(meId || undefined, importKey);
-
-      if (derivedAddr) {
-        if (existing && existing.length > 0) {
-          const { error: updErr } = await supabase.from("crypto_wallets").update({ address: derivedAddr }).eq("user_id", meId);
-          if (updErr) throw updErr;
-        } else if (chain) {
-          const { error: insErr } = await supabase
-            .from("crypto_wallets")
-            .insert({ user_id: meId, chain: chain.chain, address: derivedAddr, wallet_type: "aa" });
-          if (insErr) throw insErr;
-        }
-      }
-
-      setWallet(derivedAddr ? { address: derivedAddr } : wallet);
+      const synced = await replaceSavedWalletWithDevice(chain);
+      setWallet({ address: synced.address });
       setImportOpen(false);
       setImportKey("");
       await refreshWalletMeta(chain);
       Alert.alert(
         "Wallet imported",
-        derivedAddr
+        synced?.address
           ? "Your saved wallet address was updated."
           : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
       );

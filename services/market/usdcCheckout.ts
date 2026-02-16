@@ -78,21 +78,56 @@ export async function registerWallet(chain: string, address: string) {
 
   const existing = await supabase
     .from("crypto_wallets")
-    .select("id,user_id,chain,address")
+    .select("id,user_id,chain,address,created_at")
     .eq("user_id", user.id)
     .eq("chain", chain)
-    .maybeSingle();
+    .order("created_at", { ascending: true });
   if (existing.error) throw new Error(existing.error.message);
 
-  if (existing.data?.id) {
+  const rows = existing.data ?? [];
+  if (rows.length > 0) {
+    const normalizedTarget = String(address).toLowerCase();
+    const keeper = rows.find((r: any) => String(r.address || "").toLowerCase() === normalizedTarget) ?? rows[0];
+    const duplicateIds = rows.filter((r: any) => r.id !== keeper.id).map((r: any) => r.id);
+    if (duplicateIds.length > 0) {
+      const { error: delErr } = await supabase
+        .from("crypto_wallets")
+        .delete()
+        .in("id", duplicateIds);
+      if (delErr) throw new Error(delErr.message);
+    }
+
+    if (String(keeper.address || "").toLowerCase() !== normalizedTarget) {
+      const { data, error } = await supabase
+        .from("crypto_wallets")
+        .update({ address, wallet_type: "aa" })
+        .eq("id", keeper.id)
+        .select("user_id,chain,address")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    }
+
     const { data, error } = await supabase
       .from("crypto_wallets")
-      .update({ address, wallet_type: "aa" })
-      .eq("id", existing.data.id)
       .select("user_id,chain,address")
+      .eq("id", keeper.id)
       .single();
     if (error) throw new Error(error.message);
     return data;
+  }
+
+  // Protect against chain+address already used by another account.
+  const { data: pairConflict, error: pairErr } = await supabase
+    .from("crypto_wallets")
+    .select("id,user_id")
+    .eq("chain", chain)
+    .eq("address", address)
+    .neq("user_id", user.id)
+    .limit(1);
+  if (pairErr) throw new Error(pairErr.message);
+  if (pairConflict && pairConflict.length > 0) {
+    throw new Error(`Address ${address} is already registered on ${chain} for another account.`);
   }
 
   const { data, error } = await supabase
@@ -174,11 +209,52 @@ export async function replaceSavedWalletWithDevice(chainConfig: MarketChainConfi
   }
   const derived = await deriveSmartAccountAddress(chainConfig, localKey);
 
-  const { error: updErr } = await supabase
+  const { data: existingRows, error: existingErr } = await supabase
     .from("crypto_wallets")
-    .update({ address: derived, wallet_type: "aa" })
-    .eq("user_id", user.id);
-  if (updErr) throw new Error(updErr.message);
+    .select("id,chain,address,created_at")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: true });
+  if (existingErr) throw new Error(existingErr.message);
+
+  const byChain = new Map<string, any[]>();
+  for (const row of existingRows ?? []) {
+    const chain = String((row as any).chain || "");
+    const list = byChain.get(chain) ?? [];
+    list.push(row);
+    byChain.set(chain, list);
+  }
+
+  for (const [chain, rows] of byChain.entries()) {
+    const { data: pairConflict, error: pairErr } = await supabase
+      .from("crypto_wallets")
+      .select("id,user_id")
+      .eq("chain", chain)
+      .eq("address", derived)
+      .neq("user_id", user.id)
+      .limit(1);
+    if (pairErr) throw new Error(pairErr.message);
+    if (pairConflict && pairConflict.length > 0) {
+      throw new Error(`Address ${derived} is already registered on ${chain} for another account.`);
+    }
+
+    const keeper = rows.find((r: any) => String(r.address || "").toLowerCase() === String(derived).toLowerCase()) ?? rows[0];
+    const duplicateIds = rows.filter((r: any) => r.id !== keeper.id).map((r: any) => r.id);
+    if (duplicateIds.length > 0) {
+      const { error: delErr } = await supabase
+        .from("crypto_wallets")
+        .delete()
+        .in("id", duplicateIds);
+      if (delErr) throw new Error(delErr.message);
+    }
+
+    if (String(keeper.address || "").toLowerCase() !== String(derived).toLowerCase()) {
+      const { error: updErr } = await supabase
+        .from("crypto_wallets")
+        .update({ address: derived, wallet_type: "aa" })
+        .eq("id", keeper.id);
+      if (updErr) throw new Error(updErr.message);
+    }
+  }
 
   const { data: existingChainRows, error: chainErr } = await supabase
     .from("crypto_wallets")
@@ -189,6 +265,18 @@ export async function replaceSavedWalletWithDevice(chainConfig: MarketChainConfi
   if (chainErr) throw new Error(chainErr.message);
 
   if (!existingChainRows || existingChainRows.length === 0) {
+    const { data: pairConflict, error: pairErr } = await supabase
+      .from("crypto_wallets")
+      .select("id,user_id")
+      .eq("chain", chainConfig.chain)
+      .eq("address", derived)
+      .neq("user_id", user.id)
+      .limit(1);
+    if (pairErr) throw new Error(pairErr.message);
+    if (pairConflict && pairConflict.length > 0) {
+      throw new Error(`Address ${derived} is already registered on ${chainConfig.chain} for another account.`);
+    }
+
     const { error: insErr } = await supabase
       .from("crypto_wallets")
       .insert({ user_id: user.id, chain: chainConfig.chain, address: derived, wallet_type: "aa" });
