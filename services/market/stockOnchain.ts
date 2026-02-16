@@ -25,6 +25,16 @@ const ERC20_ABI = [
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "balance", type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ name: "amount", type: "uint256" }],
+  },
 ] as const;
 
 const IDENTITY_FACTORY_ABI = [
@@ -52,6 +62,27 @@ const IDENTITY_FACTORY_ABI = [
       { name: "stable", type: "address" },
       { name: "fee", type: "uint24" },
     ],
+  },
+  {
+    type: "function",
+    name: "nameRegistry",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
+const NAME_REGISTRY_ABI = [
+  {
+    type: "function",
+    name: "isAllowed",
+    stateMutability: "view",
+    inputs: [
+      { name: "creator", type: "address" },
+      { name: "nameHash", type: "bytes32" },
+      { name: "symbolHash", type: "bytes32" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
   },
 ] as const;
 
@@ -211,23 +242,38 @@ async function findLatestIdentityCreatedTxHash(
 ) {
   try {
     const latest = await publicClient.getBlockNumber();
-    const span = 200_000n;
-    const from = latest > span ? latest - span : 0n;
-    const logs = await publicClient.request({
-      method: "eth_getLogs",
-      params: [
-        {
-          address: factoryAddress,
-          fromBlock: toHexBlock(from),
-          toBlock: "latest",
-          topics: [IDENTITY_CREATED_TOPIC0, storeKey],
-        },
-      ],
-    }) as Array<{ transactionHash?: string }>;
+    // Alchemy free tier restricts eth_getLogs to tiny ranges (often <=10 blocks),
+    // so scan backwards in small windows.
+    const step = 10n;
+    const maxBack = 20_000n;
+    const minBlock = latest > maxBack ? latest - maxBack : 0n;
+    let to = latest;
 
-    const last = Array.isArray(logs) && logs.length ? logs[logs.length - 1] : null;
-    const txHash = String(last?.transactionHash || "");
-    return txHash.startsWith("0x") ? txHash : null;
+    while (to >= minBlock) {
+      const from = to >= (step - 1n) ? to - (step - 1n) : 0n;
+      const logs = await publicClient.request({
+        method: "eth_getLogs",
+        params: [
+          {
+            address: factoryAddress,
+            fromBlock: toHexBlock(from),
+            toBlock: toHexBlock(to),
+            topics: [IDENTITY_CREATED_TOPIC0, storeKey],
+          },
+        ],
+      }) as Array<{ transactionHash?: string }>;
+
+      if (Array.isArray(logs) && logs.length) {
+        const last = logs[logs.length - 1];
+        const txHash = String(last?.transactionHash || "");
+        if (txHash.startsWith("0x")) return txHash;
+      }
+
+      if (from === 0n) break;
+      to = from - 1n;
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -258,6 +304,117 @@ async function waitForIdentityInfo(
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return null;
+}
+
+async function waitForAllowance(
+  publicClient: any,
+  token: `0x${string}`,
+  owner: `0x${string}`,
+  spender: `0x${string}`,
+  minAmount: bigint,
+  timeoutMs = 120_000,
+) {
+  const started = Date.now();
+  let last = 0n;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      last = await publicClient.readContract({
+        abi: ERC20_ABI,
+        address: token,
+        functionName: "allowance",
+        args: [owner, spender],
+      }) as bigint;
+      if (last >= minAmount) return last;
+    } catch {
+      // ignore transient RPC issues while polling
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return last;
+}
+
+async function diagnoseCreateRevert(
+  publicClient: any,
+  args: {
+    factoryAddress: `0x${string}`;
+    stableAddress: `0x${string}`;
+    wallet: `0x${string}`;
+    storeKey: `0x${string}`;
+    creationFeeRaw: bigint;
+    name: string;
+    symbol: string;
+  },
+) {
+  const notes: string[] = [];
+  try {
+    const info = await publicClient.readContract({
+      abi: IDENTITY_FACTORY_ABI,
+      address: args.factoryAddress,
+      functionName: "identities",
+      args: [args.storeKey],
+    }) as any;
+    const token = String(info?.token || "");
+    const pool = String(info?.pool || "");
+    if (isAddress(token) && isAddress(pool)) {
+      notes.push(`identity already exists on-chain (token=${token}, pool=${pool})`);
+    }
+  } catch {
+    // ignore diagnostic read failure
+  }
+
+  try {
+    const allowance = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: args.stableAddress,
+      functionName: "allowance",
+      args: [args.wallet, args.factoryAddress],
+    }) as bigint;
+    if (allowance < args.creationFeeRaw) {
+      notes.push(`allowance too low (${formatUsdc6(allowance)} < 50 USDC)`);
+    }
+  } catch {
+    // ignore diagnostic read failure
+  }
+
+  try {
+    const balance = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: args.stableAddress,
+      functionName: "balanceOf",
+      args: [args.wallet],
+    }) as bigint;
+    if (balance < args.creationFeeRaw) {
+      notes.push(`stable balance too low (${formatUsdc6(balance)} < 50 USDC)`);
+    }
+  } catch {
+    // ignore diagnostic read failure
+  }
+
+  try {
+    const registry = await publicClient.readContract({
+      abi: IDENTITY_FACTORY_ABI,
+      address: args.factoryAddress,
+      functionName: "nameRegistry",
+      args: [],
+    }) as `0x${string}`;
+    if (isAddress(registry) && String(registry).toLowerCase() !== "0x0000000000000000000000000000000000000000") {
+      const nameHash = keccak256(stringToHex(args.name));
+      const symbolHash = keccak256(stringToHex(args.symbol));
+      const allowed = await publicClient.readContract({
+        abi: NAME_REGISTRY_ABI,
+        address: registry,
+        functionName: "isAllowed",
+        args: [args.wallet, nameHash, symbolHash],
+      }) as boolean;
+      if (!allowed) {
+        notes.push("name/symbol blocked by on-chain NameRegistry");
+      }
+    }
+  } catch {
+    // ignore diagnostic read failure
+  }
+
+  return notes;
 }
 
 export async function createStockIdentityOnchain(input: {
@@ -386,19 +543,55 @@ export async function createStockIdentityOnchain(input: {
       );
     }
 
-    const approveData = encodeFunctionData({
+    const currentAllowance = await publicClient.readContract({
       abi: ERC20_ABI,
-      functionName: "approve",
-      args: [factoryAddress, creationFeeRaw],
+      address: stableAddress,
+      functionName: "allowance",
+      args: [address as `0x${string}`, factoryAddress],
+    }) as bigint;
+    logCreate("allowance_current", {
+      owner: address,
+      spender: factoryAddress,
+      allowance_raw: currentAllowance.toString(),
+      allowance_usdc: formatUsdc6(currentAllowance),
     });
 
-    logCreate("approve_submit", { token: stableAddress, spender: factoryAddress, amount_raw: creationFeeRaw.toString() });
-    await (client as any).sendTransaction({
-      account,
-      to: stableAddress,
-      data: approveData,
-    });
-    logCreate("approve_sent");
+    if (currentAllowance < creationFeeRaw) {
+      const approveData = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [factoryAddress, creationFeeRaw],
+      });
+
+      logCreate("approve_submit", { token: stableAddress, spender: factoryAddress, amount_raw: creationFeeRaw.toString() });
+      const approveResult = await (client as any).sendTransaction({
+        account,
+        to: stableAddress,
+        data: approveData,
+      });
+      const approveResolved = await resolveTxHash(chain, approveResult);
+      logCreate("approve_sent", { tx_hash: approveResolved.txHash || null, user_op_hash: approveResolved.userOpHash || null });
+
+      const allowanceReady = await waitForAllowance(
+        publicClient,
+        stableAddress,
+        address as `0x${string}`,
+        factoryAddress,
+        creationFeeRaw,
+        180_000,
+      );
+      logCreate("allowance_after_approve", {
+        allowance_raw: allowanceReady.toString(),
+        allowance_usdc: formatUsdc6(allowanceReady),
+      });
+      if (allowanceReady < creationFeeRaw) {
+        throw new Error(
+          `Approve transaction did not set required allowance in time. Need 50 USDC allowance, current ${formatUsdc6(allowanceReady)}.`,
+        );
+      }
+    } else {
+      logCreate("approve_skip_existing_allowance");
+    }
 
     const createData = encodeFunctionData({
       abi: IDENTITY_FACTORY_ABI,
@@ -407,11 +600,28 @@ export async function createStockIdentityOnchain(input: {
     });
 
     logCreate("create_submit", { factory: factoryAddress, store_key: storeKey });
-    const createResult = await (client as any).sendTransaction({
-      account,
-      to: factoryAddress,
-      data: createData,
-    });
+    let createResult: any;
+    try {
+      createResult = await (client as any).sendTransaction({
+        account,
+        to: factoryAddress,
+        data: createData,
+      });
+    } catch (submitErr) {
+      const notes = await diagnoseCreateRevert(publicClient, {
+        factoryAddress,
+        stableAddress,
+        wallet: address as `0x${string}`,
+        storeKey: storeKey as `0x${string}`,
+        creationFeeRaw,
+        name: input.name.trim(),
+        symbol: input.symbol.trim().toUpperCase(),
+      });
+      if (notes.length) {
+        throw new Error(`Create transaction reverted: ${notes.join("; ")}`);
+      }
+      throw submitErr;
+    }
     let { txHash, userOpHash } = await resolveTxHash(chain, createResult);
     logCreate("create_sent", { tx_hash: txHash || null, user_op_hash: userOpHash || null });
 
