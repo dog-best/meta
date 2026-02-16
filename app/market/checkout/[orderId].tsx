@@ -10,7 +10,7 @@ import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
-import { payUsdcForOrder, payUsdtForOrder } from "@/services/market/usdcCheckout";
+import { isWalletMismatchError, payUsdcForOrder, payUsdtForOrder, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
 import { getPreferredMarketChain } from "@/services/market/chainConfig";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
@@ -374,34 +374,42 @@ export default function Checkout() {
     setBusy(true);
     try {
       const res: any = await payUsdcForOrder(oid);
-      const txHash = String(res?.tx_hash || "").trim();
-      const userOpHash = String(res?.user_op_hash || "").trim();
-      if (txHash.startsWith("0x")) {
+      await showStableDepositResult("USDC", res);
+    } catch (e: any) {
+      console.log("[Checkout] payWithUsdc error", { message: String(e?.message || e) });
+      if (isWalletMismatchError(e)) {
         Alert.alert(
-          "Deposit submitted",
-          `Your USDC deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+          "Wallet mismatch detected",
+          "Your saved wallet address does not match this device key. Use this device wallet now and retry?",
           [
-            { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+            { text: "Cancel", style: "cancel" },
             {
-              text: "Continue",
-              onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
+              text: "Use this device wallet",
+              onPress: () => {
+                void (async () => {
+                  try {
+                    setBusy(true);
+                    const activeChain = chain ?? (await getPreferredMarketChain());
+                    if (!activeChain) throw new Error("No active chain configuration found.");
+                    await replaceSavedWalletWithDevice(activeChain as any);
+                    const retried: any = await payUsdcForOrder(oid);
+                    await showStableDepositResult("USDC", retried);
+                  } catch (retryErr: any) {
+                    setErr(friendlyMarketError(retryErr, "Wallet was updated but retry failed."));
+                  } finally {
+                    setBusy(false);
+                  }
+                })();
+              },
+            },
+            {
+              text: "Open Wallet",
+              onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any),
             },
           ],
         );
-      } else if (userOpHash.startsWith("0x")) {
-        Alert.alert(
-          "Deposit submitted",
-          `Your USDC deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
-          [
-            { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
-            { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
-          ],
-        );
-      } else {
-        router.replace(`/market/order/${oid}` as any);
+        return;
       }
-    } catch (e: any) {
-      console.log("[Checkout] payWithUsdc error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start crypto checkout."));
     } finally {
       setBusy(false);
@@ -422,39 +430,78 @@ export default function Checkout() {
     setBusy(true);
     try {
       const res: any = await payUsdtForOrder(oid);
-      const txHash = String(res?.tx_hash || "").trim();
-      const userOpHash = String(res?.user_op_hash || "").trim();
-      if (txHash.startsWith("0x")) {
+      await showStableDepositResult("USDT", res);
+    } catch (e: any) {
+      console.log("[Checkout] payWithUsdt error", { message: String(e?.message || e) });
+      if (isWalletMismatchError(e)) {
         Alert.alert(
-          "Deposit submitted",
-          `Your USDT deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+          "Wallet mismatch detected",
+          "Your saved wallet address does not match this device key. Use this device wallet now and retry?",
           [
-            { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+            { text: "Cancel", style: "cancel" },
             {
-              text: "Continue",
-              onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
+              text: "Use this device wallet",
+              onPress: () => {
+                void (async () => {
+                  try {
+                    setBusy(true);
+                    const activeChain = chain ?? (await getPreferredMarketChain());
+                    if (!activeChain) throw new Error("No active chain configuration found.");
+                    await replaceSavedWalletWithDevice(activeChain as any);
+                    const retried: any = await payUsdtForOrder(oid);
+                    await showStableDepositResult("USDT", retried);
+                  } catch (retryErr: any) {
+                    setErr(friendlyMarketError(retryErr, "Wallet was updated but retry failed."));
+                  } finally {
+                    setBusy(false);
+                  }
+                })();
+              },
+            },
+            {
+              text: "Open Wallet",
+              onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any),
             },
           ],
         );
-      } else if (userOpHash.startsWith("0x")) {
-        Alert.alert(
-          "Deposit submitted",
-          `Your USDT deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
-          [
-            { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
-            { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
-          ],
-        );
-      } else {
-        router.replace(`/market/order/${oid}` as any);
+        return;
       }
-    } catch (e: any) {
-      console.log("[Checkout] payWithUsdt error", { message: String(e?.message || e) });
       setErr(friendlyMarketError(e, "We couldn't start USDT checkout."));
     } finally {
       setBusy(false);
       console.log("[Checkout] payWithUsdt end");
     }
+  }
+
+  async function showStableDepositResult(symbol: "USDC" | "USDT", res: any) {
+    const txHash = String(res?.tx_hash || "").trim();
+    const userOpHash = String(res?.user_op_hash || "").trim();
+    if (txHash.startsWith("0x")) {
+      Alert.alert(
+        "Deposit submitted",
+        `Your ${symbol} deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+        [
+          { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+          {
+            text: "Continue",
+            onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
+          },
+        ],
+      );
+      return;
+    }
+    if (userOpHash.startsWith("0x")) {
+      Alert.alert(
+        "Deposit submitted",
+        `Your ${symbol} deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
+        [
+          { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
+          { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
+        ],
+      );
+      return;
+    }
+    router.replace(`/market/order/${oid}` as any);
   }
 
   return (

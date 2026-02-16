@@ -14,7 +14,7 @@ import Withdraw from "@/components/wallet/withdraw";
 import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
 import { useWalletTxPaginated } from "@/hooks/wallet/useWalletTxPaginated";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain } from "@/services/market/chainConfig";
-import { ensureSmartAccount, ensureWalletAddressOnChain, getMyWalletForChain } from "@/services/market/usdcCheckout";
+import { ensureSmartAccount, ensureWalletAddressOnChain, getMyWalletForChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { deriveSmartAccountAddress, getRpcUrlForChain, getStoredPrivateKey, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, importPrivateKey, markWalletBackedUp, normalizePrivateKey, regenerateWalletKey } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -236,6 +236,11 @@ export default function WalletRoute() {
         if (pk) {
           const derived = await deriveSmartAccountAddress(c, pk);
           setDeviceAddress(derived);
+          if (addr && String(addr).toLowerCase() !== String(derived).toLowerCase()) {
+            setWalletErr(
+              "Saved wallet mismatch detected. Use 'Use this device wallet' to sync addresses before checkout/trading.",
+            );
+          }
         } else {
           setDeviceAddress("");
         }
@@ -377,6 +382,25 @@ export default function WalletRoute() {
       );
     } catch (e: any) {
       setImportErr(String(e?.message || e || "We couldn't import that private key."));
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function onUseDeviceWalletAddress() {
+    if (!chain) return;
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth("Use this device wallet");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+      const out = await replaceSavedWalletWithDevice(chain);
+      setWalletAddr(out.address);
+      await refreshCrypto(chain);
+      await refreshCryptoTotals();
+      Alert.alert("Wallet updated", "Saved wallet address now matches this device key.");
+    } catch (e: any) {
+      setWalletErr(friendlyMarketError(e, "Couldn't switch to this device wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -797,6 +821,14 @@ async function loadChains() {
 
               <Pressable onPress={() => setImportOpen(true)} style={styles.secondaryAction}>
                 <Text style={styles.secondaryActionText}>Import private key / Change saved address</Text>
+              </Pressable>
+
+              <Pressable
+                disabled={!chain?.active || walletBusy || !deviceAddress}
+                onPress={onUseDeviceWalletAddress}
+                style={[styles.secondaryAction, (!chain?.active || walletBusy || !deviceAddress) && styles.dimBtn]}
+              >
+                <Text style={styles.secondaryActionText}>Use this device wallet</Text>
               </Pressable>
 
               <Pressable disabled={!chain?.active || walletBusy || !hasAlchemyKey} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || !hasAlchemyKey) && styles.dimBtn]}>

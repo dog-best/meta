@@ -13,6 +13,11 @@ const RPC_CHAIN_TX_FINALIZE = "market_chain_tx_finalize_rpc";
 
 export type StableSymbol = "USDC" | "USDT";
 
+export function isWalletMismatchError(input: unknown) {
+  const msg = String((input as any)?.message ?? input ?? "").toLowerCase();
+  return msg.includes("wallet key mismatch") || msg.includes("saved wallet exists");
+}
+
 const ESCROW_ABI = [
   {
     type: "function",
@@ -139,7 +144,7 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
       const derived = await deriveSmartAccountAddress(chainConfig, localKey);
       if (String(derived).toLowerCase() !== String(existingAny.address).toLowerCase()) {
         throw new Error(
-          `Wallet key mismatch on this device.\n\nSaved wallet: ${existingAny.address}\nThis device: ${derived}\n\nImport the correct private key or replace the saved address.`,
+          `Wallet key mismatch on this device.\n\nSaved wallet: ${existingAny.address}\nThis device: ${derived}\n\nImport the correct private key or replace the saved address from Wallet > Use this device wallet.`,
         );
       }
     } catch (e: any) {
@@ -155,6 +160,42 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   const { address } = await getSmartAccount(chainConfig, user.id);
   await registerWallet(chainConfig.chain, address);
   return { address };
+}
+
+export async function replaceSavedWalletWithDevice(chainConfig: MarketChainConfig) {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const user = auth?.user;
+  if (!user) throw new Error("Not authenticated");
+
+  const localKey = await getStoredPrivateKey(user.id);
+  if (!localKey) {
+    throw new Error("No private key found on this device. Import your wallet key first.");
+  }
+  const derived = await deriveSmartAccountAddress(chainConfig, localKey);
+
+  const { error: updErr } = await supabase
+    .from("crypto_wallets")
+    .update({ address: derived, wallet_type: "aa" })
+    .eq("user_id", user.id);
+  if (updErr) throw new Error(updErr.message);
+
+  const { data: existingChainRows, error: chainErr } = await supabase
+    .from("crypto_wallets")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("chain", chainConfig.chain)
+    .limit(1);
+  if (chainErr) throw new Error(chainErr.message);
+
+  if (!existingChainRows || existingChainRows.length === 0) {
+    const { error: insErr } = await supabase
+      .from("crypto_wallets")
+      .insert({ user_id: user.id, chain: chainConfig.chain, address: derived, wallet_type: "aa" });
+    if (insErr) throw new Error(insErr.message);
+  }
+
+  return { address: derived };
 }
 
 export async function payStableForOrder(orderId: string, symbol: StableSymbol = "USDC") {
@@ -216,7 +257,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   // Prevent sending from a different smart account than what we display/save in DB.
   if (wallet?.address && String(wallet.address).toLowerCase() !== String(address).toLowerCase()) {
     throw new Error(
-      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import the private key for the saved wallet, or replace the saved address from Account > Import private key.`,
+      `Wallet key mismatch on this device.\n\nSaved wallet: ${wallet.address}\nThis device: ${address}\n\nThis can happen after reinstall/reset. Import the private key for the saved wallet, or replace the saved address from Wallet > Use this device wallet.`,
     );
   }
   const buyerAddress = String(address || "").toLowerCase();

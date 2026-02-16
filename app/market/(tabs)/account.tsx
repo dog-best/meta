@@ -8,7 +8,7 @@ import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem"
 
 import AppHeader from "@/components/common/AppHeader";
 import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } from "@/services/market/chainConfig";
-import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain } from "@/services/market/usdcCheckout";
+import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
 import {
@@ -234,6 +234,11 @@ export default function MarketAccountTab() {
       if (pk) {
         const derived = await deriveSmartAccountAddress(current, pk);
         setDeviceAddress(derived);
+        if (w?.address && String(w.address).toLowerCase() !== String(derived).toLowerCase()) {
+          setWalletErr(
+            "Saved wallet mismatch detected. Use 'Use this device wallet' to sync addresses before checkout/trading.",
+          );
+        }
       } else {
         setDeviceAddress("");
       }
@@ -385,6 +390,24 @@ export default function MarketAccountTab() {
       );
     } catch (e: any) {
       setImportErr(String(e?.message || e || "We couldn't import that private key."));
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function onUseDeviceWalletAddress() {
+    if (!chain) return;
+    setWalletErr(null);
+    setWalletBusy(true);
+    try {
+      const auth = await requireLocalAuth("Use this device wallet");
+      if (!auth.ok) throw new Error(auth.message || "Authentication required");
+      const out = await replaceSavedWalletWithDevice(chain);
+      setWallet({ address: out.address });
+      await refreshWalletMeta(chain);
+      Alert.alert("Wallet updated", "Saved wallet address now matches this device key.");
+    } catch (e: any) {
+      setWalletErr(friendlyMarketError(e, "Couldn't switch to this device wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -842,6 +865,23 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>Import private key / Change saved address</Text>
+          </Pressable>
+
+          <Pressable
+            disabled={!chain?.active || walletBusy || !deviceAddress}
+            onPress={onUseDeviceWalletAddress}
+            style={{
+              marginTop: 10,
+              borderRadius: 18,
+              paddingVertical: 14,
+              alignItems: "center",
+              backgroundColor: "rgba(59,130,246,0.22)",
+              borderWidth: 1,
+              borderColor: "rgba(59,130,246,0.35)",
+              opacity: !chain?.active || walletBusy || !deviceAddress ? 0.6 : 1,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use this device wallet</Text>
           </Pressable>
 
           <Pressable

@@ -3,6 +3,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   ActivityIndicator,
   Image,
   LayoutChangeEvent,
@@ -24,6 +25,7 @@ import {
   postStockChat,
 } from "@/services/market/stocks";
 import { submitStockTradeOnchain } from "@/services/market/stockOnchain";
+import { isWalletMismatchError } from "@/services/market/usdcCheckout";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -415,6 +417,16 @@ export default function StockDetailScreen() {
       await loadDetail(true);
       setPanel("trades");
     } catch (e: any) {
+      if (isWalletMismatchError(e)) {
+        Alert.alert(
+          "Wallet mismatch detected",
+          "Saved wallet and this device wallet are different. Open Wallet and tap 'Use this device wallet' before trading.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Wallet", onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any) },
+          ],
+        );
+      }
       setQuoteErr(friendlyMarketError(e, "Trade failed"));
     } finally {
       setSubmitting(false);

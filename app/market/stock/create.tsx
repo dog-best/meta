@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Modal,
   Pressable,
@@ -16,6 +17,7 @@ import {
 import AppHeader from "@/components/common/AppHeader";
 import { fetchMarketChains } from "@/services/market/chainConfig";
 import { createStockIdentityOnchain } from "@/services/market/stockOnchain";
+import { isWalletMismatchError } from "@/services/market/usdcCheckout";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -126,6 +128,16 @@ export default function CreateStockIdentityScreen() {
         }, 700);
       }
     } catch (e: any) {
+      if (isWalletMismatchError(e)) {
+        Alert.alert(
+          "Wallet mismatch detected",
+          "Saved wallet and this device wallet are different. Open Wallet and tap 'Use this device wallet' before creating stock.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Wallet", onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any) },
+          ],
+        );
+      }
       setErr(friendlyMarketError(e, "Could not create stock identity."));
     } finally {
       setSubmitting(false);
