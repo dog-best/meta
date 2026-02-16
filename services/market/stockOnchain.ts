@@ -18,6 +18,13 @@ const ERC20_ABI = [
     ],
     outputs: [{ name: "ok", type: "bool" }],
   },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "balance", type: "uint256" }],
+  },
 ] as const;
 
 const IDENTITY_FACTORY_ABI = [
@@ -117,6 +124,13 @@ function normalizeHex(v: string | null | undefined) {
 
 function isAddress(v: string | null | undefined) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
+function formatUsdc6(raw: bigint) {
+  const whole = raw / 1_000_000n;
+  const frac = raw % 1_000_000n;
+  const fracText = frac.toString().padStart(6, "0").replace(/0+$/, "");
+  return fracText ? `${whole.toString()}.${fracText}` : whole.toString();
 }
 
 export function storeKeyFromStoreId(storeId: string) {
@@ -293,6 +307,7 @@ export async function createStockIdentityOnchain(input: {
       factory: chain.identity_factory,
       stable: chain.identity_stable_address || chain.usdc_address,
     });
+    const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
     await ensureWalletAddressOnChain(chain);
 
     const { client, account, address } = await getSmartAccount(chain, user.id);
@@ -306,6 +321,70 @@ export async function createStockIdentityOnchain(input: {
     const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
     const factoryAddress = chain.identity_factory as `0x${string}`;
     const creationFeeRaw = 50_000_000n; // 50 USDC (6 decimals)
+
+    // If previous create succeeded on-chain but DB write failed, sync instead of creating again.
+    const preInfo = await publicClient.readContract({
+      abi: IDENTITY_FACTORY_ABI,
+      address: factoryAddress,
+      functionName: "identities",
+      args: [storeKey as `0x${string}`],
+    }) as any;
+    const preToken = String(preInfo?.token || "");
+    const prePool = String(preInfo?.pool || "");
+    const preVault = String(preInfo?.vault || "");
+    const preStaking = String(preInfo?.staking || "");
+    if (isAddress(preToken) && isAddress(prePool)) {
+      logCreate("onchain_identity_already_exists", {
+        token: preToken,
+        pool: prePool,
+        vault: preVault,
+        staking: preStaking,
+      });
+      const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
+      if (!recoveredTx) {
+        throw new Error(
+          "Identity already exists on-chain for this store, but creation transaction was not found for DB sync.",
+        );
+      }
+      logCreate("sync_existing_submit", { tx_hash: recoveredTx });
+      const db = await createStockIdentity({
+        name: input.name.trim(),
+        symbol: input.symbol.trim().toUpperCase(),
+        chain: input.chain,
+        slug: input.slug ?? undefined,
+        tx_hash: recoveredTx,
+        token_address: preToken,
+        pool_address: prePool,
+        vault_address: preVault,
+        staking_address: preStaking,
+        store_key: storeKey,
+      });
+      logCreate("sync_existing_ok", { tx_hash: recoveredTx, identity_id: db?.identity?.id ?? null });
+      return {
+        ...db,
+        tx_hash: recoveredTx,
+        user_op_hash: null,
+        explorer_url: explorerTxUrl(chain.chain, recoveredTx),
+      };
+    }
+
+    const stableBalance = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: stableAddress,
+      functionName: "balanceOf",
+      args: [address as `0x${string}`],
+    }) as bigint;
+    logCreate("stable_balance", {
+      token: stableAddress,
+      wallet: address,
+      balance_raw: stableBalance.toString(),
+      balance_usdc: formatUsdc6(stableBalance),
+    });
+    if (stableBalance < creationFeeRaw) {
+      throw new Error(
+        `Insufficient USDC for stock creation. Need 50 USDC, wallet has ${formatUsdc6(stableBalance)} USDC.`,
+      );
+    }
 
     const approveData = encodeFunctionData({
       abi: ERC20_ABI,
@@ -336,7 +415,6 @@ export async function createStockIdentityOnchain(input: {
     let { txHash, userOpHash } = await resolveTxHash(chain, createResult);
     logCreate("create_sent", { tx_hash: txHash || null, user_op_hash: userOpHash || null });
 
-    const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
     if (!txHash.startsWith("0x")) {
       throw new Error("Create transaction submitted, but hash is not available yet. Wait a moment and retry.");
     }
