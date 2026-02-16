@@ -1,5 +1,6 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
+import { keccak_256 } from "https://esm.sh/@noble/hashes@1.3.3/sha3";
 import {
   bucketStartIso,
   buildQuote,
@@ -11,6 +12,18 @@ import {
   resolveStockIdentity,
   toNum,
 } from "../_shared/market/stock.ts";
+
+const SWAP_EVENT_TOPIC0 = `0x${
+  Array.from(keccak_256(new TextEncoder().encode("Swap(address,address,int256,int256,uint160,uint128,int24)")))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+}`;
+
+const TRANSFER_EVENT_TOPIC0 = `0x${
+  Array.from(keccak_256(new TextEncoder().encode("Transfer(address,address,uint256)")))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+}`;
 
 function round8(n: number) {
   return Math.round(n * 100000000) / 100000000;
@@ -32,6 +45,34 @@ function isHexTxHash(v: string) {
   return /^0x[a-fA-F0-9]{64}$/.test(v);
 }
 
+function isAddress(v: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
+function norm(v: string) {
+  return String(v || "").toLowerCase();
+}
+
+function topicAddress(addr: string) {
+  return `0x${String(addr || "").replace(/^0x/i, "").toLowerCase().padStart(64, "0")}`;
+}
+
+async function resolveUserOpSender(rpcUrl: string, userOpHash: string) {
+  if (!isHexTxHash(userOpHash)) return null;
+  for (const method of ["eth_getUserOperationReceipt", "alchemy_getUserOperationReceipt"]) {
+    try {
+      const out: any = await rpcCall(rpcUrl, method, [userOpHash]);
+      const sender = String(
+        out?.sender ?? out?.userOp?.sender ?? out?.userOperation?.sender ?? out?.user_operation?.sender ?? "",
+      );
+      if (isAddress(sender)) return sender;
+    } catch {
+      // try next method
+    }
+  }
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed();
 
@@ -49,17 +90,21 @@ Deno.serve(async (req) => {
   const quantityInput = toNum(body?.quantity, 0);
   const maxSlippageBps = toNum(body?.max_slippage_bps, 1200);
   const feeBps = toNum(body?.fee_bps, 50);
-  const executionMode = String(body?.execution_mode ?? "backend_fill").trim().toLowerCase();
+  const executionMode = String(body?.execution_mode ?? "onchain").trim().toLowerCase();
   const txHash = String(body?.tx_hash ?? "").trim();
   const userOpHash = String(body?.user_op_hash ?? "").trim();
   const quoteSnapshot = body?.quote_snapshot ?? null;
 
   if (!side) return bad("side must be buy or sell");
+  if (executionMode && executionMode !== "onchain") {
+    return bad("Only onchain execution is allowed");
+  }
+  if (!isHexTxHash(txHash)) return bad("tx_hash is required for onchain execution");
   const identity = await resolveStockIdentity(admin as any, { stockId, slug });
   if (!identity) return bad("Stock identity not found");
+  if (!isAddress(String(identity.pool_address || ""))) return bad("Stock pool address is missing");
+  if (!isAddress(String(identity.token_address || ""))) return bad("Stock token address is missing");
   if (isTradingPaused(identity)) return bad("Trading is paused for this stock");
-  const onchainMode = executionMode === "onchain";
-  if (onchainMode && !isHexTxHash(txHash)) return bad("tx_hash is required for onchain execution");
 
   const { data: wallet, error: walletErr } = await admin
     .from("crypto_wallets")
@@ -80,39 +125,37 @@ Deno.serve(async (req) => {
   if (recentErr) return bad(recentErr.message);
   if ((recentCount ?? 0) > 0) return bad("Cooldown active. Wait a few seconds before placing another order");
 
-  if (onchainMode) {
-    const { data: existingTrade, error: existingErr } = await admin
-      .from("market_stock_trades")
-      .select("id,stock_id,user_id,side,price_usdc,quantity,notional_usdc,fee_usdc,chain_tx_hash,traded_at,created_at")
-      .eq("stock_id", identity.id)
-      .eq("chain_tx_hash", txHash)
-      .maybeSingle();
-    if (existingErr) return bad(existingErr.message);
-    if (existingTrade) {
-      return ok({
-        ok: true,
-        order_id: null,
-        trade: existingTrade,
-        quote: quoteSnapshot ?? null,
-        identity: {
-          id: identity.id,
-          slug: identity.slug,
-          name: identity.name,
-          symbol: identity.symbol,
-          chain: identity.chain,
-        },
-        wallet: {
-          address: wallet.address,
-          chain: wallet.chain,
-        },
-        execution: {
-          mode: "onchain",
-          tx_hash: txHash,
-          user_op_hash: userOpHash || null,
-          indexed_existing: true,
-        },
-      });
-    }
+  const { data: existingTrade, error: existingErr } = await admin
+    .from("market_stock_trades")
+    .select("id,stock_id,user_id,side,price_usdc,quantity,notional_usdc,fee_usdc,chain_tx_hash,traded_at,created_at")
+    .eq("stock_id", identity.id)
+    .eq("chain_tx_hash", txHash)
+    .maybeSingle();
+  if (existingErr) return bad(existingErr.message);
+  if (existingTrade) {
+    return ok({
+      ok: true,
+      order_id: null,
+      trade: existingTrade,
+      quote: quoteSnapshot ?? null,
+      identity: {
+        id: identity.id,
+        slug: identity.slug,
+        name: identity.name,
+        symbol: identity.symbol,
+        chain: identity.chain,
+      },
+      wallet: {
+        address: wallet.address,
+        chain: wallet.chain,
+      },
+      execution: {
+        mode: "onchain",
+        tx_hash: txHash,
+        user_op_hash: userOpHash || null,
+        indexed_existing: true,
+      },
+    });
   }
 
   const [spotPrice, liquidityUsdc] = await Promise.all([
@@ -165,27 +208,63 @@ Deno.serve(async (req) => {
     if (balance < quote.quantity) return bad(`Insufficient balance (${balance.toFixed(6)} ${identity.symbol})`);
   }
 
-  if (onchainMode) {
-    const { data: cfg, error: cfgErr } = await admin
-      .from("market_chain_config")
-      .select("rpc_url,confirmations_required,active")
-      .eq("chain", identity.chain)
-      .eq("active", true)
-      .maybeSingle();
-    if (cfgErr) return bad(cfgErr.message);
-    if (!cfg?.rpc_url) return bad(`rpc_url missing for ${identity.chain}`);
+  const { data: cfg, error: cfgErr } = await admin
+    .from("market_chain_config")
+    .select("rpc_url,confirmations_required,active,identity_stable_address,usdc_address")
+    .eq("chain", identity.chain)
+    .eq("active", true)
+    .maybeSingle();
+  if (cfgErr) return bad(cfgErr.message);
+  if (!cfg?.rpc_url) return bad(`rpc_url missing for ${identity.chain}`);
+  const stableAddress = String(cfg.identity_stable_address || cfg.usdc_address || "").trim();
+  if (!isAddress(stableAddress)) return bad(`identity_stable_address missing for ${identity.chain}`);
 
-    const receipt: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionReceipt", [txHash]);
-    if (!receipt) return bad("Transaction receipt not found on chain yet");
-    if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain trade transaction failed");
+  const receipt: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionReceipt", [txHash]);
+  if (!receipt) return bad("Transaction receipt not found on chain yet");
+  if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain trade transaction failed");
 
-    const latestBlockHex = await rpcCall(String(cfg.rpc_url), "eth_blockNumber", []);
-    const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
-    const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
-    const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 1;
-    const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
-    if (confirmations < required) {
-      return bad(`Awaiting confirmations (${confirmations}/${required})`);
+  const latestBlockHex = await rpcCall(String(cfg.rpc_url), "eth_blockNumber", []);
+  const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
+  const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
+  const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 1;
+  const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
+  if (confirmations < required) {
+    return bad(`Awaiting confirmations (${confirmations}/${required})`);
+  }
+
+  const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
+  const poolNorm = norm(String(identity.pool_address));
+  const tokenNorm = norm(String(identity.token_address));
+  const stableNorm = norm(stableAddress);
+  const walletTopic = topicAddress(String(wallet.address));
+
+  const hasPoolSwapLog = logs.some((log: any) =>
+    norm(String(log?.address || "")) === poolNorm &&
+    norm(String(log?.topics?.[0] || "")) === norm(SWAP_EVENT_TOPIC0)
+  );
+  if (!hasPoolSwapLog) return bad("Transaction does not contain a swap for this stock pool");
+
+  const hasWalletTransferLog = logs.some((log: any) => {
+    const logAddress = norm(String(log?.address || ""));
+    if (logAddress !== tokenNorm && logAddress !== stableNorm) return false;
+    const t0 = norm(String(log?.topics?.[0] || ""));
+    if (t0 !== norm(TRANSFER_EVENT_TOPIC0)) return false;
+    const fromTopic = norm(String(log?.topics?.[1] || ""));
+    const toTopic = norm(String(log?.topics?.[2] || ""));
+    return fromTopic === norm(walletTopic) || toTopic === norm(walletTopic);
+  });
+  if (!hasWalletTransferLog) return bad("Transaction is not tied to this wallet's stock trade");
+
+  const tx: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionByHash", [txHash]).catch(() => null);
+  const txFrom = isAddress(String(tx?.from || "")) ? String(tx.from) : null;
+  if (txFrom && norm(txFrom) !== norm(String(wallet.address))) {
+    if (!isHexTxHash(userOpHash)) {
+      return bad("user_op_hash is required to verify smart account trade sender");
+    }
+    const opSender = await resolveUserOpSender(String(cfg.rpc_url), userOpHash);
+    if (!opSender) return bad("Could not verify smart account sender from user_op_hash");
+    if (norm(opSender) !== norm(String(wallet.address))) {
+      return bad("On-chain sender does not match your wallet");
     }
   }
 
@@ -201,7 +280,7 @@ Deno.serve(async (req) => {
       slippage_bps: Math.round(maxSlippageBps),
       max_price_impact_bps: Math.round(quote.price_impact_bps),
       status: "submitted",
-      submitted_tx_hash: onchainMode ? txHash : null,
+      submitted_tx_hash: txHash,
     })
     .select("*")
     .single();
@@ -219,7 +298,7 @@ Deno.serve(async (req) => {
         quantity: round8(quote.quantity),
         notional_usdc: round8(quote.notional_usdc),
         fee_usdc: round8(quote.fee_usdc),
-        chain_tx_hash: onchainMode ? txHash : null,
+        chain_tx_hash: txHash,
         traded_at: nowIso,
       })
       .select("*")
@@ -346,12 +425,10 @@ Deno.serve(async (req) => {
         chain: wallet.chain,
       },
       execution: {
-        mode: onchainMode ? "onchain" : "backend_fill",
-        tx_hash: onchainMode ? txHash : null,
-        user_op_hash: onchainMode ? (userOpHash || null) : null,
-        note: onchainMode
-          ? "On-chain execution recorded and indexed."
-          : "Execution is currently backend-filled. Switch to on-chain settlement in next phase.",
+        mode: "onchain",
+        tx_hash: txHash,
+        user_op_hash: userOpHash || null,
+        note: "On-chain execution recorded and indexed.",
       },
     });
   } catch (e: any) {

@@ -1,5 +1,71 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
+import { keccak_256 } from "https://esm.sh/@noble/hashes@1.3.3/sha3";
+
+const IDENTITY_CREATED_SIG =
+  "IdentityCreated(bytes32,address,address,address,address,address,uint24,string,string)";
+
+const IDENTITY_CREATED_TOPIC0 = `0x${
+  Array.from(keccak_256(new TextEncoder().encode(IDENTITY_CREATED_SIG)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+}`;
+
+function isHexTxHash(v: string) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || ""));
+}
+
+function isBytes32(v: string) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || ""));
+}
+
+function isAddress(v: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
+function norm(v: string) {
+  return String(v || "").toLowerCase();
+}
+
+function bytes32Topic(v: string) {
+  const clean = String(v || "").replace(/^0x/i, "").toLowerCase();
+  return `0x${clean.padStart(64, "0")}`;
+}
+
+function parseAddressWord(wordHex: string) {
+  if (wordHex.length !== 64) return null;
+  const addr = `0x${wordHex.slice(24)}`;
+  return isAddress(addr) ? addr : null;
+}
+
+function parseIdentityCreatedData(dataHex: string) {
+  const clean = String(dataHex || "").replace(/^0x/i, "");
+  if (clean.length < 64 * 6) return null;
+  const token = parseAddressWord(clean.slice(0, 64));
+  const vault = parseAddressWord(clean.slice(64, 128));
+  const staking = parseAddressWord(clean.slice(128, 192));
+  const pool = parseAddressWord(clean.slice(192, 256));
+  const stable = parseAddressWord(clean.slice(256, 320));
+  if (!token || !vault || !staking || !pool || !stable) return null;
+  return { token, vault, staking, pool, stable };
+}
+
+function storeKeyForStoreId(storeId: string) {
+  const hash = keccak_256(new TextEncoder().encode(String(storeId || "").trim()));
+  return `0x${Array.from(hash).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function rpcCall(rpcUrl: string, method: string, params: unknown[]) {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`RPC ${method} failed: ${res.status}`);
+  if (json?.error) throw new Error(String(json.error?.message || `RPC ${method} error`));
+  return json?.result;
+}
 
 function normalizeSymbol(input: string) {
   return String(input || "")
@@ -66,6 +132,11 @@ Deno.serve(async (req) => {
   if (!name || name.length < 3) return bad("name must be at least 3 characters");
   if (!symbol || symbol.length < 2) return bad("symbol must be at least 2 characters");
   if (!Number.isFinite(initialPrice) || initialPrice <= 0) return bad("initial_price_usdc must be > 0");
+  if (!isHexTxHash(txHash)) return bad("tx_hash is required and must be a valid on-chain transaction hash");
+  if (!isAddress(tokenAddress)) return bad("token_address is required");
+  if (!isAddress(poolAddress)) return bad("pool_address is required");
+  if (vaultAddress && !isAddress(vaultAddress)) return bad("vault_address must be a valid address");
+  if (stakingAddress && !isAddress(stakingAddress)) return bad("staking_address must be a valid address");
 
   const { data: seller, error: sellerErr } = await admin
     .from("market_seller_profiles")
@@ -141,7 +212,9 @@ Deno.serve(async (req) => {
   if (preferredChain) {
     const { data, error } = await admin
       .from("market_chain_config")
-      .select("chain,chain_id,active,identity_factory,identity_router,identity_name_registry,identity_stable_address")
+      .select(
+        "chain,chain_id,active,rpc_url,confirmations_required,identity_factory,identity_router,identity_name_registry,identity_stable_address",
+      )
       .eq("chain", preferredChain)
       .eq("active", true)
       .maybeSingle();
@@ -150,7 +223,9 @@ Deno.serve(async (req) => {
   } else {
     const { data, error } = await admin
       .from("market_chain_config")
-      .select("chain,chain_id,active,identity_factory,identity_router,identity_name_registry,identity_stable_address,created_at")
+      .select(
+        "chain,chain_id,active,rpc_url,confirmations_required,identity_factory,identity_router,identity_name_registry,identity_stable_address,created_at",
+      )
       .eq("active", true)
       .order("created_at", { ascending: false });
     if (error) return bad(error.message);
@@ -159,6 +234,58 @@ Deno.serve(async (req) => {
   }
 
   if (!chainConfig?.chain) return bad("No active chain config available");
+  if (!chainConfig.rpc_url) return bad(`rpc_url missing for ${chainConfig.chain}`);
+  if (!isAddress(String(chainConfig.identity_factory || ""))) {
+    return bad(`identity_factory missing for ${chainConfig.chain}`);
+  }
+
+  const expectedStoreKey = storeKeyForStoreId(user.id);
+  if (storeKey) {
+    if (!isBytes32(storeKey)) return bad("store_key must be a bytes32 value");
+    if (norm(storeKey) !== norm(expectedStoreKey)) {
+      return bad("store_key does not match this store");
+    }
+  }
+
+  const receipt: any = await rpcCall(String(chainConfig.rpc_url), "eth_getTransactionReceipt", [txHash]).catch((e) =>
+    ({ __err: String(e?.message ?? e) })
+  );
+  if (receipt?.__err) return bad(receipt.__err);
+  if (!receipt) return bad("Transaction receipt not found on chain yet");
+  if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain create transaction failed");
+
+  const latestBlockHex = await rpcCall(String(chainConfig.rpc_url), "eth_blockNumber", []).catch((e) =>
+    ({ __err: String(e?.message ?? e) })
+  );
+  if (latestBlockHex?.__err) return bad(latestBlockHex.__err);
+  const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
+  const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
+  const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 0;
+  const required = Math.max(1, Number(chainConfig.confirmations_required ?? 1));
+  if (confirmations < required) {
+    return bad(`Awaiting confirmations (${confirmations}/${required})`);
+  }
+
+  const storeTopic = bytes32Topic(expectedStoreKey);
+  const createLog = Array.isArray(receipt.logs)
+    ? receipt.logs.find((log: any) =>
+      norm(String(log?.address || "")) === norm(String(chainConfig.identity_factory || "")) &&
+      norm(String(log?.topics?.[0] || "")) === norm(IDENTITY_CREATED_TOPIC0) &&
+      norm(String(log?.topics?.[1] || "")) === norm(storeTopic)
+    )
+    : null;
+  if (!createLog) return bad("On-chain identity creation event not found in transaction logs");
+
+  const decoded = parseIdentityCreatedData(String(createLog.data || ""));
+  if (!decoded) return bad("Failed to decode on-chain identity creation event");
+  if (norm(decoded.token) !== norm(tokenAddress)) return bad("token_address does not match on-chain event");
+  if (norm(decoded.pool) !== norm(poolAddress)) return bad("pool_address does not match on-chain event");
+  if (vaultAddress && norm(decoded.vault) !== norm(vaultAddress)) {
+    return bad("vault_address does not match on-chain event");
+  }
+  if (stakingAddress && norm(decoded.staking) !== norm(stakingAddress)) {
+    return bad("staking_address does not match on-chain event");
+  }
 
   const slug = await resolveUniqueSlug(
     admin,
@@ -177,8 +304,8 @@ Deno.serve(async (req) => {
       slug,
       name,
       symbol,
-      token_address: tokenAddress || null,
-      pool_address: poolAddress || null,
+      token_address: decoded.token,
+      pool_address: decoded.pool,
       launch_guard_until: launchGuardUntil,
       launched_at: now.toISOString(),
     })
@@ -224,7 +351,7 @@ Deno.serve(async (req) => {
       liquidity_usdc: creationLp,
       staking_usdc: 0,
       chain: identity.chain,
-      tx_hash: txHash || null,
+      tx_hash: txHash,
       status: "confirmed",
       idempotency_key: `stock:create:${identity.id}`,
     });
@@ -252,13 +379,13 @@ Deno.serve(async (req) => {
       reserve_usdc: reserveUsdc,
     },
     onchain: {
-      tx_hash: txHash || null,
+      tx_hash: txHash,
       user_op_hash: userOpHash || null,
-      token_address: tokenAddress || null,
-      pool_address: poolAddress || null,
-      vault_address: vaultAddress || null,
-      staking_address: stakingAddress || null,
-      store_key: storeKey || null,
+      token_address: decoded.token,
+      pool_address: decoded.pool,
+      vault_address: decoded.vault,
+      staking_address: decoded.staking,
+      store_key: expectedStoreKey,
     },
   });
 });
