@@ -132,6 +132,12 @@ export default function CreateStockIdentityScreen() {
         }, 700);
       }
     } catch (e: any) {
+      console.error("[stock-create-ui] create failed", {
+        message: String(e?.message ?? e ?? ""),
+        chain,
+        name: name.trim(),
+        symbol: symbol.trim().toUpperCase(),
+      });
       if (isWalletMismatchError(e)) {
         Alert.alert(
           "Wallet mismatch detected",

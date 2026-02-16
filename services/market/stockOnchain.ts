@@ -79,6 +79,23 @@ const IDENTITY_CREATED_EVENT_SIG =
   "IdentityCreated(bytes32,address,address,address,address,address,uint24,string,string)";
 const IDENTITY_CREATED_TOPIC0 = keccak256(stringToHex(IDENTITY_CREATED_EVENT_SIG));
 
+function logCreate(step: string, meta?: Record<string, unknown>) {
+  if (meta) {
+    console.log(`[stock-create] ${step}`, meta);
+    return;
+  }
+  console.log(`[stock-create] ${step}`);
+}
+
+function logCreateError(step: string, err: unknown, meta?: Record<string, unknown>) {
+  const message = String((err as any)?.message ?? err ?? "unknown");
+  if (meta) {
+    console.error(`[stock-create] ${step} FAILED`, { message, ...meta });
+    return;
+  }
+  console.error(`[stock-create] ${step} FAILED`, { message });
+}
+
 function toNumber(input: unknown, fallback = 0) {
   const n = Number(input);
   return Number.isFinite(n) ? n : fallback;
@@ -235,133 +252,180 @@ export async function createStockIdentityOnchain(input: {
   chain: string;
   slug?: string | null;
 }) {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  const user = auth?.user;
-  if (!user) throw new Error("Not authenticated");
-
-  const { data: existing, error: existingErr } = await supabase
-    .from("market_stock_identities")
-    .select("id,slug,name,symbol,chain")
-    .eq("store_id", user.id)
-    .maybeSingle();
-  if (existingErr) throw new Error(existingErr.message);
-  if (existing?.id) {
-    throw new Error(`Store already has a stock identity (${existing.slug || existing.symbol || existing.id})`);
-  }
-
-  const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey) {
-    throw new Error("No wallet private key found on this device. Import your wallet key first.");
-  }
-
-  const authCheck = await requireLocalAuth("Create stock identity on-chain");
-  if (!authCheck.ok) throw new Error(authCheck.message || "Authentication required");
-
-  const chain = await resolveStockChain(input.chain);
-  await ensureWalletAddressOnChain(chain);
-
-  const { client, account, address } = await getSmartAccount(chain, user.id);
-  const savedWallet = await getMyWalletForChain(chain.chain);
-  if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
-    await registerWallet(chain.chain, address);
-  }
-  const storeKey = storeKeyFromStoreId(user.id);
-  const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
-  const factoryAddress = chain.identity_factory as `0x${string}`;
-  const creationFeeRaw = 50_000_000n; // 50 USDC (6 decimals)
-
-  const approveData = encodeFunctionData({
-    abi: ERC20_ABI,
-    functionName: "approve",
-    args: [factoryAddress, creationFeeRaw],
+  logCreate("start", {
+    chain: input.chain,
+    symbol: input.symbol,
+    name: input.name,
+    slug: input.slug ?? null,
   });
-
-  await (client as any).sendTransaction({
-    account,
-    to: stableAddress,
-    data: approveData,
-  });
-
-  const createData = encodeFunctionData({
-    abi: IDENTITY_FACTORY_ABI,
-    functionName: "createIdentity",
-    args: [storeKey as `0x${string}`, input.name.trim(), input.symbol.trim().toUpperCase()],
-  });
-
-  const createResult = await (client as any).sendTransaction({
-    account,
-    to: factoryAddress,
-    data: createData,
-  });
-  let { txHash, userOpHash } = await resolveTxHash(chain, createResult);
-
-  const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
-  if (!txHash.startsWith("0x")) {
-    throw new Error("Create transaction submitted, but hash is not available yet. Wait a moment and retry.");
-  }
-
-  const createReceipt = await publicClient.waitForTransactionReceipt({
-      hash: txHash as `0x${string}`,
-      confirmations: Math.max(1, Number(chain.confirmations_required || 1)),
-      timeout: 180_000,
-    });
-  if ((createReceipt as any)?.status && String((createReceipt as any).status).toLowerCase() !== "success") {
-    throw new Error(
-      `On-chain create transaction failed on ${chain.chain}. Check wallet USDC balance and ensure this store has not already created on-chain.`,
-    );
-  }
-
-  const info = await waitForIdentityInfo(publicClient, factoryAddress, storeKey as `0x${string}`);
-  if (!info) {
-    throw new Error("On-chain identity addresses not found yet after confirmed transaction. Please retry in a few seconds.");
-  }
-
-  let tokenAddress = info.tokenAddress;
-  let poolAddress = info.poolAddress;
-  const vaultAddress = info.vaultAddress;
-  const stakingAddress = info.stakingAddress;
-
-  const upsertFromTx = async (useTxHash: string) =>
-    await createStockIdentity({
-      name: input.name.trim(),
-      symbol: input.symbol.trim().toUpperCase(),
-      chain: input.chain,
-      slug: input.slug ?? undefined,
-      tx_hash: useTxHash,
-      user_op_hash: userOpHash || undefined,
-      token_address: tokenAddress,
-      pool_address: poolAddress,
-      vault_address: vaultAddress,
-      staking_address: stakingAddress,
-      store_key: storeKey,
-    });
-
-  let db: any;
   try {
-    db = await upsertFromTx(txHash);
-  } catch (e: any) {
-    const m = String(e?.message ?? e ?? "").toLowerCase();
-    // Recovery path for AA timing: use latest successful IdentityCreated tx for this store.
-    if (m.includes("on-chain create transaction failed") || m.includes("transaction receipt not found")) {
-      const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
-      if (recoveredTx && recoveredTx.toLowerCase() !== txHash.toLowerCase()) {
-        txHash = recoveredTx;
-        db = await upsertFromTx(txHash);
+    const { data: auth, error: authErr } = await supabase.auth.getUser();
+    if (authErr) throw authErr;
+    const user = auth?.user;
+    if (!user) throw new Error("Not authenticated");
+    logCreate("auth_ok", { user_id: user.id });
+
+    const { data: existing, error: existingErr } = await supabase
+      .from("market_stock_identities")
+      .select("id,slug,name,symbol,chain")
+      .eq("store_id", user.id)
+      .maybeSingle();
+    if (existingErr) throw new Error(existingErr.message);
+    if (existing?.id) {
+      throw new Error(`Store already has a stock identity (${existing.slug || existing.symbol || existing.id})`);
+    }
+    logCreate("store_identity_check_ok");
+
+    const localKey = await getStoredPrivateKey(user.id);
+    if (!localKey) {
+      throw new Error("No wallet private key found on this device. Import your wallet key first.");
+    }
+    logCreate("local_wallet_key_ok");
+
+    const authCheck = await requireLocalAuth("Create stock identity on-chain");
+    if (!authCheck.ok) throw new Error(authCheck.message || "Authentication required");
+    logCreate("local_auth_ok");
+
+    const chain = await resolveStockChain(input.chain);
+    logCreate("chain_resolved", {
+      chain: chain.chain,
+      chain_id: chain.chain_id,
+      factory: chain.identity_factory,
+      stable: chain.identity_stable_address || chain.usdc_address,
+    });
+    await ensureWalletAddressOnChain(chain);
+
+    const { client, account, address } = await getSmartAccount(chain, user.id);
+    logCreate("smart_account_ok", { wallet: address });
+    const savedWallet = await getMyWalletForChain(chain.chain);
+    if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
+      await registerWallet(chain.chain, address);
+      logCreate("wallet_mapping_updated", { old_wallet: savedWallet.address, new_wallet: address });
+    }
+    const storeKey = storeKeyFromStoreId(user.id);
+    const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
+    const factoryAddress = chain.identity_factory as `0x${string}`;
+    const creationFeeRaw = 50_000_000n; // 50 USDC (6 decimals)
+
+    const approveData = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [factoryAddress, creationFeeRaw],
+    });
+
+    logCreate("approve_submit", { token: stableAddress, spender: factoryAddress, amount_raw: creationFeeRaw.toString() });
+    await (client as any).sendTransaction({
+      account,
+      to: stableAddress,
+      data: approveData,
+    });
+    logCreate("approve_sent");
+
+    const createData = encodeFunctionData({
+      abi: IDENTITY_FACTORY_ABI,
+      functionName: "createIdentity",
+      args: [storeKey as `0x${string}`, input.name.trim(), input.symbol.trim().toUpperCase()],
+    });
+
+    logCreate("create_submit", { factory: factoryAddress, store_key: storeKey });
+    const createResult = await (client as any).sendTransaction({
+      account,
+      to: factoryAddress,
+      data: createData,
+    });
+    let { txHash, userOpHash } = await resolveTxHash(chain, createResult);
+    logCreate("create_sent", { tx_hash: txHash || null, user_op_hash: userOpHash || null });
+
+    const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
+    if (!txHash.startsWith("0x")) {
+      throw new Error("Create transaction submitted, but hash is not available yet. Wait a moment and retry.");
+    }
+
+    const createReceipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash as `0x${string}`,
+        confirmations: Math.max(1, Number(chain.confirmations_required || 1)),
+        timeout: 180_000,
+      });
+    logCreate("create_receipt_ok", {
+      tx_hash: txHash,
+      status: String((createReceipt as any)?.status ?? ""),
+      block_number: String((createReceipt as any)?.blockNumber ?? ""),
+    });
+    if ((createReceipt as any)?.status && String((createReceipt as any).status).toLowerCase() !== "success") {
+      throw new Error(
+        `On-chain create transaction failed on ${chain.chain}. Check wallet USDC balance and ensure this store has not already created on-chain.`,
+      );
+    }
+
+    const info = await waitForIdentityInfo(publicClient, factoryAddress, storeKey as `0x${string}`);
+    if (!info) {
+      throw new Error("On-chain identity addresses not found yet after confirmed transaction. Please retry in a few seconds.");
+    }
+    logCreate("identity_info_ok", {
+      token: info.tokenAddress,
+      pool: info.poolAddress,
+      vault: info.vaultAddress,
+      staking: info.stakingAddress,
+    });
+
+    let tokenAddress = info.tokenAddress;
+    let poolAddress = info.poolAddress;
+    const vaultAddress = info.vaultAddress;
+    const stakingAddress = info.stakingAddress;
+
+    const upsertFromTx = async (useTxHash: string) =>
+      await createStockIdentity({
+        name: input.name.trim(),
+        symbol: input.symbol.trim().toUpperCase(),
+        chain: input.chain,
+        slug: input.slug ?? undefined,
+        tx_hash: useTxHash,
+        user_op_hash: userOpHash || undefined,
+        token_address: tokenAddress,
+        pool_address: poolAddress,
+        vault_address: vaultAddress,
+        staking_address: stakingAddress,
+        store_key: storeKey,
+      });
+
+    let db: any;
+    try {
+      logCreate("db_sync_submit", { tx_hash: txHash });
+      db = await upsertFromTx(txHash);
+      logCreate("db_sync_ok", { identity_id: db?.identity?.id ?? null, slug: db?.identity?.slug ?? null });
+    } catch (e: any) {
+      const m = String(e?.message ?? e ?? "").toLowerCase();
+      logCreateError("db_sync", e, { tx_hash: txHash });
+      // Recovery path for AA timing: use latest successful IdentityCreated tx for this store.
+      if (m.includes("on-chain create transaction failed") || m.includes("transaction receipt not found")) {
+        const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
+        logCreate("db_sync_recovery_attempt", { recovered_tx: recoveredTx, current_tx: txHash });
+        if (recoveredTx && recoveredTx.toLowerCase() !== txHash.toLowerCase()) {
+          txHash = recoveredTx;
+          db = await upsertFromTx(txHash);
+          logCreate("db_sync_recovery_ok", { tx_hash: txHash, identity_id: db?.identity?.id ?? null });
+        } else {
+          throw e;
+        }
       } else {
         throw e;
       }
-    } else {
-      throw e;
     }
-  }
 
-  return {
-    ...db,
-    tx_hash: txHash || null,
-    user_op_hash: userOpHash || null,
-    explorer_url: txHash ? explorerTxUrl(chain.chain, txHash) : null,
-  };
+    return {
+      ...db,
+      tx_hash: txHash || null,
+      user_op_hash: userOpHash || null,
+      explorer_url: txHash ? explorerTxUrl(chain.chain, txHash) : null,
+    };
+  } catch (e) {
+    logCreateError("create_flow", e, {
+      chain: input.chain,
+      symbol: input.symbol,
+      name: input.name,
+    });
+    throw e;
+  }
 }
 
 export async function submitStockTradeOnchain(input: {

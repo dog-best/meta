@@ -62,6 +62,9 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
       console.log(`[callFn] ${name} -> ok (sdk invoke)`);
       return first.data as T;
     }
+    if (first.error) {
+      console.log(`[callFn] ${name} -> sdk invoke error`, shortText(String(first.error?.message || first.error)));
+    }
 
     const firstMsg = String(first.error?.message || "");
     if (first.error && /jwt|unauthori/i.test(firstMsg)) {
@@ -72,6 +75,9 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
         if (!first.error && first.data) {
           console.log(`[callFn] ${name} -> ok (sdk invoke retry)`);
           return first.data as T;
+        }
+        if (first.error) {
+          console.log(`[callFn] ${name} -> sdk invoke retry error`, shortText(String(first.error?.message || first.error)));
         }
       }
     }
