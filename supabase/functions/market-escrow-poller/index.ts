@@ -237,19 +237,20 @@ serve(async () => {
         .eq("chain", cfg.chain)
         .maybeSingle();
 
-      // Keep the scan window tight to avoid:
-      // - Alchemy free-tier eth_getLogs range limits (10 blocks)
-      // - huge catch-up scans when last_block lags far behind
-      const backfill = 20;
+      // Keep per-request ranges small to satisfy provider limits.
+      // If we already have a sync cursor, never skip old blocks; catch up incrementally.
+      // Only bootstrap new chains from a recent backfill window.
+      const bootstrapBackfill = 20;
       const maxBlocksPerRun = 60;
       let lastBlock = Number((syncRow as ChainSync | null)?.last_block ?? 0);
+      const hasSyncedBefore = lastBlock > 0;
       const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
       const latest = toNum(latestHex);
       const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
       const toBlock = Math.max(0, latest - required + 1);
 
       const maxRange = 10;
-      const backfillStart = Math.max(0, toBlock - backfill);
+      const backfillStart = Math.max(0, toBlock - bootstrapBackfill);
       let cursor = Math.max(0, lastBlock + 1);
       let truncated = false;
       let reset = false;
@@ -260,8 +261,8 @@ serve(async () => {
         reset = true;
       }
 
-      // If stored cursor is far behind, jump forward to the recent window.
-      if (cursor < backfillStart) {
+      // Bootstrap-only jump for first run; do not skip historical blocks once synced.
+      if (!hasSyncedBefore && cursor < backfillStart) {
         cursor = backfillStart;
         truncated = backfillStart > 0;
       }

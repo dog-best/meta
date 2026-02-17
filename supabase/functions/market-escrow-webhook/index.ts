@@ -140,8 +140,6 @@ serve(async (req) => {
       const buyer = hexToAddress(log.topics?.[2]);
       const seller = hexToAddress(log.topics?.[3]);
       const { token, amountRaw } = decodeData(log.data);
-
-      const tokenAddr = (token || cfg?.usdc_address || "").toLowerCase();
       const decimals = 6n; // USDC/USDT mocks on Base Sepolia use 6 decimals
       const amountUnits = Number(amountRaw) / Number(10n ** decimals);
 
@@ -155,6 +153,7 @@ serve(async (req) => {
         console.warn("escrow not found for order_key", orderKey);
         continue;
       }
+      const tokenAddr = (token || esc.token_address || cfg?.usdc_address || "").toLowerCase();
 
       const txHash = String(log.transactionHash ?? "");
       const logIndex = Number(log.logIndex ?? 0);

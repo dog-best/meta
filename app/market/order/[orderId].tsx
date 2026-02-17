@@ -5,9 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking, Alert, Modal } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { createPublicClient, http, keccak256, toHex, bytesToHex } from "viem";
-import { sha256 } from "@noble/hashes/sha256";
-import { utf8ToBytes } from "@noble/hashes/utils";
+import { createPublicClient, http, keccak256, toHex } from "viem";
 
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { supabase } from "@/services/supabase";
@@ -48,7 +46,8 @@ const CRYPTO_INTENTS_TABLE = "market_crypto_intents";
 
 const OTP_REQUEST_COOLDOWN_SEC = 30;
 
-const ESCROW_DEPOSIT_SIG = keccak256(toHex("EscrowDeposited(bytes32,address,address,address,uint256)"));
+const ESCROW_DEPOSIT_SIG_MULTI = keccak256(toHex("EscrowDeposited(bytes32,address,address,address,uint256)"));
+const ESCROW_DEPOSIT_SIG_SINGLE = keccak256(toHex("EscrowDeposited(bytes32,address,address,uint256)"));
 
 function normalizeOrderKey(key: string | null | undefined) {
   const raw = String(key ?? "").toLowerCase().replace(/^0x/, "");
@@ -79,8 +78,7 @@ function decodeDepositData(dataHex?: string) {
 }
 
 function orderKeyFromId(orderId: string) {
-  const bytes = utf8ToBytes(String(orderId || ""));
-  return bytesToHex(sha256(bytes));
+  return keccak256(toHex(String(orderId || "")));
 }
 
 type OrderRow = {
@@ -663,7 +661,8 @@ async function releaseFunds() {
         const addr = String(log.address || "").toLowerCase();
         const topic0 = String(log.topics?.[0] || "").toLowerCase();
         const topic1 = normalizeOrderKey(String(log.topics?.[1] || ""));
-        return addr === escrowAddr && topic0 === ESCROW_DEPOSIT_SIG && topic1 === wantKey;
+        const isDeposit = topic0 === ESCROW_DEPOSIT_SIG_MULTI || topic0 === ESCROW_DEPOSIT_SIG_SINGLE;
+        return addr === escrowAddr && isDeposit && topic1 === wantKey;
       });
       if (!hit) throw new Error("Deposit event not found in tx logs.");
 
