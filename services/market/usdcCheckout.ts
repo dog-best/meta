@@ -154,11 +154,12 @@ async function settleOrderFromTx(
   return false;
 }
 
-async function runReindexFallback(orderId: string, txHash: string) {
-  if (!txHash.startsWith("0x")) return;
+async function runReindexFallback(orderId: string, txHash?: string | null) {
   try {
+    const body: Record<string, unknown> = { order_id: orderId };
+    if (String(txHash || "").startsWith("0x")) body.tx_hash = txHash;
     const { data, error } = await supabase.functions.invoke("market-escrow-reindex", {
-      body: { order_id: orderId, tx_hash: txHash },
+      body,
     });
     if (error) {
       console.log("[Checkout] escrow reindex fallback failed", error.message);
@@ -578,6 +579,11 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
 
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
   const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
+  console.log("[Checkout] deposit send result", {
+    tx_hash: txHash || null,
+    user_op_hash: userOpHash || null,
+    chain: chain.chain,
+  });
 
   // Try to resolve tx hash for userOp (AA) if not returned immediately.
   let resolvedTxHash = txHash;
@@ -588,6 +594,10 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   if (!resolvedTxHash && userOpHash) {
     resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
   }
+  console.log("[Checkout] deposit resolved tx", {
+    resolved_tx_hash: resolvedTxHash || null,
+    user_op_hash: userOpHash || null,
+  });
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
     p_order_id: orderId,
@@ -618,6 +628,18 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     if (!settled) {
       // Fallback reindex path if webhook/poller lags.
       await runReindexFallback(orderId, resolvedTxHash);
+    }
+  } else {
+    // AA path fallback: resolve from logs by order key even when tx hash is delayed/not returned.
+    console.log("[Checkout] deposit finalize waiting for event (no tx hash yet)", {
+      order_id: orderId,
+      user_op_hash: userOpHash || null,
+    });
+    for (let i = 0; i < 24; i++) {
+      await runReindexFallback(orderId, null);
+      const status = await readOrderStatus(orderId);
+      if (status === "IN_ESCROW") break;
+      await sleep(5000);
     }
   }
 

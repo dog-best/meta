@@ -111,9 +111,9 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const orderId = String(body?.order_id ?? "");
-    const txHash = String(body?.tx_hash ?? "");
-    if (!orderId || !txHash.startsWith("0x")) {
-      return json(400, { ok: false, message: "Missing order_id or tx_hash" });
+    const txHashInput = String(body?.tx_hash ?? "").trim().toLowerCase();
+    if (!orderId) {
+      return json(400, { ok: false, message: "Missing order_id" });
     }
 
     const { data: order, error: orderErr } = await admin
@@ -145,41 +145,94 @@ serve(async (req) => {
       return json(400, { ok: false, message: "Chain config missing" });
     }
 
-    const receipt = await rpcCall(cfg.rpc_url, "eth_getTransactionReceipt", [txHash]);
-    const receiptBlock = toNum(receipt?.blockNumber ?? 0);
-    if (!receiptBlock) {
-      return json(404, { ok: false, message: "Transaction receipt not found yet" });
-    }
-    // Strict finality: require N confirmations before we update DB status.
-    const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
-    const latest = toNum(latestHex);
-    const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
-    const confirmations = latest - receiptBlock + 1;
-    if (confirmations < required) {
-      return json(200, {
-        ok: true,
-        applied: false,
-        pending: "confirmations",
-        required,
-        confirmations,
-        remaining: Math.max(0, required - confirmations),
-      });
-    }
-    const logs = (receipt?.logs ?? []) as RpcLog[];
-
     const wantKey = normalizeOrderKey(esc.order_key);
     const escrowAddr = String(cfg.escrow_address).toLowerCase();
+    const required = Math.max(1, Number(cfg.confirmations_required ?? 1));
+    const latestHex = await rpcCall(cfg.rpc_url, "eth_blockNumber", []);
+    const latest = toNum(latestHex);
 
-    const hit = logs.find((log) => {
-      const addr = String(log.address ?? "").toLowerCase();
-      const topic0 = String(log.topics?.[0] ?? "").toLowerCase();
-      const topic1 = normalizeOrderKey(String(log.topics?.[1] ?? ""));
-      const isDeposit = topic0 === TOPIC_DEPOSIT_MULTI || topic0 === TOPIC_DEPOSIT_SINGLE;
-      return addr === escrowAddr && isDeposit && topic1 === wantKey;
-    });
+    let hit: RpcLog | null = null;
+    let resolvedTxHash = txHashInput;
+    let hitBlock = 0;
+    let confirmations = 0;
+
+    if (txHashInput.startsWith("0x")) {
+      const receipt = await rpcCall(cfg.rpc_url, "eth_getTransactionReceipt", [txHashInput]);
+      const receiptBlock = toNum(receipt?.blockNumber ?? 0);
+      if (!receiptBlock) {
+        return json(200, { ok: true, applied: false, pending: "receipt" });
+      }
+      confirmations = latest - receiptBlock + 1;
+      if (confirmations < required) {
+        return json(200, {
+          ok: true,
+          applied: false,
+          pending: "confirmations",
+          required,
+          confirmations,
+          remaining: Math.max(0, required - confirmations),
+        });
+      }
+
+      const logs = (receipt?.logs ?? []) as RpcLog[];
+      hit =
+        logs.find((log) => {
+          const addr = String(log.address ?? "").toLowerCase();
+          const topic0 = String(log.topics?.[0] ?? "").toLowerCase();
+          const topic1 = normalizeOrderKey(String(log.topics?.[1] ?? ""));
+          const isDeposit = topic0 === TOPIC_DEPOSIT_MULTI || topic0 === TOPIC_DEPOSIT_SINGLE;
+          return addr === escrowAddr && isDeposit && topic1 === wantKey;
+        }) ?? null;
+
+      if (!hit) {
+        return json(404, { ok: false, message: "Deposit event not found in tx logs" });
+      }
+      hitBlock = toNum(hit.blockNumber as any) || receiptBlock;
+      resolvedTxHash = String(hit.transactionHash ?? txHashInput).toLowerCase();
+    } else {
+      // No tx hash yet (AA path): find deposit by order key directly from chain logs.
+      const fromBlock = Math.max(0, latest - 8000);
+      const logs = (await rpcCall(cfg.rpc_url, "eth_getLogs", [
+        {
+          address: cfg.escrow_address,
+          fromBlock: `0x${fromBlock.toString(16)}`,
+          toBlock: `0x${latest.toString(16)}`,
+          topics: [[TOPIC_DEPOSIT_MULTI, TOPIC_DEPOSIT_SINGLE], [`0x${wantKey}`]],
+        },
+      ])) as RpcLog[];
+
+      if (!logs?.length) {
+        return json(200, { ok: true, applied: false, pending: "event_not_found_yet" });
+      }
+
+      logs.sort((a, b) => {
+        const ab = toNum(a.blockNumber as any);
+        const bb = toNum(b.blockNumber as any);
+        if (ab !== bb) return ab - bb;
+        return toNum(a.logIndex as any) - toNum(b.logIndex as any);
+      });
+
+      hit = logs[logs.length - 1] ?? null;
+      hitBlock = toNum(hit?.blockNumber as any);
+      confirmations = latest - hitBlock + 1;
+      if (confirmations < required) {
+        return json(200, {
+          ok: true,
+          applied: false,
+          pending: "confirmations",
+          required,
+          confirmations,
+          remaining: Math.max(0, required - confirmations),
+        });
+      }
+      resolvedTxHash = String(hit?.transactionHash ?? "").toLowerCase();
+      if (!resolvedTxHash.startsWith("0x")) {
+        return json(200, { ok: true, applied: false, pending: "tx_hash_missing" });
+      }
+    }
 
     if (!hit) {
-      return json(404, { ok: false, message: "Deposit event not found in tx logs" });
+      return json(200, { ok: true, applied: false, pending: "event_not_found_yet" });
     }
 
     const buyer = hexToAddress(hit.topics?.[2]);
@@ -194,7 +247,7 @@ serve(async (req) => {
       p_seller_wallet: seller,
       p_amount_raw: amountRaw ? amountRaw.toString() : null,
       p_amount_units: amountUnits,
-      p_tx_hash: String(hit.transactionHash ?? txHash),
+      p_tx_hash: String(hit.transactionHash ?? resolvedTxHash),
       p_log_index: toNum(hit.logIndex as any),
       p_block_number: toNum(hit.blockNumber as any),
       p_block_time: null,
@@ -202,7 +255,15 @@ serve(async (req) => {
       p_token_address: tokenAddr,
     });
 
-    return json(200, { ok: true, applied: true, order_id: orderId });
+    return json(200, {
+      ok: true,
+      applied: true,
+      order_id: orderId,
+      tx_hash: resolvedTxHash,
+      confirmations,
+      required,
+      block_number: hitBlock,
+    });
   } catch (err: any) {
     return json(500, { ok: false, message: String(err?.message || err) });
   }
