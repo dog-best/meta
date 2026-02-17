@@ -1,7 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { HapticTab } from "@/components/followcome/haptic-tab";
@@ -22,11 +22,13 @@ export default function TabLayout() {
   const scheme = useColorScheme();
   const tint = Colors[scheme ?? "dark"].tint;
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
   const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+  const isWebDesktop = Platform.OS === "web" && width >= 980;
 
-  const TABBAR_HEIGHT = 64;
-  const bottomPad = Math.max(insets.bottom, 10);
+  const TABBAR_HEIGHT = isWebDesktop ? 62 : 64;
+  const bottomPad = isWebDesktop ? 0 : Math.max(insets.bottom, 10);
 
   useEffect(() => {
     let mounted = true;
@@ -55,12 +57,23 @@ export default function TabLayout() {
       initialRouteName={isNigeria ? "index" : "wallet"}
       screenOptions={{
         headerShown: false,
-        tabBarButton: HapticTab,
+        tabBarButton: isWebDesktop ? undefined : HapticTab,
+        tabBarPosition: isWebDesktop ? "top" : "bottom",
         tabBarActiveTintColor: tint,
         tabBarInactiveTintColor: "#6B7280",
         tabBarHideOnKeyboard: true,
 
         tabBarBackground: () => {
+          if (isWebDesktop) {
+            return (
+              <View
+                style={[
+                  StyleSheet.absoluteFill,
+                  { backgroundColor: "rgba(5,8,20,0.98)" },
+                ]}
+              />
+            );
+          }
           if (Platform.OS === "ios" && BlurViewComp) {
             return (
               <BlurViewComp
@@ -80,16 +93,36 @@ export default function TabLayout() {
           );
         },
 
-        tabBarStyle: [
-          styles.tabBar,
-          {
-            height: TABBAR_HEIGHT + bottomPad,
-            paddingBottom: bottomPad,
-            backgroundColor:
-              Platform.OS === "android" ? "#050814" : "transparent",
-          },
-        ],
+        tabBarStyle: isWebDesktop
+          ? {
+              height: TABBAR_HEIGHT,
+              paddingBottom: 8,
+              paddingTop: 8,
+              backgroundColor: "rgba(5,8,20,0.98)",
+              borderTopWidth: 0,
+              borderBottomWidth: 1,
+              borderBottomColor: "rgba(255,255,255,0.1)",
+              elevation: 0,
+              left: 0,
+              right: 0,
+            }
+          : [
+              styles.tabBar,
+              {
+                height: TABBAR_HEIGHT + bottomPad,
+                paddingBottom: bottomPad,
+                backgroundColor:
+                  Platform.OS === "android" ? "#050814" : "transparent",
+              },
+            ],
         tabBarLabelStyle: styles.label,
+        sceneStyle: isWebDesktop
+          ? {
+              width: "100%",
+              maxWidth: 1400,
+              alignSelf: "center",
+            }
+          : undefined,
       }}
     >
       {/* ✅ Visible tabs */}

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React from "react";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 
 const BG = "#05040B";
 const PURPLE = "#7C3AED";
@@ -57,21 +57,43 @@ function CenterTabButton({
 }
 
 export default function MarketTabsLayout() {
+  const { width } = useWindowDimensions();
+  const isWebDesktop = Platform.OS === "web" && width >= 980;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: true,
-        tabBarStyle: {
-          backgroundColor: BG,
-          borderTopColor: "rgba(255,255,255,0.08)",
-          height: 64,
-          paddingTop: 6,
-          paddingBottom: 8,
-        },
+        tabBarPosition: isWebDesktop ? "top" : "bottom",
+        tabBarStyle: isWebDesktop
+          ? {
+              backgroundColor: "rgba(9,9,17,0.96)",
+              borderBottomColor: "rgba(255,255,255,0.09)",
+              borderBottomWidth: 1,
+              borderTopWidth: 0,
+              height: 66,
+              paddingTop: 8,
+              paddingBottom: 8,
+              paddingHorizontal: 24,
+            }
+          : {
+              backgroundColor: BG,
+              borderTopColor: "rgba(255,255,255,0.08)",
+              height: 64,
+              paddingTop: 6,
+              paddingBottom: 8,
+            },
         tabBarActiveTintColor: PURPLE,
         tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
         tabBarLabelStyle: { fontSize: 11, fontWeight: "800" as any },
+        sceneStyle: isWebDesktop
+          ? {
+              width: "100%",
+              maxWidth: 1400,
+              alignSelf: "center",
+            }
+          : undefined,
       }}
     >
       <Tabs.Screen
@@ -98,8 +120,11 @@ export default function MarketTabsLayout() {
         name="category"
         options={{
           title: "Category",
-          tabBarLabel: () => null,
-          tabBarButton: (props) => <CenterTabButton {...props} />,
+          tabBarLabel: isWebDesktop ? "Category" : () => null,
+          tabBarButton: isWebDesktop ? undefined : (props) => <CenterTabButton {...props} />,
+          tabBarIcon: isWebDesktop
+            ? ({ color, size }) => <Ionicons name="grid-outline" color={color} size={size} />
+            : undefined,
         }}
       />
 
