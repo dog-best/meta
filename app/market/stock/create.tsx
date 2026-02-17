@@ -7,6 +7,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -141,7 +142,9 @@ export default function CreateStockIdentityScreen() {
       if (isWalletMismatchError(e)) {
         Alert.alert(
           "Wallet mismatch detected",
-          "Saved wallet and this device wallet are different. Open Wallet and tap 'Use this device wallet' before creating stock.",
+          Platform.OS === "web"
+            ? "Saved wallet does not match your connected external wallet. Open Wallet and tap 'Connect external wallet / Change saved address'."
+            : "Saved wallet and this device wallet are different. Open Wallet and tap 'Use this device wallet' before creating stock.",
           [
             { text: "Cancel", style: "cancel" },
             { text: "Open Wallet", onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any) },

@@ -2,7 +2,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
 
@@ -306,6 +306,14 @@ export default function MarketAccountTab() {
 
   async function onBackupWallet() {
     setWalletErr(null);
+    if (Platform.OS === "web") {
+      Alert.alert(
+        "External wallet backup",
+        "Seed phrase/private key is managed by your external wallet. Use your wallet app/extension backup flow.",
+      );
+      return;
+    }
+
     try {
       const auth = await requireLocalAuth("Backup wallet secret");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
@@ -334,6 +342,17 @@ export default function MarketAccountTab() {
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
 
       if (!chain) throw new Error("Select a network before importing.");
+
+      if (Platform.OS === "web") {
+        await importPrivateKey(meId || undefined, "");
+        const synced = await replaceSavedWalletWithDevice(chain);
+        setWallet({ address: synced.address });
+        setImportOpen(false);
+        setImportKey("");
+        await refreshWalletMeta(chain);
+        Alert.alert("Wallet connected", "External wallet connected and saved address updated.");
+        return;
+      }
 
       const { data: existing, error: fetchErr } = await supabase
         .from("crypto_wallets")
@@ -408,6 +427,13 @@ export default function MarketAccountTab() {
     try {
       const auth = await requireLocalAuth(wallet?.address ? "Regenerate smart wallet" : "Create smart wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      if (Platform.OS === "web") {
+        const res = await ensureWalletAddressOnChain(chain);
+        setWallet({ address: res.address });
+        await refreshWalletMeta(chain);
+        return;
+      }
 
       if (wallet?.address) {
         if (!backedUp) {
@@ -852,7 +878,9 @@ export default function MarketAccountTab() {
               borderColor: "rgba(255,255,255,0.12)",
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Import private key / Change saved address</Text>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>
+              {Platform.OS === "web" ? "Connect external wallet / Change saved address" : "Import private key / Change saved address"}
+            </Text>
           </Pressable>
 
           <Pressable
@@ -886,7 +914,13 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {walletBusy ? "Working..." : wallet?.address ? "Regenerate wallet" : "Generate wallet"}
+              {walletBusy
+                ? "Working..."
+                : Platform.OS === "web"
+                  ? "Connect wallet"
+                  : wallet?.address
+                    ? "Regenerate wallet"
+                    : "Generate wallet"}
             </Text>
           </Pressable>
 
@@ -965,19 +999,25 @@ export default function MarketAccountTab() {
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
           <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Import private key</Text>
-            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              This will replace the saved wallet address for your account. Use only a private key you control.
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+              {Platform.OS === "web" ? "Connect external wallet" : "Import private key"}
             </Text>
-            <TextInput
-              value={importKey}
-              onChangeText={setImportKey}
-              placeholder="Private key (0x + 64 hex)"
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
-            />
+            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
+              {Platform.OS === "web"
+                ? "Connect your browser wallet. Private keys are not stored in this app."
+                : "This will replace the saved wallet address for your account. Use only a private key you control."}
+            </Text>
+            {Platform.OS !== "web" ? (
+              <TextInput
+                value={importKey}
+                onChangeText={setImportKey}
+                placeholder="Private key (0x + 64 hex)"
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
+              />
+            ) : null}
             {importErr ? <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{importErr}</Text> : null}
             <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
               <Pressable
@@ -990,7 +1030,7 @@ export default function MarketAccountTab() {
                 onPress={onImportPrivateKey}
                 style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
               >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Import</Text>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>{Platform.OS === "web" ? "Connect" : "Import"}</Text>
               </Pressable>
             </View>
           </View>

@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
 
@@ -330,6 +330,17 @@ export default function WalletRoute() {
 
       if (!chain) throw new Error("Select a network before importing.");
 
+      if (Platform.OS === "web") {
+        await importPrivateKey(meId || undefined, "");
+        const synced = await replaceSavedWalletWithDevice(chain);
+        setWalletAddr(synced.address);
+        setImportOpen(false);
+        setImportKey("");
+        await refreshCrypto(chain ?? undefined);
+        Alert.alert("Wallet connected", "External wallet connected and saved address updated.");
+        return;
+      }
+
       const { data: existing, error: fetchErr } = await supabase
         .from("crypto_wallets")
         .select("id,address")
@@ -526,7 +537,7 @@ async function loadChains() {
     if (!chain) return;
     setWalletErr(null);
     setWalletBusy(true);
-    if (!hasAlchemyKey) {
+    if (Platform.OS !== "web" && !hasAlchemyKey) {
       setWalletBusy(false);
       setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
       return;
@@ -534,6 +545,13 @@ async function loadChains() {
     try {
       const auth = await requireLocalAuth(walletAddr ? "Regenerate smart wallet" : "Create smart wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
+
+      if (Platform.OS === "web") {
+        const out = await ensureWalletAddressOnChain(chain);
+        setWalletAddr(out.address);
+        await refreshCrypto(chain);
+        return;
+      }
 
       if (walletAddr) {
         if (!backedUp) throw new Error("Back up your current wallet before regenerating.");
@@ -566,7 +584,7 @@ async function loadChains() {
     if (!chains.length) return;
     setWalletBusy(true);
     setWalletErr(null);
-    if (!hasAlchemyKey) {
+    if (Platform.OS !== "web" && !hasAlchemyKey) {
       setWalletBusy(false);
       setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
       return;
@@ -592,6 +610,14 @@ async function loadChains() {
   }
 
   async function onOpenBackup() {
+    if (Platform.OS === "web") {
+      Alert.alert(
+        "External wallet backup",
+        "Seed phrase/private key is managed by your external wallet. Use your wallet app/extension backup flow.",
+      );
+      return;
+    }
+
     try {
       const auth = await requireLocalAuth("Open wallet backup");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
@@ -753,7 +779,7 @@ async function loadChains() {
           <>
             <View style={styles.cryptoCard}>
               <Text style={styles.cryptoTitle}>Network</Text>
-              {!hasAlchemyKey ? (
+              {!hasAlchemyKey && Platform.OS !== "web" ? (
                 <View style={styles.warnBox}>
                   <Text style={styles.warnText}>Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart.</Text>
                 </View>
@@ -811,7 +837,9 @@ async function loadChains() {
               </View>
 
               <Pressable onPress={() => setImportOpen(true)} style={styles.secondaryAction}>
-                <Text style={styles.secondaryActionText}>Import private key / Change saved address</Text>
+                <Text style={styles.secondaryActionText}>
+                  {Platform.OS === "web" ? "Connect external wallet / Change saved address" : "Import private key / Change saved address"}
+                </Text>
               </Pressable>
 
               <Pressable
@@ -822,11 +850,19 @@ async function loadChains() {
                 <Text style={styles.secondaryActionText}>Use this device wallet</Text>
               </Pressable>
 
-              <Pressable disabled={!chain?.active || walletBusy || !hasAlchemyKey} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || !hasAlchemyKey) && styles.dimBtn]}>
-                <Text style={styles.mainActionText}>{walletBusy ? "Working..." : walletAddr ? "Regenerate wallet" : "Generate wallet"}</Text>
+              <Pressable disabled={!chain?.active || walletBusy || (Platform.OS !== "web" && !hasAlchemyKey)} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || (Platform.OS !== "web" && !hasAlchemyKey)) && styles.dimBtn]}>
+                <Text style={styles.mainActionText}>
+                  {walletBusy
+                    ? "Working..."
+                    : Platform.OS === "web"
+                      ? "Connect wallet"
+                      : walletAddr
+                        ? "Regenerate wallet"
+                        : "Generate wallet"}
+                </Text>
               </Pressable>
 
-              <Pressable disabled={walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active) || !hasAlchemyKey) && styles.dimBtn]}>
+              <Pressable disabled={walletBusy || !chains.some((c) => c.active) || (Platform.OS !== "web" && !hasAlchemyKey)} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active) || (Platform.OS !== "web" && !hasAlchemyKey)) && styles.dimBtn]}>
                 <Text style={styles.secondaryActionText}>Sync wallet to all active networks</Text>
               </Pressable>{!!tokenDiag.usdc ? <Text style={styles.diagText}>USDC: {tokenDiag.usdc}</Text> : null}
               {!!tokenDiag.usdt ? <Text style={styles.diagText}>USDT: {tokenDiag.usdt}</Text> : null}
@@ -933,24 +969,30 @@ async function loadChains() {
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Import private key</Text>
-            <Text style={styles.modalSub}>This replaces the saved wallet address for your account.</Text>
-            <TextInput
-              value={importKey}
-              onChangeText={setImportKey}
-              placeholder="Private key (0x + 64 hex)"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.modalInput}
-            />
+            <Text style={styles.modalTitle}>{Platform.OS === "web" ? "Connect external wallet" : "Import private key"}</Text>
+            <Text style={styles.modalSub}>
+              {Platform.OS === "web"
+                ? "Connect your browser wallet. Private keys are not stored in this app."
+                : "This replaces the saved wallet address for your account."}
+            </Text>
+            {Platform.OS !== "web" ? (
+              <TextInput
+                value={importKey}
+                onChangeText={setImportKey}
+                placeholder="Private key (0x + 64 hex)"
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.modalInput}
+              />
+            ) : null}
             {importErr ? <Text style={styles.err}>{importErr}</Text> : null}
             <View style={styles.modalActions}>
               <Pressable onPress={() => setImportOpen(false)} style={styles.modalBtnLight}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </Pressable>
               <Pressable onPress={onImportPrivateKey} style={styles.modalBtnSolid}>
-                <Text style={styles.modalBtnText}>Import</Text>
+                <Text style={styles.modalBtnText}>{Platform.OS === "web" ? "Connect" : "Import"}</Text>
               </Pressable>
             </View>
           </View>

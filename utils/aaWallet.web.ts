@@ -1,6 +1,4 @@
-import { Wallet } from "ethers";
-import { http, type Hex } from "viem";
-import { generatePrivateKey } from "viem/accounts";
+import { createWalletClient, custom } from "viem";
 import { arbitrum, base, baseSepolia, mainnet, optimism, polygon, sepolia } from "viem/chains";
 
 export type MarketChainConfig = {
@@ -17,21 +15,17 @@ export type MarketChainConfig = {
   active: boolean;
 };
 
-const KEY_PRIVATE = "bc_aa_private_key_v1";
-const KEY_MNEMONIC = "bc_aa_mnemonic_v1";
-const KEY_BACKED_UP = "bc_aa_backed_up_v1";
-
-const memoryStore = new Map<string, string>();
-
-function scopeKey(base: string, scope?: string | null) {
-  const raw = (scope || "global").trim();
-  const safe = raw.replace(/[^a-zA-Z0-9._-]/g, "_");
-  return `${base}__${safe}`;
-}
+const EXTERNAL_WALLET_SENTINEL_PK = `0x${"f".repeat(64)}` as `0x${string}`;
 
 function normalizeChainId(value: unknown) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function cleanAlchemyApiKey(raw?: string) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  return value.replace(/^https?:\/\/[^/]+\/v2\//i, "");
 }
 
 function getFallbackChainById(chainId: number) {
@@ -47,205 +41,35 @@ function getFallbackChainById(chainId: number) {
   return map[chainId] ?? null;
 }
 
-async function getChainById(chainIdInput: number | string) {
-  const chainId = normalizeChainId(chainIdInput);
-
-  const fallback = getFallbackChainById(chainId);
-  if (fallback) return fallback;
-
-  const { AlchemyChainMap, getChain } = await import("@alchemy/aa-core");
-  const alchemyChain = AlchemyChainMap.get(chainId);
-  if (alchemyChain) return alchemyChain;
-
-  return AlchemyChainMap.get(chainId) ?? getChain(chainId);
+function getProvider() {
+  if (typeof window === "undefined") return null;
+  const anyWindow = window as any;
+  return anyWindow.ethereum ?? null;
 }
 
-function getBrowserStorage() {
+async function getConnectedExternalAddress() {
+  const provider = getProvider();
+  if (!provider?.request) return "";
   try {
-    if (typeof window !== "undefined" && window.localStorage) {
-      return window.localStorage;
-    }
+    const accounts = (await provider.request({ method: "eth_accounts" })) as string[] | undefined;
+    const address = String(accounts?.[0] || "");
+    return /^0x[a-fA-F0-9]{40}$/.test(address) ? (address as `0x${string}`) : "";
   } catch {
-    // ignore
+    return "";
   }
-  return null;
 }
 
-async function getItem(key: string) {
-  const storage = getBrowserStorage();
-  if (storage) return storage.getItem(key);
-  return memoryStore.get(key) ?? null;
-}
-
-async function setItem(key: string, value: string) {
-  const storage = getBrowserStorage();
-  if (storage) {
-    storage.setItem(key, value);
-    return;
+async function connectExternalAddress() {
+  const provider = getProvider();
+  if (!provider?.request) {
+    throw new Error("No external wallet found. Install MetaMask or another EVM wallet.");
   }
-  memoryStore.set(key, value);
-}
-
-async function deleteItem(key: string) {
-  const storage = getBrowserStorage();
-  if (storage) {
-    storage.removeItem(key);
-    return;
+  const accounts = (await provider.request({ method: "eth_requestAccounts" })) as string[] | undefined;
+  const address = String(accounts?.[0] || "");
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    throw new Error("External wallet connection failed. No valid wallet address returned.");
   }
-  memoryStore.delete(key);
-}
-
-export function normalizePrivateKey(rawKey: string): `0x${string}` {
-  const trimmed = String(rawKey || "").trim();
-  const cleaned = trimmed.replace(/\s+/g, "");
-  const hex = cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
-  if (/^[a-fA-F0-9]{64}$/.test(hex)) {
-    return `0x${hex}` as `0x${string}`;
-  }
-  throw new Error("Private key must be 64 hex chars (with or without 0x).");
-}
-
-function cleanAlchemyApiKey(raw?: string) {
-  const value = String(raw || "").trim();
-  if (!value) return "";
-  return value.replace(/^https?:\/\/[^/]+\/v2\//i, "");
-}
-
-export async function getOrCreatePrivateKey(scope?: string | null): Promise<`0x${string}`> {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
-
-  const existing = await getItem(keyPrivate);
-  if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
-  const globalExisting = await getItem(scopeKey(KEY_PRIVATE, null));
-  if (globalExisting && globalExisting.startsWith("0x")) {
-    await setItem(keyPrivate, globalExisting);
-    return globalExisting as `0x${string}`;
-  }
-
-  const created = Wallet.createRandom();
-  const pk = (created.privateKey || generatePrivateKey()) as `0x${string}`;
-
-  await setItem(keyPrivate, pk);
-  if (!scope) {
-    await setItem(scopeKey(KEY_PRIVATE, null), pk);
-  }
-  await setItem(keyBackedUp, "false");
-  return pk;
-}
-
-export async function getStoredPrivateKey(scope?: string | null): Promise<`0x${string}` | null> {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const existing = await getItem(keyPrivate);
-  if (existing && existing.startsWith("0x")) return existing as `0x${string}`;
-  const globalExisting = await getItem(scopeKey(KEY_PRIVATE, null));
-  if (globalExisting && globalExisting.startsWith("0x")) return globalExisting as `0x${string}`;
-  return null;
-}
-
-export async function getWalletBackupSecret(scope?: string | null) {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
-
-  const pk = await getItem(keyPrivate);
-  if (pk && pk.startsWith("0x")) {
-    return { type: "privateKey" as const, value: pk };
-  }
-  const mnemonic = await getItem(keyMnemonic);
-  if (mnemonic && mnemonic.trim().length > 0) {
-    const derived = Wallet.fromPhrase(mnemonic.trim()).privateKey as `0x${string}`;
-    await setItem(keyPrivate, derived);
-    await deleteItem(keyMnemonic);
-    return { type: "privateKey" as const, value: derived };
-  }
-  throw new Error("No wallet secret found.");
-}
-
-export async function hasWalletBackup(scope?: string | null) {
-  return (await getItem(scopeKey(KEY_BACKED_UP, scope))) === "true";
-}
-
-export async function markWalletBackedUp(scope?: string | null) {
-  await setItem(scopeKey(KEY_BACKED_UP, scope), "true");
-}
-
-export async function regenerateWalletKey(scope?: string | null) {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
-
-  const created = Wallet.createRandom();
-  const pk = (created.privateKey || generatePrivateKey()) as `0x${string}`;
-
-  await setItem(keyPrivate, pk);
-  await setItem(scopeKey(KEY_PRIVATE, null), pk);
-  await deleteItem(scopeKey(KEY_MNEMONIC, scope));
-  await setItem(keyBackedUp, "false");
-  return pk;
-}
-
-export async function getScopedWalletAddress(scope?: string | null) {
-  const pk = await getOrCreatePrivateKey(scope);
-  return new Wallet(pk).address;
-}
-
-export async function getSmartAccount(chainConfig: MarketChainConfig, scope?: string | null) {
-  if (typeof window === "undefined") {
-    throw new Error("Smart account is only available in the browser runtime.");
-  }
-
-  const chainId = normalizeChainId((chainConfig as any).chain_id);
-  if (!chainId) {
-    throw new Error(`Invalid chain_id for ${chainConfig.chain}`);
-  }
-
-  const chain = await getChainById(chainId);
-  const normalizedConfig = { ...chainConfig, chain_id: chainId };
-  const rpcUrl = getRpcUrlForChain(normalizedConfig, chain);
-  if (!rpcUrl) {
-    throw new Error("Missing RPC URL or Alchemy API key.");
-  }
-
-  const pk = await getOrCreatePrivateKey(scope);
-
-  const [{ LocalAccountSigner }, { createAlchemySmartAccountClient }, { createLightAccount }] = await Promise.all([
-    import("@alchemy/aa-core"),
-    import("@alchemy/aa-alchemy"),
-    import("@alchemy/aa-accounts"),
-  ]);
-
-  const signer = LocalAccountSigner.privateKeyToAccountSigner(pk as Hex);
-
-  let account: any;
-  try {
-    account = await createLightAccount({
-      chain: chain as any,
-      signer,
-      transport: http(rpcUrl) as any,
-    });
-  } catch (e: any) {
-    const msg = String(e?.message || "Unknown error");
-    throw new Error(
-      `Smart account init failed (getCounterFactualAddress). chain=${chainConfig.chain} chain_id=${chainId} rpc=${rpcUrl}. ${msg}`,
-    );
-  }
-
-  const apiKey = cleanAlchemyApiKey(process.env.EXPO_PUBLIC_ALCHEMY_API_KEY);
-  const gasPolicyId = process.env.EXPO_PUBLIC_ALCHEMY_GAS_POLICY_ID as string | undefined;
-  const canUseApiKeyClient = !!apiKey && !!chain?.rpcUrls?.alchemy?.http?.[0];
-  const client = createAlchemySmartAccountClient({
-    chain,
-    account,
-    ...(canUseApiKeyClient ? { apiKey } : { rpcUrl }),
-    ...(gasPolicyId ? { gasManagerConfig: { policyId: gasPolicyId } } : {}),
-  });
-
-  return {
-    chain,
-    account,
-    client,
-    address: account.address,
-    rpcUrl,
-  };
+  return address as `0x${string}`;
 }
 
 function alchemyUrlForChainId(chainId: number, apiKey?: string) {
@@ -263,9 +87,133 @@ function alchemyUrlForChainId(chainId: number, apiKey?: string) {
   return map[chainId] ?? "";
 }
 
-export async function deriveSmartAccountAddress(chainConfig: MarketChainConfig, privateKey: `0x${string}`) {
-  if (typeof window === "undefined") {
-    throw new Error("Smart account derivation is only available in the browser runtime.");
+function toHexChainId(chainId: number) {
+  return `0x${chainId.toString(16)}`;
+}
+
+function buildChainForWallet(chainConfig: MarketChainConfig, chainOverride?: any) {
+  if (chainOverride) return chainOverride;
+  const chainId = normalizeChainId((chainConfig as any).chain_id);
+  const fallback = getFallbackChainById(chainId);
+  if (fallback) return fallback;
+
+  const rpc = String(chainConfig.rpc_url || "").trim();
+  return {
+    id: chainId,
+    name: String(chainConfig.chain || `Chain ${chainId}`),
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: {
+      default: { http: rpc ? [rpc] : [] },
+      public: { http: rpc ? [rpc] : [] },
+    },
+  } as any;
+}
+
+async function ensureProviderChain(chain: any, chainConfig: MarketChainConfig) {
+  const provider = getProvider();
+  if (!provider?.request) {
+    throw new Error("No external wallet found. Install MetaMask or another EVM wallet.");
+  }
+
+  const chainId = normalizeChainId((chainConfig as any).chain_id);
+  if (!chainId) throw new Error(`Invalid chain_id for ${chainConfig.chain}`);
+
+  const targetHex = toHexChainId(chainId);
+  let current = "";
+  try {
+    current = String(await provider.request({ method: "eth_chainId" }));
+  } catch {
+    current = "";
+  }
+  if (current.toLowerCase() === targetHex.toLowerCase()) return;
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: targetHex }],
+    });
+    return;
+  } catch (switchErr: any) {
+    const code = Number(switchErr?.code);
+    if (code !== 4902 && code !== -32603) {
+      throw new Error(switchErr?.message || "Unable to switch external wallet network.");
+    }
+  }
+
+  const rpcUrl = getRpcUrlForChain(chainConfig, chain);
+  if (!rpcUrl) throw new Error(`Missing RPC URL for ${chainConfig.chain}.`);
+
+  const explorer = String(chain?.blockExplorers?.default?.url || "").trim();
+  try {
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId: targetHex,
+          chainName: String(chain?.name || chainConfig.chain || `Chain ${chainId}`),
+          nativeCurrency: chain?.nativeCurrency || { name: "Ether", symbol: "ETH", decimals: 18 },
+          rpcUrls: [rpcUrl],
+          blockExplorerUrls: explorer ? [explorer] : undefined,
+        },
+      ],
+    });
+  } catch (addErr: any) {
+    throw new Error(addErr?.message || `Unable to add ${chainConfig.chain} to external wallet.`);
+  }
+
+  await provider.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: targetHex }],
+  });
+}
+
+export function normalizePrivateKey(rawKey: string): `0x${string}` {
+  const trimmed = String(rawKey || "").trim();
+  const cleaned = trimmed.replace(/\s+/g, "");
+  const hex = cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
+  if (/^[a-fA-F0-9]{64}$/.test(hex)) {
+    return `0x${hex}` as `0x${string}`;
+  }
+  throw new Error("Private key must be 64 hex chars (with or without 0x).");
+}
+
+export async function getOrCreatePrivateKey(_scope?: string | null): Promise<`0x${string}`> {
+  const connected = await getConnectedExternalAddress();
+  if (!connected) {
+    throw new Error("Connect your external wallet first.");
+  }
+  return EXTERNAL_WALLET_SENTINEL_PK;
+}
+
+export async function getStoredPrivateKey(_scope?: string | null): Promise<`0x${string}` | null> {
+  const connected = await getConnectedExternalAddress();
+  return connected ? EXTERNAL_WALLET_SENTINEL_PK : null;
+}
+
+export async function getWalletBackupSecret(_scope?: string | null) {
+  throw new Error("External wallet manages backup and recovery. Seed/private key is not stored in this app.");
+}
+
+export async function hasWalletBackup(_scope?: string | null) {
+  return true;
+}
+
+export async function markWalletBackedUp(_scope?: string | null) {
+  // External wallet backup is managed by wallet provider.
+}
+
+export async function regenerateWalletKey(_scope?: string | null) {
+  throw new Error("Regenerate is not supported on web. Create/switch accounts from your external wallet.");
+}
+
+export async function getScopedWalletAddress(_scope?: string | null) {
+  return await connectExternalAddress();
+}
+
+export async function getSmartAccount(chainConfig: MarketChainConfig, _scope?: string | null) {
+  const provider = getProvider();
+  if (!provider?.request) {
+    throw new Error("No external wallet found. Install MetaMask or another EVM wallet.");
   }
 
   const chainId = normalizeChainId((chainConfig as any).chain_id);
@@ -273,50 +221,79 @@ export async function deriveSmartAccountAddress(chainConfig: MarketChainConfig, 
     throw new Error(`Invalid chain_id for ${chainConfig.chain}`);
   }
 
-  const chain = await getChainById(chainId);
-  const rpcUrl = getRpcUrlForChain({ ...chainConfig, chain_id: chainId }, chain);
+  const chain = buildChainForWallet(chainConfig);
+  const rpcUrl = getRpcUrlForChain(chainConfig, chain);
   if (!rpcUrl) {
     throw new Error("Missing RPC URL or Alchemy API key.");
   }
 
-  const [{ LocalAccountSigner }, { createLightAccount }] = await Promise.all([
-    import("@alchemy/aa-core"),
-    import("@alchemy/aa-accounts"),
-  ]);
+  const address = await connectExternalAddress();
+  await ensureProviderChain(chain, chainConfig);
 
-  const signer = LocalAccountSigner.privateKeyToAccountSigner(privateKey as Hex);
-  const account = await createLightAccount({
+  const walletClient = createWalletClient({
     chain: chain as any,
-    signer,
-    transport: http(rpcUrl) as any,
+    transport: custom(provider as any),
   });
-  return account.address as `0x${string}`;
+
+  const client = {
+    account: address as `0x${string}`,
+    sendTransaction: async (args: any) => {
+      await ensureProviderChain(chain, chainConfig);
+      const hash = await walletClient.sendTransaction({
+        account: ((args?.account || args?.from || address) as string) as `0x${string}`,
+        to: (args?.to as string) as `0x${string}`,
+        data: args?.data as `0x${string}` | undefined,
+        value:
+          args?.value === undefined || args?.value === null
+            ? undefined
+            : BigInt(args.value),
+        chain: chain as any,
+      });
+      return { hash };
+    },
+    sendTransactions: async (args: any) => {
+      const requests = Array.isArray(args?.requests) ? args.requests : [];
+      let last = "";
+      for (const req of requests) {
+        const out = await (client as any).sendTransaction({
+          account: args?.account || address,
+          ...req,
+        });
+        last = String(out?.hash || "");
+      }
+      return { hash: last || null };
+    },
+  };
+
+  return {
+    chain,
+    account: address as `0x${string}`,
+    client,
+    address: address as `0x${string}`,
+    rpcUrl,
+  };
 }
 
-export async function getWalletPrivateKey(scope?: string | null) {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const pk = await getItem(keyPrivate);
-  if (pk && pk.startsWith("0x")) return pk;
-  throw new Error("No private key found.");
+export async function deriveSmartAccountAddress(_chainConfig: MarketChainConfig, _privateKey: `0x${string}`) {
+  const connected = await getConnectedExternalAddress();
+  if (!connected) {
+    throw new Error("Connect your external wallet first.");
+  }
+  return connected as `0x${string}`;
 }
 
-export async function importPrivateKey(scope: string | null | undefined, rawKey: string) {
-  const keyPrivate = scopeKey(KEY_PRIVATE, scope);
-  const keyMnemonic = scopeKey(KEY_MNEMONIC, scope);
-  const keyBackedUp = scopeKey(KEY_BACKED_UP, scope);
+export async function getWalletPrivateKey(_scope?: string | null) {
+  throw new Error("Private key access is disabled on web. Use your external wallet.");
+}
 
-  const normalized = normalizePrivateKey(rawKey);
-  const wallet = new Wallet(normalized);
-  await setItem(keyPrivate, wallet.privateKey);
-  await setItem(scopeKey(KEY_PRIVATE, null), wallet.privateKey);
-  await deleteItem(keyMnemonic);
-  await setItem(keyBackedUp, "true");
-  return wallet.address;
+export async function importPrivateKey(_scope: string | null | undefined, _rawKey: string) {
+  // Web mode uses external wallets instead of private-key import.
+  return await connectExternalAddress();
 }
 
 export function getRpcUrlForChain(chainConfig: MarketChainConfig, chainOverride?: any) {
   const chainId = normalizeChainId((chainConfig as any).chain_id);
-  const chain = chainOverride ?? getFallbackChainById(chainId);
+  const chain = buildChainForWallet(chainConfig, chainOverride);
   const apiKey = cleanAlchemyApiKey(process.env.EXPO_PUBLIC_ALCHEMY_API_KEY);
   const explicitAlchemy = alchemyUrlForChainId(chainId, apiKey);
   return (

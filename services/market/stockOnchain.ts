@@ -1,4 +1,5 @@
 import { createPublicClient, encodeFunctionData, http, keccak256, stringToHex } from "viem";
+import { Platform } from "react-native";
 
 import { createStockIdentity, getStockQuote, submitStockOrder } from "@/services/market/stocks";
 import { fetchMarketChains, MarketChainConfig } from "@/services/market/chainConfig";
@@ -448,7 +449,7 @@ export async function createStockIdentityOnchain(input: {
     logCreate("store_identity_check_ok");
 
     const localKey = await getStoredPrivateKey(user.id);
-    if (!localKey) {
+    if (!localKey && Platform.OS !== "web") {
       throw new Error("No wallet private key found on this device. Import your wallet key first.");
     }
     logCreate("local_wallet_key_ok");

@@ -1,4 +1,5 @@
 import { createPublicClient, encodeFunctionData, http } from "viem";
+import { Platform } from "react-native";
 
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
@@ -309,6 +310,13 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
+  // Web uses external wallet (MetaMask/etc.) as source of truth.
+  if (Platform.OS === "web") {
+    const { address } = await getSmartAccount(chainConfig, user.id);
+    await registerWallet(chainConfig.chain, address);
+    return { address };
+  }
+
   // Reuse an existing address for this user first to avoid accidental address drift across chains.
   const existingForChain = await getMyWalletForChain(chainConfig.chain);
   if (existingForChain?.address) {
@@ -371,11 +379,17 @@ export async function replaceSavedWalletWithDevice(chainConfig: MarketChainConfi
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey) {
-    throw new Error("No private key found on this device. Import your wallet key first.");
+  let derived = "";
+  if (Platform.OS === "web") {
+    const out = await getSmartAccount(chainConfig, user.id);
+    derived = String(out.address || "");
+  } else {
+    const localKey = await getStoredPrivateKey(user.id);
+    if (!localKey) {
+      throw new Error("No private key found on this device. Import your wallet key first.");
+    }
+    derived = await deriveSmartAccountAddress(chainConfig, localKey);
   }
-  const derived = await deriveSmartAccountAddress(chainConfig, localKey);
 
   const { data: existingRows, error: existingErr } = await supabase
     .from("crypto_wallets")
@@ -467,7 +481,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   if (!user) throw new Error("Not authenticated");
 
   const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey) {
+  if (!localKey && Platform.OS !== "web") {
     throw new Error("No private key found on this device. Import your wallet key to continue.");
   }
 
@@ -667,7 +681,7 @@ export async function releaseUsdcForOrder(orderId: string) {
   if (!user) throw new Error("Not authenticated");
 
   const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey) {
+  if (!localKey && Platform.OS !== "web") {
     throw new Error("No private key found on this device. Import your wallet key to continue.");
   }
 
