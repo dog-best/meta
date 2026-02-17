@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { Link, useRouter } from "expo-router";
-import * as LocalAuthentication from "expo-local-authentication";
 import * as SecureStore from "expo-secure-store";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -16,6 +15,7 @@ import {
 } from "react-native";
 
 import { supabase } from "@/services/supabase";
+import { authenticateWithDevice, getLocalAuthInfo } from "@/utils/localAuth";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -44,11 +44,11 @@ export default function Login() {
   useEffect(() => {
     (async () => {
       try {
-        const hasHardware = await LocalAuthentication.hasHardwareAsync();
-        const enrolled = await LocalAuthentication.isEnrolledAsync();
-        const supported = await LocalAuthentication.supportedAuthenticationTypesAsync();
-        const hasFace = supported.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION);
-        const hasFinger = supported.includes(LocalAuthentication.AuthenticationType.FINGERPRINT);
+        const info = await getLocalAuthInfo();
+        const hasHardware = info.hasHardware;
+        const enrolled = info.enrolled;
+        const hasFace = info.hasFace;
+        const hasFinger = info.hasFinger;
 
         if (hasFace) setBiometricLabel("Use Face ID / Passcode");
         else if (hasFinger) setBiometricLabel("Use Fingerprint / Passcode");
@@ -100,11 +100,7 @@ export default function Login() {
     if (!biometricReady) return;
 
     try {
-      const auth = await LocalAuthentication.authenticateAsync({
-        promptMessage: "Unlock to sign in",
-        fallbackLabel: "Use Passcode",
-        cancelLabel: "Cancel",
-      });
+      const auth = await authenticateWithDevice("Unlock to sign in");
 
       if (!auth.success) return;
 

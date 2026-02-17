@@ -15,12 +15,10 @@ import {
 } from "react-native";
 import "../global.css";
 import { useAuth } from "../hooks/authentication/useAuth";
+import { initMobileAds } from "@/services/ads/initMobileAds";
 
 import * as Application from "expo-application";
 import * as Linking from "expo-linking";
-
-// AdMob
-import mobileAds from "react-native-google-mobile-ads";
 
 /* ---------------- OPTIONAL: GLOBAL FETCH TIMEOUT ----------------
    If you already added a global fetch timeout elsewhere, remove this block.
@@ -88,9 +86,7 @@ export default function RootLayout() {
 
   /* ---------------- ADMOB INIT ---------------- */
   useEffect(() => {
-    if (Platform.OS === "android") {
-      mobileAds().initialize().catch(() => {});
-    }
+    initMobileAds();
   }, []);
 
   /* ---------------- SYSTEM CONTROL CHECK ---------------- */

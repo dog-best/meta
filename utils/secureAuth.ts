@@ -1,4 +1,4 @@
-import * as LocalAuthentication from "expo-local-authentication";
+import { authenticateWithDevice, getLocalAuthInfo } from "@/utils/localAuth";
 
 export type LocalAuthResult = {
   ok: boolean;
@@ -8,22 +8,18 @@ export type LocalAuthResult = {
 
 export async function requireLocalAuth(reason = "Confirm this action"): Promise<LocalAuthResult> {
   try {
-    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const info = await getLocalAuthInfo();
+    const hasHardware = info.hasHardware;
     if (!hasHardware) {
       return { ok: false, code: "no_hardware", message: "Biometric hardware is not available on this device." };
     }
 
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    const enrolled = info.enrolled;
     if (!enrolled) {
       return { ok: false, code: "not_enrolled", message: "Biometrics are not set up. Please enroll Face ID / Fingerprint in settings." };
     }
 
-    const res = await LocalAuthentication.authenticateAsync({
-      promptMessage: reason,
-      fallbackLabel: "Use device passcode",
-      cancelLabel: "Cancel",
-      disableDeviceFallback: false,
-    });
+    const res = await authenticateWithDevice(reason);
 
     if (res.success) return { ok: true };
     if (res.error === "user_cancel") return { ok: false, code: "cancelled", message: "Authentication cancelled." };
