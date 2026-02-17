@@ -2,7 +2,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
 
@@ -15,12 +15,8 @@ import {
   deriveSmartAccountAddress,
   getRpcUrlForChain,
   getStoredPrivateKey,
-  getWalletBackupSecret,
   hasWalletBackup,
   importPrivateKey,
-  markWalletBackedUp,
-  normalizePrivateKey,
-  regenerateWalletKey,
 } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
@@ -236,7 +232,7 @@ export default function MarketAccountTab() {
         setDeviceAddress(derived);
         if (w?.address && String(w.address).toLowerCase() !== String(derived).toLowerCase()) {
           setWalletErr(
-            "Saved wallet mismatch detected. Use 'Use this device wallet' to sync addresses before checkout/trading.",
+            "Saved wallet mismatch detected. Use 'Use connected wallet' to sync addresses before checkout/trading.",
           );
         }
       } else {
@@ -306,28 +302,14 @@ export default function MarketAccountTab() {
 
   async function onBackupWallet() {
     setWalletErr(null);
-    if (Platform.OS === "web") {
-      Alert.alert(
-        "External wallet backup",
-        "Seed phrase/private key is managed by your external wallet. Use your wallet app/extension backup flow.",
-      );
-      return;
-    }
-
-    try {
-      const auth = await requireLocalAuth("Backup wallet secret");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      const secret = await getWalletBackupSecret(meId || undefined);
-      setBackupType(secret.type);
-      setBackupSecret(secret.value);
-      setBackupOpen(true);
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "We couldn't open wallet backup right now."));
-    }
+    Alert.alert(
+      "External wallet backup",
+      "Seed phrase/private key backup is managed by your wallet app. This app never stores your keys.",
+    );
+    setBackedUp(true);
   }
 
   async function onConfirmBackupDone() {
-    await markWalletBackedUp(meId || undefined);
     setBackedUp(true);
     setBackupOpen(false);
   }
@@ -338,65 +320,20 @@ export default function MarketAccountTab() {
     setWalletErr(null);
     setWalletBusy(true);
     try {
-      const auth = await requireLocalAuth("Import wallet private key");
+      const auth = await requireLocalAuth("Connect wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
 
-      if (!chain) throw new Error("Select a network before importing.");
+      if (!chain) throw new Error("Select a network before connecting.");
 
-      if (Platform.OS === "web") {
-        await importPrivateKey(meId || undefined, "");
-        const synced = await replaceSavedWalletWithDevice(chain);
-        setWallet({ address: synced.address });
-        setImportOpen(false);
-        setImportKey("");
-        await refreshWalletMeta(chain);
-        Alert.alert("Wallet connected", "External wallet connected and saved address updated.");
-        return;
-      }
-
-      const { data: existing, error: fetchErr } = await supabase
-        .from("crypto_wallets")
-        .select("id,address")
-        .eq("user_id", meId);
-      if (fetchErr) throw fetchErr;
-
-      const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
-      const normalized = normalizePrivateKey(importKey);
-      let derivedAddr = "";
-      try {
-        derivedAddr = await deriveSmartAccountAddress(chain, normalized);
-      } catch (e: any) {
-        derivedAddr = "";
-      }
-      const derivedAddrLc = String(derivedAddr || "").toLowerCase();
-      if (derivedAddr && savedAddr && savedAddr !== derivedAddrLc) {
-        const proceed = await new Promise<boolean>((resolve) => {
-          Alert.alert(
-            "Saved wallet mismatch",
-            `Saved: ${savedAddr}\nDerived: ${derivedAddrLc}\n\nUse this key anyway and replace the saved wallet address?`,
-            [
-              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-              { text: "Replace saved", style: "destructive", onPress: () => resolve(true) },
-            ],
-          );
-        });
-        if (!proceed) return;
-      }
-
-      await importPrivateKey(meId || undefined, importKey);
+      await importPrivateKey(meId || undefined, "");
       const synced = await replaceSavedWalletWithDevice(chain);
       setWallet({ address: synced.address });
       setImportOpen(false);
       setImportKey("");
       await refreshWalletMeta(chain);
-      Alert.alert(
-        "Wallet imported",
-        synced?.address
-          ? "Your saved wallet address was updated."
-          : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
-      );
+      Alert.alert("Wallet connected", "Wallet connected and saved address updated.");
     } catch (e: any) {
-      setImportErr(String(e?.message || e || "We couldn't import that private key."));
+      setImportErr(String(e?.message || e || "We couldn't connect wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -407,14 +344,14 @@ export default function MarketAccountTab() {
     setWalletErr(null);
     setWalletBusy(true);
     try {
-      const auth = await requireLocalAuth("Use this device wallet");
+      const auth = await requireLocalAuth("Use connected wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
       const out = await replaceSavedWalletWithDevice(chain);
       setWallet({ address: out.address });
       await refreshWalletMeta(chain);
-      Alert.alert("Wallet updated", "Saved wallet address now matches this device key.");
+      Alert.alert("Wallet updated", "Saved wallet address now matches your connected wallet.");
     } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "Couldn't switch to this device wallet."));
+      setWalletErr(friendlyMarketError(e, "Couldn't switch to connected wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -425,38 +362,14 @@ export default function MarketAccountTab() {
     setWalletErr(null);
     setWalletBusy(true);
     try {
-      const auth = await requireLocalAuth(wallet?.address ? "Regenerate smart wallet" : "Create smart wallet");
+      const auth = await requireLocalAuth("Connect wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      if (Platform.OS === "web") {
-        const res = await ensureWalletAddressOnChain(chain);
-        setWallet({ address: res.address });
-        await refreshWalletMeta(chain);
-        return;
-      }
-
-      if (wallet?.address) {
-        if (!backedUp) {
-          throw new Error("Back up your current wallet before regenerating.");
-        }
-        await new Promise<void>((resolve, reject) => {
-          Alert.alert(
-            "Regenerate wallet?",
-            "This will create a new wallet key. Ensure your current wallet backup is safely stored. Lost keys cannot be recovered.",
-            [
-              { text: "Cancel", style: "cancel", onPress: () => reject(new Error("Cancelled")) },
-              { text: "I understand, continue", style: "destructive", onPress: () => resolve() },
-            ],
-          );
-        });
-        await regenerateWalletKey(meId || undefined);
-      }
 
       const res = await ensureWalletAddressOnChain(chain);
       setWallet({ address: res.address });
       await refreshWalletMeta(chain);
     } catch (e: any) {
-      if (e?.message !== "Cancelled") setWalletErr(friendlyMarketError(e, "We couldn't generate your wallet right now."));
+      setWalletErr(friendlyMarketError(e, "We couldn't connect your wallet right now."));
     } finally {
       setWalletBusy(false);
     }
@@ -721,7 +634,7 @@ export default function MarketAccountTab() {
         <CardBox>
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>
           <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Create your smart account only when you are ready. We never store your private keys.
+            Connect with WalletConnect. Private keys stay in your external wallet.
           </Text>
           {!!chainErr ? (
             <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{chainErr}</Text>
@@ -783,17 +696,12 @@ export default function MarketAccountTab() {
             <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
               {chain?.active ? "Active network" : "Network not active yet"}
             </Text>
-            {!chain?.rpc_url && !process.env.EXPO_PUBLIC_ALCHEMY_API_KEY ? (
-              <Text style={{ marginTop: 6, color: "#FCA5A5", fontWeight: "800", fontSize: 12 }}>
-                Missing RPC URL or Alchemy API key. Add rpc_url in market_chain_config or set EXPO_PUBLIC_ALCHEMY_API_KEY.
-              </Text>
-            ) : null}
             <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
               {wallet?.address ? wallet.address : "No wallet address generated"}
             </Text>
             {deviceAddress ? (
               <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
-                Device key address: {deviceAddress}
+                Connected wallet: {deviceAddress}
               </Text>
             ) : null}
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
@@ -879,7 +787,7 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {Platform.OS === "web" ? "Connect external wallet / Change saved address" : "Import private key / Change saved address"}
+              Connect wallet / Change saved address
             </Text>
           </Pressable>
 
@@ -897,7 +805,7 @@ export default function MarketAccountTab() {
               opacity: !chain?.active || walletBusy || !deviceAddress ? 0.6 : 1,
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Use this device wallet</Text>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Use connected wallet</Text>
           </Pressable>
 
           <Pressable
@@ -914,13 +822,7 @@ export default function MarketAccountTab() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {walletBusy
-                ? "Working..."
-                : Platform.OS === "web"
-                  ? "Connect wallet"
-                  : wallet?.address
-                    ? "Regenerate wallet"
-                    : "Generate wallet"}
+              {walletBusy ? "Working..." : wallet?.address ? "Reconnect wallet" : "Connect wallet"}
             </Text>
           </Pressable>
 
@@ -1000,24 +902,11 @@ export default function MarketAccountTab() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
           <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
             <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-              {Platform.OS === "web" ? "Connect external wallet" : "Import private key"}
+              Connect wallet
             </Text>
             <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              {Platform.OS === "web"
-                ? "Connect your browser wallet. Private keys are not stored in this app."
-                : "This will replace the saved wallet address for your account. Use only a private key you control."}
+              Connect with WalletConnect. Private keys are managed by your wallet app and never stored here.
             </Text>
-            {Platform.OS !== "web" ? (
-              <TextInput
-                value={importKey}
-                onChangeText={setImportKey}
-                placeholder="Private key (0x + 64 hex)"
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholderTextColor="rgba(255,255,255,0.45)"
-                style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
-              />
-            ) : null}
             {importErr ? <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{importErr}</Text> : null}
             <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
               <Pressable
@@ -1030,7 +919,7 @@ export default function MarketAccountTab() {
                 onPress={onImportPrivateKey}
                 style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
               >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>{Platform.OS === "web" ? "Connect" : "Import"}</Text>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Connect</Text>
               </Pressable>
             </View>
           </View>

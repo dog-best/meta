@@ -12,17 +12,20 @@
     "lint": "expo lint"
   },
   "dependencies": {
-    "@alchemy/aa-accounts": "^3.19.0",
-    "@alchemy/aa-alchemy": "^3.19.0",
-    "@alchemy/aa-core": "^3.19.0",
-    "@alchemy/aa-signers": "^3.19.0",
     "@expo/vector-icons": "^15.0.3",
     "@hookform/resolvers": "^5.2.2",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/netinfo": "latest",
+    "@reown/appkit": "latest",
+    "@reown/appkit-adapter-wagmi": "latest",
+    "@reown/appkit-ethers-react-native": "latest",
+    "@reown/appkit-react-native": "latest",
     "@react-navigation/bottom-tabs": "^7.8.12",
     "@react-navigation/elements": "^2.9.2",
     "@react-navigation/native": "^7.1.27",
     "@react-navigation/native-stack": "^7.9.1",
+    "@tanstack/react-query": "latest",
+    "@walletconnect/react-native-compat": "latest",
     "@solana/web3.js": "^1.98.4",
     "@supabase/supabase-js": "^2.87.1",
     "ethers": "^6.16.0",
@@ -82,6 +85,7 @@
     "tslib": "^2.8.1",
     "uuid": "^13.0.0",
     "viem": "^2.45.1",
+    "wagmi": "latest",
     "yup": "^1.7.1"
   },
   "devDependencies": {

@@ -1,11 +1,10 @@
 import { createPublicClient, encodeFunctionData, http, keccak256, stringToHex } from "viem";
-import { Platform } from "react-native";
 
 import { createStockIdentity, getStockQuote, submitStockOrder } from "@/services/market/stocks";
 import { fetchMarketChains, MarketChainConfig } from "@/services/market/chainConfig";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
+import { getSmartAccount } from "@/utils/aaWallet";
 import { ensureWalletAddressOnChain, getMyWalletForChain, registerWallet } from "@/services/market/usdcCheckout";
 
 const ERC20_ABI = [
@@ -448,11 +447,7 @@ export async function createStockIdentityOnchain(input: {
     }
     logCreate("store_identity_check_ok");
 
-    const localKey = await getStoredPrivateKey(user.id);
-    if (!localKey && Platform.OS !== "web") {
-      throw new Error("No wallet private key found on this device. Import your wallet key first.");
-    }
-    logCreate("local_wallet_key_ok");
+    logCreate("wallet_connect_required");
 
     const authCheck = await requireLocalAuth("Create stock identity on-chain");
     if (!authCheck.ok) throw new Error(authCheck.message || "Authentication required");
@@ -685,7 +680,7 @@ export async function createStockIdentityOnchain(input: {
     } catch (e: any) {
       const m = String(e?.message ?? e ?? "").toLowerCase();
       logCreateError("db_sync", e, { tx_hash: txHash });
-      // Recovery path for AA timing: use latest successful IdentityCreated tx for this store.
+      // Recovery path for delayed indexer timing: use latest successful IdentityCreated tx for this store.
       if (m.includes("on-chain create transaction failed") || m.includes("transaction receipt not found")) {
         const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
         logCreate("db_sync_recovery_attempt", { recovered_tx: recoveredTx, current_tx: txHash });

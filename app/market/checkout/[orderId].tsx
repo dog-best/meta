@@ -380,11 +380,11 @@ export default function Checkout() {
       if (isWalletMismatchError(e)) {
         Alert.alert(
           "Wallet mismatch detected",
-          "Your saved wallet address does not match this device key. Use this device wallet now and retry?",
+          "Your saved wallet address does not match your connected wallet. Use connected wallet now and retry?",
           [
             { text: "Cancel", style: "cancel" },
             {
-              text: "Use this device wallet",
+              text: "Use connected wallet",
               onPress: () => {
                 void (async () => {
                   try {
@@ -436,11 +436,11 @@ export default function Checkout() {
       if (isWalletMismatchError(e)) {
         Alert.alert(
           "Wallet mismatch detected",
-          "Your saved wallet address does not match this device key. Use this device wallet now and retry?",
+          "Your saved wallet address does not match your connected wallet. Use connected wallet now and retry?",
           [
             { text: "Cancel", style: "cancel" },
             {
-              text: "Use this device wallet",
+              text: "Use connected wallet",
               onPress: () => {
                 void (async () => {
                   try {
@@ -729,7 +729,7 @@ export default function Checkout() {
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Payment options</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
             {isNigeria ? "• NGN Wallet: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).\n" : ""}
-            • USDC/USDT: uses your smart account and deposits into escrow on-chain.
+            • USDC/USDT: uses your connected wallet and deposits into escrow on-chain.
           </Text>
           {!isNigeria && allowNgnRaw ? (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
@@ -755,7 +755,7 @@ export default function Checkout() {
           <Pill
             icon="logo-bitcoin"
             title="Pay with USDC"
-            subtitle="Approve + deposit into escrow using your smart account"
+            subtitle="Approve + deposit into escrow using your connected wallet"
             onPress={payWithUsdc}
             disabled={busy || !allowUsdc}
           />
@@ -763,7 +763,7 @@ export default function Checkout() {
           <Pill
             icon="cash-outline"
             title="Pay with USDT"
-            subtitle="Approve + deposit into escrow using your smart account"
+            subtitle="Approve + deposit into escrow using your connected wallet"
             onPress={payWithUsdt}
             disabled={busy || !allowUsdt}
           />

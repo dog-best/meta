@@ -7,7 +7,6 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -16,6 +15,7 @@ import {
 import "../global.css";
 import { useAuth } from "../hooks/authentication/useAuth";
 import { initMobileAds } from "@/services/ads/initMobileAds";
+import { WalletConnectProvider } from "@/services/wallet/walletConnectProvider";
 
 import * as Application from "expo-application";
 import * as Linking from "expo-linking";
@@ -246,10 +246,10 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <WalletConnectProvider>
       <Slot />
       <StatusBar style="light" />
-    </>
+    </WalletConnectProvider>
   );
 }
 

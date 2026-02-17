@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
 
@@ -16,7 +16,7 @@ import { useWalletTxPaginated } from "@/hooks/wallet/useWalletTxPaginated";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain } from "@/services/market/chainConfig";
 import { ensureSmartAccount, ensureWalletAddressOnChain, getMyWalletForChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { deriveSmartAccountAddress, getRpcUrlForChain, getStoredPrivateKey, getWalletBackupSecret, getWalletPrivateKey, hasWalletBackup, importPrivateKey, markWalletBackedUp, normalizePrivateKey, regenerateWalletKey } from "@/utils/aaWallet";
+import { deriveSmartAccountAddress, getRpcUrlForChain, getStoredPrivateKey, hasWalletBackup, importPrivateKey } from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { supabase } from "@/services/supabase";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
@@ -146,8 +146,6 @@ export default function WalletRoute() {
   const [usdcChange, setUsdcChange] = useState(0);
   const [usdtChange, setUsdtChange] = useState(0);
 
-  const hasAlchemyKey = !!process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
-
   const { balance, error: walletSimpleErr, loading: walletLoading, reload: reloadWallet } = useWalletSimple();
   const tx = useWalletTxPaginated();
 
@@ -238,7 +236,7 @@ export default function WalletRoute() {
           setDeviceAddress(derived);
           if (addr && String(addr).toLowerCase() !== String(derived).toLowerCase()) {
             setWalletErr(
-              "Saved wallet mismatch detected. Use 'Use this device wallet' to sync addresses before checkout/trading.",
+              "Saved wallet mismatch detected. Use 'Use connected wallet' to sync addresses before checkout/trading.",
             );
           }
         } else {
@@ -325,65 +323,21 @@ export default function WalletRoute() {
     setWalletErr(null);
     setWalletBusy(true);
     try {
-      const auth = await requireLocalAuth("Import wallet private key");
+      const auth = await requireLocalAuth("Connect wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
 
-      if (!chain) throw new Error("Select a network before importing.");
+      if (!chain) throw new Error("Select a network before connecting.");
 
-      if (Platform.OS === "web") {
-        await importPrivateKey(meId || undefined, "");
-        const synced = await replaceSavedWalletWithDevice(chain);
-        setWalletAddr(synced.address);
-        setImportOpen(false);
-        setImportKey("");
-        await refreshCrypto(chain ?? undefined);
-        Alert.alert("Wallet connected", "External wallet connected and saved address updated.");
-        return;
-      }
-
-      const { data: existing, error: fetchErr } = await supabase
-        .from("crypto_wallets")
-        .select("id,address")
-        .eq("user_id", meId);
-      if (fetchErr) throw fetchErr;
-
-      const savedAddr = existing?.[0]?.address ? String(existing[0].address).toLowerCase() : "";
-      const normalized = normalizePrivateKey(importKey);
-      let derivedAddr = "";
-      try {
-        derivedAddr = await deriveSmartAccountAddress(chain, normalized);
-      } catch (e: any) {
-        derivedAddr = "";
-      }
-      const derivedAddrLc = String(derivedAddr || "").toLowerCase();
-      if (derivedAddr && savedAddr && savedAddr !== derivedAddrLc) {
-        const proceed = await new Promise<boolean>((resolve) => {
-          Alert.alert(
-            "Saved wallet mismatch",
-            `Saved: ${savedAddr}\nDerived: ${derivedAddrLc}\n\nUse this key anyway and replace the saved wallet address?`,
-            [
-              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-              { text: "Replace saved", style: "destructive", onPress: () => resolve(true) },
-            ],
-          );
-        });
-        if (!proceed) return;
-      }
-
-      await importPrivateKey(meId || undefined, importKey);
+      await importPrivateKey(meId || undefined, "");
       const synced = await replaceSavedWalletWithDevice(chain);
       setWalletAddr(synced.address);
       setImportOpen(false);
       setImportKey("");
       await refreshCrypto(chain ?? undefined);
-      Alert.alert(
-        "Wallet imported",
-        synced?.address
-          ? "Saved address updated."
-          : "Private key stored. If the address didn't update, check your RPC/alchemy settings and try sync again.",
-      );
+      await refreshCryptoTotals();
+      Alert.alert("Wallet connected", "Wallet connected and saved address updated.");
     } catch (e: any) {
-      setImportErr(String(e?.message || e || "We couldn't import that private key."));
+      setImportErr(String(e?.message || e || "We couldn't connect wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -394,15 +348,15 @@ export default function WalletRoute() {
     setWalletErr(null);
     setWalletBusy(true);
     try {
-      const auth = await requireLocalAuth("Use this device wallet");
+      const auth = await requireLocalAuth("Use connected wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
       const out = await replaceSavedWalletWithDevice(chain);
       setWalletAddr(out.address);
       await refreshCrypto(chain);
       await refreshCryptoTotals();
-      Alert.alert("Wallet updated", "Saved wallet address now matches this device key.");
+      Alert.alert("Wallet updated", "Saved wallet address now matches your connected wallet.");
     } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "Couldn't switch to this device wallet."));
+      setWalletErr(friendlyMarketError(e, "Couldn't switch to connected wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -537,44 +491,16 @@ async function loadChains() {
     if (!chain) return;
     setWalletErr(null);
     setWalletBusy(true);
-    if (Platform.OS !== "web" && !hasAlchemyKey) {
-      setWalletBusy(false);
-      setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
-      return;
-    }
     try {
-      const auth = await requireLocalAuth(walletAddr ? "Regenerate smart wallet" : "Create smart wallet");
+      const auth = await requireLocalAuth("Connect wallet");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      if (Platform.OS === "web") {
-        const out = await ensureWalletAddressOnChain(chain);
-        setWalletAddr(out.address);
-        await refreshCrypto(chain);
-        return;
-      }
-
-      if (walletAddr) {
-        if (!backedUp) throw new Error("Back up your current wallet before regenerating.");
-        await new Promise<void>((resolve, reject) => {
-          Alert.alert(
-            "Regenerate wallet?",
-            "This creates a new wallet key. Keep your old backup safe - lost keys cannot be recovered.",
-            [
-              { text: "Cancel", style: "cancel", onPress: () => reject(new Error("Cancelled")) },
-              { text: "I understand", style: "destructive", onPress: () => resolve() },
-            ],
-          );
-        });
-        await regenerateWalletKey(meId || undefined);
-      }
 
       const out = await ensureWalletAddressOnChain(chain);
       setWalletAddr(out.address);
       await refreshCrypto(chain);
+      await refreshCryptoTotals();
     } catch (e: any) {
-      if (String(e?.message || "") !== "Cancelled") {
-        setWalletErr(friendlyMarketError(e, "Unable to generate wallet."));
-      }
+      setWalletErr(friendlyMarketError(e, "Unable to connect wallet."));
     } finally {
       setWalletBusy(false);
     }
@@ -584,11 +510,6 @@ async function loadChains() {
     if (!chains.length) return;
     setWalletBusy(true);
     setWalletErr(null);
-    if (Platform.OS !== "web" && !hasAlchemyKey) {
-      setWalletBusy(false);
-      setWalletErr("Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart the app.");
-      return;
-    }
     try {
       const auth = await requireLocalAuth("Sync wallet across active networks");
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
@@ -610,24 +531,11 @@ async function loadChains() {
   }
 
   async function onOpenBackup() {
-    if (Platform.OS === "web") {
-      Alert.alert(
-        "External wallet backup",
-        "Seed phrase/private key is managed by your external wallet. Use your wallet app/extension backup flow.",
-      );
-      return;
-    }
-
-    try {
-      const auth = await requireLocalAuth("Open wallet backup");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      const secret = await getWalletBackupSecret(meId || undefined);
-      setBackupType(secret.type);
-      setBackupSecret(secret.value);
-      setBackupOpen(true);
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "Unable to open backup."));
-    }
+    Alert.alert(
+      "External wallet backup",
+      "Seed phrase/private key backup is managed by your wallet app. This app never stores your keys.",
+    );
+    setBackedUp(true);
   }
 
   async function onSendToken() {
@@ -779,11 +687,6 @@ async function loadChains() {
           <>
             <View style={styles.cryptoCard}>
               <Text style={styles.cryptoTitle}>Network</Text>
-              {!hasAlchemyKey && Platform.OS !== "web" ? (
-                <View style={styles.warnBox}>
-                  <Text style={styles.warnText}>Alchemy key missing. Set EXPO_PUBLIC_ALCHEMY_API_KEY and restart.</Text>
-                </View>
-              ) : null}
               <Pressable style={styles.selectNetworkBtn} onPress={() => setNetworkPickerOpen(true)}>
                 <Text style={styles.selectNetworkText}>
                   {chain ? String(chain.chain).toUpperCase().replace("_", " ") : "Select network"}
@@ -793,7 +696,7 @@ async function loadChains() {
 
               <Text style={styles.addrLabel}>Wallet address</Text>
               <Text selectable style={styles.addrText}>{walletAddr || "No wallet address generated"}</Text>
-              {!!deviceAddress ? <Text selectable style={styles.addrHint}>Device key: {deviceAddress}</Text> : null}
+              {!!deviceAddress ? <Text selectable style={styles.addrHint}>Connected wallet: {deviceAddress}</Text> : null}
               {!!chain ? <Text selectable style={styles.addrHint}>USDC CA: {chain.usdc_address}</Text> : null}
               {!!chain?.usdt_address ? <Text selectable style={styles.addrHint}>USDT CA: {chain.usdt_address}</Text> : null}
 
@@ -838,7 +741,7 @@ async function loadChains() {
 
               <Pressable onPress={() => setImportOpen(true)} style={styles.secondaryAction}>
                 <Text style={styles.secondaryActionText}>
-                  {Platform.OS === "web" ? "Connect external wallet / Change saved address" : "Import private key / Change saved address"}
+                  Connect wallet / Change saved address
                 </Text>
               </Pressable>
 
@@ -847,22 +750,16 @@ async function loadChains() {
                 onPress={onUseDeviceWalletAddress}
                 style={[styles.secondaryAction, (!chain?.active || walletBusy || !deviceAddress) && styles.dimBtn]}
               >
-                <Text style={styles.secondaryActionText}>Use this device wallet</Text>
+                <Text style={styles.secondaryActionText}>Use connected wallet</Text>
               </Pressable>
 
-              <Pressable disabled={!chain?.active || walletBusy || (Platform.OS !== "web" && !hasAlchemyKey)} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy || (Platform.OS !== "web" && !hasAlchemyKey)) && styles.dimBtn]}>
+              <Pressable disabled={!chain?.active || walletBusy} onPress={onGenerateOrRegenerate} style={[styles.mainAction, (!chain?.active || walletBusy) && styles.dimBtn]}>
                 <Text style={styles.mainActionText}>
-                  {walletBusy
-                    ? "Working..."
-                    : Platform.OS === "web"
-                      ? "Connect wallet"
-                      : walletAddr
-                        ? "Regenerate wallet"
-                        : "Generate wallet"}
+                  {walletBusy ? "Working..." : walletAddr ? "Reconnect wallet" : "Connect wallet"}
                 </Text>
               </Pressable>
 
-              <Pressable disabled={walletBusy || !chains.some((c) => c.active) || (Platform.OS !== "web" && !hasAlchemyKey)} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active) || (Platform.OS !== "web" && !hasAlchemyKey)) && styles.dimBtn]}>
+              <Pressable disabled={walletBusy || !chains.some((c) => c.active)} onPress={onSyncAllActive} style={[styles.secondaryAction, (walletBusy || !chains.some((c) => c.active)) && styles.dimBtn]}>
                 <Text style={styles.secondaryActionText}>Sync wallet to all active networks</Text>
               </Pressable>{!!tokenDiag.usdc ? <Text style={styles.diagText}>USDC: {tokenDiag.usdc}</Text> : null}
               {!!tokenDiag.usdt ? <Text style={styles.diagText}>USDT: {tokenDiag.usdt}</Text> : null}
@@ -907,7 +804,6 @@ async function loadChains() {
               </Pressable>
               <Pressable
                 onPress={async () => {
-                  await markWalletBackedUp(meId || undefined);
                   setBackedUp(true);
                   setBackupOpen(false);
                 }}
@@ -969,30 +865,17 @@ async function loadChains() {
       <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{Platform.OS === "web" ? "Connect external wallet" : "Import private key"}</Text>
+            <Text style={styles.modalTitle}>Connect wallet</Text>
             <Text style={styles.modalSub}>
-              {Platform.OS === "web"
-                ? "Connect your browser wallet. Private keys are not stored in this app."
-                : "This replaces the saved wallet address for your account."}
+              Connect with WalletConnect. Private keys are managed by your wallet app and never stored here.
             </Text>
-            {Platform.OS !== "web" ? (
-              <TextInput
-                value={importKey}
-                onChangeText={setImportKey}
-                placeholder="Private key (0x + 64 hex)"
-                placeholderTextColor="rgba(255,255,255,0.45)"
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={styles.modalInput}
-              />
-            ) : null}
             {importErr ? <Text style={styles.err}>{importErr}</Text> : null}
             <View style={styles.modalActions}>
               <Pressable onPress={() => setImportOpen(false)} style={styles.modalBtnLight}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </Pressable>
               <Pressable onPress={onImportPrivateKey} style={styles.modalBtnSolid}>
-                <Text style={styles.modalBtnText}>{Platform.OS === "web" ? "Connect" : "Import"}</Text>
+                <Text style={styles.modalBtnText}>Connect</Text>
               </Pressable>
             </View>
           </View>

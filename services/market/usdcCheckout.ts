@@ -1,9 +1,8 @@
 import { createPublicClient, encodeFunctionData, http } from "viem";
-import { Platform } from "react-native";
 
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
-import { deriveSmartAccountAddress, getSmartAccount, getStoredPrivateKey } from "@/utils/aaWallet";
+import { getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
 const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
@@ -16,7 +15,12 @@ export type StableSymbol = "USDC" | "USDT";
 
 export function isWalletMismatchError(input: unknown) {
   const msg = String((input as any)?.message ?? input ?? "").toLowerCase();
-  return msg.includes("wallet key mismatch") || msg.includes("saved wallet exists");
+  return (
+    msg.includes("wallet key mismatch") ||
+    msg.includes("saved wallet exists") ||
+    msg.includes("connect wallet") ||
+    msg.includes("wallet connection")
+  );
 }
 
 function sleep(ms: number) {
@@ -310,64 +314,6 @@ export async function ensureWalletAddressOnChain(chainConfig: MarketChainConfig)
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  // Web uses external wallet (MetaMask/etc.) as source of truth.
-  if (Platform.OS === "web") {
-    const { address } = await getSmartAccount(chainConfig, user.id);
-    await registerWallet(chainConfig.chain, address);
-    return { address };
-  }
-
-  // Reuse an existing address for this user first to avoid accidental address drift across chains.
-  const existingForChain = await getMyWalletForChain(chainConfig.chain);
-  if (existingForChain?.address) {
-    const localKey = await getStoredPrivateKey(user.id);
-    if (!localKey) {
-      return { address: existingForChain.address };
-    }
-    let derived = "";
-    try {
-      derived = await deriveSmartAccountAddress(chainConfig, localKey);
-    } catch {
-      throw new Error(`Unable to verify wallet key for ${chainConfig.chain}. Check RPC settings and try again.`);
-    }
-    if (String(derived).toLowerCase() !== String(existingForChain.address).toLowerCase()) {
-      await registerWallet(chainConfig.chain, derived);
-      return { address: derived };
-    }
-    return { address: existingForChain.address };
-  }
-
-  const { data: existingAny, error: anyErr } = await supabase
-    .from("crypto_wallets")
-    .select("address")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (anyErr) throw new Error(anyErr.message);
-  if (existingAny?.address) {
-    const localKey = await getStoredPrivateKey(user.id);
-    if (!localKey) {
-      throw new Error("Saved wallet exists. Import your private key to use it on this device.");
-    }
-    let derived = "";
-    try {
-      derived = await deriveSmartAccountAddress(chainConfig, localKey);
-    } catch (e: any) {
-      // If derivation fails due to RPC issues, don't overwrite the saved address silently.
-      throw new Error(`Unable to verify wallet key for ${chainConfig.chain}. Check RPC settings and try again.`);
-    }
-    if (String(derived).toLowerCase() !== String(existingAny.address).toLowerCase()) {
-      // User imported a different key on this device.
-      // Make this chain use the current device key so transactions can proceed.
-      await registerWallet(chainConfig.chain, derived);
-      return { address: derived };
-    }
-    await registerWallet(chainConfig.chain, existingAny.address);
-    return { address: existingAny.address };
-  }
-
-  // First-time generation: persist smart-account address.
   const { address } = await getSmartAccount(chainConfig, user.id);
   await registerWallet(chainConfig.chain, address);
   return { address };
@@ -379,16 +325,10 @@ export async function replaceSavedWalletWithDevice(chainConfig: MarketChainConfi
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  let derived = "";
-  if (Platform.OS === "web") {
-    const out = await getSmartAccount(chainConfig, user.id);
-    derived = String(out.address || "");
-  } else {
-    const localKey = await getStoredPrivateKey(user.id);
-    if (!localKey) {
-      throw new Error("No private key found on this device. Import your wallet key first.");
-    }
-    derived = await deriveSmartAccountAddress(chainConfig, localKey);
+  const out = await getSmartAccount(chainConfig, user.id);
+  const derived = String(out.address || "");
+  if (!/^0x[a-fA-F0-9]{40}$/.test(derived)) {
+    throw new Error("Wallet connection failed. Connect wallet and try again.");
   }
 
   const { data: existingRows, error: existingErr } = await supabase
@@ -480,11 +420,6 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey && Platform.OS !== "web") {
-    throw new Error("No private key found on this device. Import your wallet key to continue.");
-  }
-
   const { client, account, address } = await getSmartAccount(chain, user.id);
   // Ensure strict escrow intent reads the same active wallet that will sign the tx.
   await registerWallet(chain.chain, address);
@@ -553,7 +488,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
           `Insufficient ${symbol} balance on your wallet.\n\nWallet: ${address}\nHave: ${bal.toString()}\nNeed: ${need.toString()}`,
         );
       }
-      // AA without a paymaster requires ETH on the smart account to pay network fees.
+      // Wallet must have enough native gas token to pay network fees.
       if (ethBal < 50_000_000_000_000n) {
         throw new Error(
           `Not enough ${chain.chain} ETH for network fees.\n\nWallet: ${address}\nAdd a small amount of gas and try again.`,
@@ -599,7 +534,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     chain: chain.chain,
   });
 
-  // Try to resolve tx hash for userOp (AA) if not returned immediately.
+  // Try to resolve tx hash when wallet middleware returns an operation hash first.
   let resolvedTxHash = txHash;
   if (!resolvedTxHash && userOpHash) {
     resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
@@ -644,7 +579,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
       await runReindexFallback(orderId, resolvedTxHash);
     }
   } else {
-    // AA path fallback: resolve from logs by order key even when tx hash is delayed/not returned.
+    // Fallback: resolve from logs by order key even when tx hash is delayed/not returned.
     console.log("[Checkout] deposit finalize waiting for event (no tx hash yet)", {
       order_id: orderId,
       user_op_hash: userOpHash || null,
@@ -679,11 +614,6 @@ export async function releaseUsdcForOrder(orderId: string) {
   if (authErr) throw authErr;
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
-
-  const localKey = await getStoredPrivateKey(user.id);
-  if (!localKey && Platform.OS !== "web") {
-    throw new Error("No private key found on this device. Import your wallet key to continue.");
-  }
 
   const { client, account, address } = await getSmartAccount(chain, user.id);
   await registerWallet(chain.chain, address);
