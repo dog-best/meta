@@ -78,6 +78,11 @@ function decodeData(dataHex?: string) {
   return { token: null, amountRaw: 0n };
 }
 
+function normalizeOrderKey(key: string | null | undefined) {
+  const raw = String(key ?? "").toLowerCase().replace(/^0x/, "");
+  return raw.padStart(64, "0");
+}
+
 function extractLogs(payload: any): AlchemyLog[] {
   const logs: AlchemyLog[] = [];
   const act = payload?.event?.activity;
@@ -131,6 +136,7 @@ serve(async (req) => {
       if (!isDeposit && !isRelease && !isRefund) continue;
 
       const orderKey = String(log.topics?.[1] ?? "").toLowerCase();
+      const orderKeyNo0x = orderKey.startsWith("0x") ? orderKey.slice(2) : orderKey;
       const buyer = hexToAddress(log.topics?.[2]);
       const seller = hexToAddress(log.topics?.[3]);
       const { token, amountRaw } = decodeData(log.data);
@@ -141,8 +147,8 @@ serve(async (req) => {
 
       const { data: esc } = await admin
         .from("market_crypto_escrows")
-        .select("order_id,order_key")
-        .eq("order_key", orderKey)
+        .select("order_id,order_key,token_address")
+        .in("order_key", [orderKey, orderKeyNo0x, normalizeOrderKey(orderKey), normalizeOrderKey(orderKeyNo0x)])
         .maybeSingle();
 
       if (!esc?.order_id) {
@@ -156,41 +162,71 @@ serve(async (req) => {
       const blockTime = log.blockTimestamp ? new Date(log.blockTimestamp).toISOString() : null;
 
       if (isDeposit) {
-        await admin.rpc("market_apply_chain_deposit", {
-          p_order_id: esc.order_id,
-          p_buyer_wallet: buyer,
-          p_seller_wallet: seller,
-          p_amount_raw: amountRaw ? amountRaw.toString() : null,
-          p_amount_units: amountUnits,
-          p_tx_hash: txHash,
-          p_log_index: logIndex,
-          p_block_number: blockNumber,
-          p_block_time: blockTime,
-          p_raw: log,
-          p_token_address: tokenAddr,
-        });
+        try {
+          await admin.rpc("market_apply_chain_deposit", {
+            p_order_id: esc.order_id,
+            p_buyer_wallet: buyer,
+            p_seller_wallet: seller,
+            p_amount_raw: amountRaw ? amountRaw.toString() : null,
+            p_amount_units: amountUnits,
+            p_tx_hash: txHash,
+            p_log_index: logIndex,
+            p_block_number: blockNumber,
+            p_block_time: blockTime,
+            p_raw: log,
+            p_token_address: tokenAddr || esc.token_address || null,
+          });
+        } catch (e: any) {
+          console.error("market-escrow-webhook deposit apply failed", {
+            chain,
+            order_id: esc.order_id,
+            txHash,
+            logIndex,
+            message: String(e?.message || e),
+          });
+        }
       }
 
       if (isRelease) {
-        await admin.rpc("market_apply_chain_release", {
-          p_order_id: esc.order_id,
-          p_tx_hash: txHash,
-          p_log_index: logIndex,
-          p_block_number: blockNumber,
-          p_block_time: blockTime,
-          p_raw: log,
-        });
+        try {
+          await admin.rpc("market_apply_chain_release", {
+            p_order_id: esc.order_id,
+            p_tx_hash: txHash,
+            p_log_index: logIndex,
+            p_block_number: blockNumber,
+            p_block_time: blockTime,
+            p_raw: log,
+          });
+        } catch (e: any) {
+          console.error("market-escrow-webhook release apply failed", {
+            chain,
+            order_id: esc.order_id,
+            txHash,
+            logIndex,
+            message: String(e?.message || e),
+          });
+        }
       }
 
       if (isRefund) {
-        await admin.rpc("market_apply_chain_refund", {
-          p_order_id: esc.order_id,
-          p_tx_hash: txHash,
-          p_log_index: logIndex,
-          p_block_number: blockNumber,
-          p_block_time: blockTime,
-          p_raw: log,
-        });
+        try {
+          await admin.rpc("market_apply_chain_refund", {
+            p_order_id: esc.order_id,
+            p_tx_hash: txHash,
+            p_log_index: logIndex,
+            p_block_number: blockNumber,
+            p_block_time: blockTime,
+            p_raw: log,
+          });
+        } catch (e: any) {
+          console.error("market-escrow-webhook refund apply failed", {
+            chain,
+            order_id: esc.order_id,
+            txHash,
+            logIndex,
+            message: String(e?.message || e),
+          });
+        }
       }
     }
 

@@ -22,6 +22,7 @@ type ChainConfig = {
 };
 
 const TOPIC_DEPOSIT_MULTI = keccak256(stringToHex("EscrowDeposited(bytes32,address,address,address,uint256)"));
+const TOPIC_DEPOSIT_SINGLE = keccak256(stringToHex("EscrowDeposited(bytes32,address,address,uint256)"));
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -129,7 +130,7 @@ serve(async (req) => {
 
     const { data: esc, error: escErr } = await admin
       .from("market_crypto_escrows")
-      .select("order_id,order_key,chain")
+      .select("order_id,order_key,chain,token_address")
       .eq("order_id", orderId)
       .maybeSingle();
     if (escErr || !esc?.order_key) return json(404, { ok: false, message: "Escrow mapping missing" });
@@ -173,7 +174,8 @@ serve(async (req) => {
       const addr = String(log.address ?? "").toLowerCase();
       const topic0 = String(log.topics?.[0] ?? "").toLowerCase();
       const topic1 = normalizeOrderKey(String(log.topics?.[1] ?? ""));
-      return addr === escrowAddr && topic0 === TOPIC_DEPOSIT_MULTI && topic1 === wantKey;
+      const isDeposit = topic0 === TOPIC_DEPOSIT_MULTI || topic0 === TOPIC_DEPOSIT_SINGLE;
+      return addr === escrowAddr && isDeposit && topic1 === wantKey;
     });
 
     if (!hit) {
@@ -183,7 +185,7 @@ serve(async (req) => {
     const buyer = hexToAddress(hit.topics?.[2]);
     const seller = hexToAddress(hit.topics?.[3]);
     const { token, amountRaw } = decodeData(hit.data);
-    const tokenAddr = (token || cfg.usdc_address || "").toLowerCase();
+    const tokenAddr = (token || esc.token_address || cfg.usdc_address || "").toLowerCase();
     const amountUnits = Number(amountRaw) / 1_000_000;
 
     await admin.rpc("market_apply_chain_deposit", {

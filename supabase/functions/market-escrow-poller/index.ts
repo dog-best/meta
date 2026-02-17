@@ -26,6 +26,9 @@ type RpcLog = {
 const TOPIC_DEPOSIT_MULTI = keccak256(stringToHex("EscrowDeposited(bytes32,address,address,address,uint256)"));
 const TOPIC_RELEASE_MULTI = keccak256(stringToHex("EscrowReleased(bytes32,address,address,address,uint256)"));
 const TOPIC_REFUND_MULTI = keccak256(stringToHex("EscrowRefunded(bytes32,address,address,address,uint256)"));
+const TOPIC_DEPOSIT_SINGLE = keccak256(stringToHex("EscrowDeposited(bytes32,address,address,uint256)"));
+const TOPIC_RELEASE_SINGLE = keccak256(stringToHex("EscrowReleased(bytes32,address,address,uint256)"));
+const TOPIC_REFUND_SINGLE = keccak256(stringToHex("EscrowRefunded(bytes32,address,address,uint256)"));
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -62,6 +65,11 @@ function hexToBigInt(hex?: string): bigint {
   return BigInt(hex);
 }
 
+function normalizeOrderKey(key: string | null | undefined) {
+  const raw = String(key ?? "").toLowerCase().replace(/^0x/, "");
+  return raw.padStart(64, "0");
+}
+
 function decodeData(dataHex?: string) {
   const data = String(dataHex ?? "");
   if (!data.startsWith("0x")) return { token: null, amountRaw: 0n };
@@ -87,9 +95,9 @@ async function processLogs(
 ) {
   for (const log of logs) {
     const topic0 = String(log.topics?.[0] ?? "").toLowerCase();
-    const isDeposit = topic0 === TOPIC_DEPOSIT_MULTI;
-    const isRelease = topic0 === TOPIC_RELEASE_MULTI;
-    const isRefund = topic0 === TOPIC_REFUND_MULTI;
+    const isDeposit = topic0 === TOPIC_DEPOSIT_MULTI || topic0 === TOPIC_DEPOSIT_SINGLE;
+    const isRelease = topic0 === TOPIC_RELEASE_MULTI || topic0 === TOPIC_RELEASE_SINGLE;
+    const isRefund = topic0 === TOPIC_REFUND_MULTI || topic0 === TOPIC_REFUND_SINGLE;
     if (!isDeposit && !isRelease && !isRefund) continue;
 
     const orderKey = String(log.topics?.[1] ?? "").toLowerCase();
@@ -97,17 +105,21 @@ async function processLogs(
     const buyer = hexToAddress(log.topics?.[2]);
     const seller = hexToAddress(log.topics?.[3]);
     const { token, amountRaw } = decodeData(log.data);
-    const tokenAddr = (token || cfg.usdc_address || "").toLowerCase();
     const decimals = 6n;
     const amountUnits = Number(amountRaw) / Number(10n ** decimals);
 
     const { data: esc } = await admin
       .from("market_crypto_escrows")
-      .select("order_id,order_key")
-      .in("order_key", [orderKey, orderKeyNo0x])
+      .select("order_id,order_key,token_address")
+      .in("order_key", [
+        orderKey,
+        orderKeyNo0x,
+        normalizeOrderKey(orderKey),
+        normalizeOrderKey(orderKeyNo0x),
+      ])
       .maybeSingle();
 
-    const escrowRow = esc as { order_id: string; order_key: string } | null;
+    const escrowRow = esc as { order_id: string; order_key: string; token_address?: string | null } | null;
     if (!escrowRow?.order_id) continue;
 
     const txHash = String(log.transactionHash ?? "");
@@ -115,41 +127,72 @@ async function processLogs(
     const blockNumber = toNum(log.blockNumber as any);
 
     if (isDeposit) {
-      await admin.rpc("market_apply_chain_deposit", {
-        p_order_id: escrowRow.order_id,
-        p_buyer_wallet: buyer,
-        p_seller_wallet: seller,
-        p_amount_raw: amountRaw ? amountRaw.toString() : null,
-        p_amount_units: amountUnits,
-        p_tx_hash: txHash,
-        p_log_index: logIndex,
-        p_block_number: blockNumber,
-        p_block_time: null,
-        p_raw: log,
-        p_token_address: tokenAddr,
-      });
+      const depositTokenAddr = (token || escrowRow.token_address || cfg.usdc_address || "").toLowerCase();
+      try {
+        await admin.rpc("market_apply_chain_deposit", {
+          p_order_id: escrowRow.order_id,
+          p_buyer_wallet: buyer,
+          p_seller_wallet: seller,
+          p_amount_raw: amountRaw ? amountRaw.toString() : null,
+          p_amount_units: amountUnits,
+          p_tx_hash: txHash,
+          p_log_index: logIndex,
+          p_block_number: blockNumber,
+          p_block_time: null,
+          p_raw: log,
+          p_token_address: depositTokenAddr,
+        });
+      } catch (e: any) {
+        console.error("market-escrow-poller deposit apply failed", {
+          chain: cfg.chain,
+          order_id: escrowRow.order_id,
+          txHash,
+          logIndex,
+          message: String(e?.message || e),
+        });
+      }
     }
 
     if (isRelease) {
-      await admin.rpc("market_apply_chain_release", {
-        p_order_id: escrowRow.order_id,
-        p_tx_hash: txHash,
-        p_log_index: logIndex,
-        p_block_number: blockNumber,
-        p_block_time: null,
-        p_raw: log,
-      });
+      try {
+        await admin.rpc("market_apply_chain_release", {
+          p_order_id: escrowRow.order_id,
+          p_tx_hash: txHash,
+          p_log_index: logIndex,
+          p_block_number: blockNumber,
+          p_block_time: null,
+          p_raw: log,
+        });
+      } catch (e: any) {
+        console.error("market-escrow-poller release apply failed", {
+          chain: cfg.chain,
+          order_id: escrowRow.order_id,
+          txHash,
+          logIndex,
+          message: String(e?.message || e),
+        });
+      }
     }
 
     if (isRefund) {
-      await admin.rpc("market_apply_chain_refund", {
-        p_order_id: escrowRow.order_id,
-        p_tx_hash: txHash,
-        p_log_index: logIndex,
-        p_block_number: blockNumber,
-        p_block_time: null,
-        p_raw: log,
-      });
+      try {
+        await admin.rpc("market_apply_chain_refund", {
+          p_order_id: escrowRow.order_id,
+          p_tx_hash: txHash,
+          p_log_index: logIndex,
+          p_block_number: blockNumber,
+          p_block_time: null,
+          p_raw: log,
+        });
+      } catch (e: any) {
+        console.error("market-escrow-poller refund apply failed", {
+          chain: cfg.chain,
+          order_id: escrowRow.order_id,
+          txHash,
+          logIndex,
+          message: String(e?.message || e),
+        });
+      }
     }
   }
 }
@@ -246,7 +289,14 @@ serve(async () => {
               address: cfg.escrow_address,
               fromBlock: `0x${cursor.toString(16)}`,
               toBlock: `0x${end.toString(16)}`,
-              topics: [[TOPIC_DEPOSIT_MULTI, TOPIC_RELEASE_MULTI, TOPIC_REFUND_MULTI]],
+              topics: [[
+                TOPIC_DEPOSIT_MULTI,
+                TOPIC_RELEASE_MULTI,
+                TOPIC_REFUND_MULTI,
+                TOPIC_DEPOSIT_SINGLE,
+                TOPIC_RELEASE_SINGLE,
+                TOPIC_REFUND_SINGLE,
+              ]],
             },
           ])) as RpcLog[];
         } catch (err: any) {

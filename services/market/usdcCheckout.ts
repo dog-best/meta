@@ -18,6 +18,158 @@ export function isWalletMismatchError(input: unknown) {
   return msg.includes("wallet key mismatch") || msg.includes("saved wallet exists");
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type ChainFinalizeEvent = "DEPOSIT" | "RELEASE" | "REFUND";
+
+function expectedOrderStatusForEvent(eventType: ChainFinalizeEvent) {
+  if (eventType === "DEPOSIT") return "IN_ESCROW";
+  if (eventType === "RELEASE") return "RELEASED";
+  if (eventType === "REFUND") return "REFUNDED";
+  return "";
+}
+
+async function resolveUserOpToTxHash(
+  chain: MarketChainConfig,
+  userOpHash: string,
+  attempts = 40,
+  intervalMs = 3000,
+) {
+  const op = String(userOpHash || "").trim();
+  if (!op.startsWith("0x")) return "";
+  const rpcUrl = String(chain.rpc_url || "").trim();
+  if (!rpcUrl) return "";
+
+  try {
+    const publicClient = createPublicClient({ transport: http(rpcUrl) });
+    const requestAny = publicClient.request as any;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const receipt: any =
+          (await requestAny({
+            method: "eth_getUserOperationReceipt" as any,
+            params: [op as `0x${string}`],
+          })) ??
+          (await requestAny({
+            method: "alchemy_getUserOperationReceipt" as any,
+            params: [op as `0x${string}`],
+          }));
+        const tx = String(receipt?.receipt?.transactionHash || receipt?.transactionHash || "");
+        if (tx.startsWith("0x")) return tx;
+      } catch {
+        // keep retrying until attempts exhausted
+      }
+      await sleep(intervalMs);
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+async function readOrderStatus(orderId: string) {
+  const { data, error } = await supabase
+    .from("market_orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (error) {
+    console.log("[Checkout] order status read failed", error.message);
+    return "";
+  }
+  return String((data as any)?.status || "");
+}
+
+async function tryFinalizeOnce(
+  orderId: string,
+  chainName: string,
+  txHash: string,
+  eventType: ChainFinalizeEvent,
+) {
+  const { data, error } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
+    p_order_id: orderId,
+    p_chain: chainName,
+    p_tx_hash: txHash,
+    p_event_type: eventType,
+  });
+  if (error) return { ok: false, error: error.message, data: null as any };
+  return { ok: true, error: null as string | null, data };
+}
+
+async function tryFinalizeViaFunction(
+  orderId: string,
+  chainName: string,
+  txHash: string,
+  eventType: ChainFinalizeEvent,
+) {
+  try {
+    const { data, error } = await supabase.functions.invoke("market-chain-tx-finalize", {
+      body: {
+        order_id: orderId,
+        chain: chainName,
+        tx_hash: txHash,
+        event_type: eventType,
+      },
+    });
+    if (error) return { ok: false, error: String(error.message || error), data: null as any };
+    return { ok: true, error: null as string | null, data };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e), data: null as any };
+  }
+}
+
+async function settleOrderFromTx(
+  orderId: string,
+  chainName: string,
+  txHash: string,
+  eventType: ChainFinalizeEvent,
+  maxAttempts = 36,
+  intervalMs = 5000,
+) {
+  const want = expectedOrderStatusForEvent(eventType);
+  if (!txHash.startsWith("0x")) return false;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const rpcRes = await tryFinalizeOnce(orderId, chainName, txHash, eventType);
+    if (!rpcRes.ok) {
+      console.log("[Checkout] chain finalize RPC failed", rpcRes.error);
+      // Fallback to direct edge function call if RPC wrapper is misconfigured.
+      const fnRes = await tryFinalizeViaFunction(orderId, chainName, txHash, eventType);
+      if (!fnRes.ok) {
+        console.log("[Checkout] chain finalize function fallback failed", fnRes.error);
+      }
+    }
+
+    const status = await readOrderStatus(orderId);
+    if (want && status === want) {
+      console.log("[Checkout] chain finalize settled", { orderId, status, txHash, eventType });
+      return true;
+    }
+
+    await sleep(intervalMs);
+  }
+
+  return false;
+}
+
+async function runReindexFallback(orderId: string, txHash: string) {
+  if (!txHash.startsWith("0x")) return;
+  try {
+    const { data, error } = await supabase.functions.invoke("market-escrow-reindex", {
+      body: { order_id: orderId, tx_hash: txHash },
+    });
+    if (error) {
+      console.log("[Checkout] escrow reindex fallback failed", error.message);
+      return;
+    }
+    console.log("[Checkout] escrow reindex fallback result", data ?? null);
+  } catch (e: any) {
+    console.log("[Checkout] escrow reindex fallback error", String(e?.message || e));
+  }
+}
+
 const ESCROW_ABI = [
   {
     type: "function",
@@ -430,26 +582,11 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   // Try to resolve tx hash for userOp (AA) if not returned immediately.
   let resolvedTxHash = txHash;
   if (!resolvedTxHash && userOpHash) {
-    try {
-      const rpcUrl = chain.rpc_url || "";
-      if (rpcUrl) {
-        const publicClient = createPublicClient({ transport: http(rpcUrl) });
-        const requestAny = publicClient.request as any;
-        const receipt: any =
-          (await requestAny({
-            method: "eth_getUserOperationReceipt" as any,
-            params: [userOpHash as `0x${string}`],
-          })) ??
-          (await requestAny({
-            method: "alchemy_getUserOperationReceipt" as any,
-            params: [userOpHash as `0x${string}`],
-          }));
-        const opTx = String(receipt?.receipt?.transactionHash || receipt?.transactionHash || "");
-        if (opTx.startsWith("0x")) resolvedTxHash = opTx;
-      }
-    } catch (e) {
-      // Best-effort only.
-    }
+    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
+  }
+  // One more pass for slower bundlers.
+  if (!resolvedTxHash && userOpHash) {
+    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
   }
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
@@ -476,15 +613,11 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   }
 
   if (resolvedTxHash) {
-    // Strict finality: this may return pending until required confirmations are reached.
-    const { error: finalizeErr } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
-        p_order_id: orderId,
-        p_chain: chain.chain,
-        p_tx_hash: resolvedTxHash,
-        p_event_type: "DEPOSIT",
-      });
-    if (finalizeErr) {
-      console.log("[Checkout] chain finalize RPC failed", finalizeErr.message);
+    // Keep finalizing until status reaches IN_ESCROW (or timeout), rather than a single early attempt.
+    const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "DEPOSIT", 36, 5000);
+    if (!settled) {
+      // Fallback reindex path if webhook/poller lags.
+      await runReindexFallback(orderId, resolvedTxHash);
     }
   }
 
@@ -549,16 +682,24 @@ export async function releaseUsdcForOrder(orderId: string) {
   const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
   const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
 
+  let resolvedTxHash = txHash;
+  if (!resolvedTxHash && userOpHash) {
+    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
+  }
+  if (!resolvedTxHash && userOpHash) {
+    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
+  }
+
   const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
     p_order_id: orderId,
     p_chain: chain.chain,
-    p_tx_hash: txHash || null,
+    p_tx_hash: resolvedTxHash || null,
   });
   if (submitErr) {
     console.log("[Checkout] release submit RPC failed", submitErr.message);
   }
   const intentUpdate: any = { status: "SUBMITTED" };
-  if (txHash) intentUpdate.tx_hash = txHash;
+  if (resolvedTxHash) intentUpdate.tx_hash = resolvedTxHash;
   if (userOpHash) intentUpdate.client_reference = userOpHash;
   const { error: intentUpdErr } = await supabase
     .from("market_crypto_intents")
@@ -569,18 +710,9 @@ export async function releaseUsdcForOrder(orderId: string) {
     console.log("[Checkout] release intent update blocked", intentUpdErr.message);
   }
 
-  if (txHash) {
-    // Strict finality: this may return pending until required confirmations are reached.
-    const { error: finalizeErr } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
-        p_order_id: orderId,
-        p_chain: chain.chain,
-        p_tx_hash: txHash,
-        p_event_type: "RELEASE",
-      });
-    if (finalizeErr) {
-      console.log("[Checkout] chain finalize RPC failed", finalizeErr.message);
-    }
+  if (resolvedTxHash) {
+    await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "RELEASE", 36, 5000);
   }
 
-  return { ...intent, tx_hash: txHash || null, user_op_hash: userOpHash || null };
+  return { ...intent, tx_hash: resolvedTxHash || null, user_op_hash: userOpHash || null };
 }
