@@ -83,6 +83,13 @@ function normalizeOrderKey(key: string | null | undefined) {
   return raw.padStart(64, "0");
 }
 
+function toIsoOrNull(input: unknown): string | null {
+  if (input === null || input === undefined || input === "") return null;
+  const d = new Date(String(input));
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
 function extractLogs(payload: any): AlchemyLog[] {
   const logs: AlchemyLog[] = [];
   const pushLog = (entry: any, ctx: Partial<AlchemyLog> = {}) => {
@@ -147,6 +154,13 @@ function extractLogs(payload: any): AlchemyLog[] {
 
 serve(async (req) => {
   try {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+      return json(200, { ok: true, service: "market-escrow-webhook" });
+    }
+    if (req.method !== "POST") {
+      return json(405, { ok: false, message: "Method not allowed" });
+    }
+
     const SB_URL = envAny(["SB_URL", "SUPABASE_URL", "sb_url"], "");
     const SB_SERVICE = envAny(
       ["SB_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "sb_secret_key", "sb_scret_key"],
@@ -161,7 +175,12 @@ serve(async (req) => {
       });
     }
 
-    const payload = await req.json();
+    let payload: any = {};
+    try {
+      payload = await req.json();
+    } catch {
+      return json(200, { ok: true, message: "Empty payload" });
+    }
     const admin = createClient(SB_URL, SB_SERVICE);
     const chain = normalizeChain(payload?.event?.network ?? payload?.network ?? payload?.event?.chainId);
 
@@ -204,7 +223,7 @@ serve(async (req) => {
       const txHash = String(log.transactionHash ?? "");
       const logIndex = Number(log.logIndex ?? 0);
       const blockNumber = Number(log.blockNumber ?? 0);
-      const blockTime = log.blockTimestamp ? new Date(log.blockTimestamp).toISOString() : null;
+      const blockTime = toIsoOrNull(log.blockTimestamp);
 
       if (isDeposit) {
         try {
