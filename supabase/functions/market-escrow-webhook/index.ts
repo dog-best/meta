@@ -159,11 +159,13 @@ function extractLogs(payload: any): AlchemyLog[] {
 
 serve(async (req) => {
   try {
-    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
-      return json(200, { ok: true, service: "market-escrow-webhook" });
-    }
     if (req.method !== "POST") {
-      return json(405, { ok: false, message: "Method not allowed" });
+      return json(200, {
+        ok: true,
+        service: "market-escrow-webhook",
+        method: req.method,
+        message: "healthcheck",
+      });
     }
 
     const SB_URL = envAny(["SB_URL", "SUPABASE_URL", "sb_url"], "");
