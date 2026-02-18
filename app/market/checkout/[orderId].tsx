@@ -19,7 +19,7 @@ const BG0 = "#05040B";
 const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
-// ✅ Real function names in your repo
+// Real function names in your repo
 const RPC_CHECKOUT_WALLET = "market_checkout_wallet_rpc"; // NGN wallet escrow lock (SQL RPC)
 
 async function invokeCheckoutWallet(orderId: string) {
@@ -404,7 +404,7 @@ export default function Checkout() {
             },
             {
               text: "Open Wallet",
-              onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any),
+              onPress: () => router.push("/market/wallet" as any),
             },
           ],
         );
@@ -460,7 +460,7 @@ export default function Checkout() {
             },
             {
               text: "Open Wallet",
-              onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any),
+              onPress: () => router.push("/market/wallet" as any),
             },
           ],
         );
@@ -565,7 +565,7 @@ export default function Checkout() {
               }}
             >
               <Text style={{ color: "rgba(254,243,199,0.95)", fontWeight: "900", fontSize: 12 }}>
-                Warning: your delivery location may be outside the seller’s availability. You can still continue.
+                Warning: your delivery location may be outside the seller's availability. You can still continue.
               </Text>
             </View>
           ) : null}
@@ -592,10 +592,10 @@ export default function Checkout() {
           </Pressable>
 
           {loading ? (
-            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>Loading order detailsâ€¦</Text>
+            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>Loading order details...</Text>
           ) : deliveryGeo ? (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-              Delivery location: {deliveryGeo.label || "Saved"} • {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
+              Delivery location: {deliveryGeo.label || "Saved"} | {deliveryGeo.lat.toFixed(5)}, {deliveryGeo.lng.toFixed(5)}
             </Text>
           ) : (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
@@ -616,7 +616,8 @@ export default function Checkout() {
         >
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Buyer contact for seller</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-            Add contact details the seller can use for delivery/service updates.
+            {isNigeria ? "- NGN Wallet: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).\n" : ""}
+            - USDC/USDT: uses your connected wallet and deposits into escrow on-chain.
           </Text>
 
           <View
@@ -728,8 +729,8 @@ export default function Checkout() {
         >
           <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Payment options</Text>
           <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", lineHeight: 20 }}>
-            {isNigeria ? "• NGN Wallet: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).\n" : ""}
-            • USDC/USDT: uses your connected wallet and deposits into escrow on-chain.
+            {isNigeria ? "- NGN Wallet: uses your existing in-app wallet balance (top up via Paystack in Wallet tab).\n" : ""}
+            - USDC/USDT: uses your connected wallet and deposits into escrow on-chain.
           </Text>
           {!isNigeria && allowNgnRaw ? (
             <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
@@ -777,7 +778,7 @@ export default function Checkout() {
           {busy ? (
             <View style={{ marginTop: 14, flexDirection: "row", alignItems: "center", gap: 10 }}>
               <ActivityIndicator />
-              <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Processing…</Text>
+              <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Processing...</Text>
             </View>
           ) : null}
 
@@ -812,4 +813,7 @@ export default function Checkout() {
     </LinearGradient>
   );
 }
+
+
+
 

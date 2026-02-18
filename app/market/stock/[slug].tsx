@@ -423,7 +423,7 @@ export default function StockDetailScreen() {
           "Saved wallet does not match your connected wallet. Open Wallet and tap 'Use connected wallet' before trading.",
           [
             { text: "Cancel", style: "cancel" },
-            { text: "Open Wallet", onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any) },
+            { text: "Open Wallet", onPress: () => router.push("/market/wallet" as any) },
           ],
         );
       }
@@ -1059,3 +1059,5 @@ export default function StockDetailScreen() {
     </LinearGradient>
   );
 }
+
+

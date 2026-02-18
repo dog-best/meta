@@ -1,4 +1,4 @@
-﻿import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
@@ -586,7 +586,7 @@ export default function MarketAccountTab() {
                   variant="outline"
                 />
 
-                <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/fintech/(tabs)/wallet?action=crypto" as any)} variant="outline" />
+                <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/market/wallet" as any)} variant="outline" />
               </View>
 
               <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
@@ -611,7 +611,7 @@ export default function MarketAccountTab() {
           <CardBox>
             <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Utility</Text>
             <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-              Fund, Withdraw, Recieve, and Pay bills with 🆖NGN
+              Fund, Withdraw, Receive, and pay bills with NGN
             </Text>
 
             <Pressable
@@ -983,3 +983,5 @@ export default function MarketAccountTab() {
     </LinearGradient>
   );
 }
+
+

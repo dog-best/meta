@@ -313,7 +313,7 @@ export default function Dashboard() {
   // Prevent UI flicker while redirecting.
   if (!authLoading && !user) return null;
   if (userCountry !== undefined && !isNigeria) {
-    return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+    return <Redirect href="/market/wallet" />;
   }
 
   return (
@@ -725,3 +725,5 @@ const _orig = styles.bigCard;
 styles.bigCard = [styles.bigCard, { marginRight: 12 } as any] as any;
 // Fix last card margin in bigRow at runtime via style override in JSX if you prefer.
 // Keeping it simple: you can remove this and set marginRight in JSX if desired.
+
+

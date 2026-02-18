@@ -144,7 +144,7 @@ export default function CreateStockIdentityScreen() {
           "Saved wallet does not match your connected wallet. Open Wallet and tap 'Use connected wallet' before creating stock.",
           [
             { text: "Cancel", style: "cancel" },
-            { text: "Open Wallet", onPress: () => router.push("/fintech/(tabs)/wallet?action=crypto" as any) },
+            { text: "Open Wallet", onPress: () => router.push("/market/wallet" as any) },
           ],
         );
       }
@@ -384,3 +384,5 @@ export default function CreateStockIdentityScreen() {
     </LinearGradient>
   );
 }
+
+

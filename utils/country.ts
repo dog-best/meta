@@ -67,6 +67,74 @@ async function resolveContinentByCountryCode(code?: string | null) {
   }
 }
 
+async function withContinent(country: UserCountry): Promise<UserCountry> {
+  if (!country) return null;
+  const code = norm(country.code);
+  const hasContinent = norm(country.continent);
+  if (hasContinent || !code) return country;
+
+  const continent = await resolveContinentByCountryCode(code);
+  if (!continent) return country;
+
+  const out = { ...country, continent };
+  await setCachedCountry(out.code, out.name, out);
+  return out;
+}
+
+async function resolveCountryFromProfile(): Promise<UserCountry> {
+  try {
+    const { data: auth } = await supabase.auth.getUser();
+    const user = auth?.user;
+    if (!user) return null;
+
+    const { data: profile } = await supabase
+      .from("market_seller_profiles")
+      .select("address")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const addr = (profile as any)?.address ?? {};
+    const code = norm(addr?.countryCode).toUpperCase();
+    const name = norm(addr?.country);
+    const region = norm(addr?.region || addr?.state);
+    const city = norm(addr?.city);
+
+    if (!code && !name) return null;
+
+    const continent = await resolveContinentByCountryCode(code);
+    return { code, name, region, city, continent };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCountryFromLocation(): Promise<UserCountry> {
+  try {
+    const loc = await getCurrentLocationWithGeocode({ preferIpOnWeb: true, preferIp: true });
+    const code = norm(loc?.geo?.countryCode).toUpperCase();
+    const name = norm(loc?.geo?.country);
+    const region = norm(loc?.geo?.region);
+    const city = norm(loc?.geo?.city);
+    const lat = Number(loc?.coords?.lat);
+    const lng = Number(loc?.coords?.lng);
+
+    if (!code && !name) return null;
+
+    const continent = await resolveContinentByCountryCode(code);
+    return {
+      code,
+      name,
+      region,
+      city,
+      continent,
+      lat: Number.isFinite(lat) ? lat : undefined,
+      lng: Number.isFinite(lng) ? lng : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function getCachedCountry(): Promise<UserCountry> {
   const code = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CODE));
   const name = norm(await SecureStore.getItemAsync(KEY_COUNTRY_NAME));
@@ -133,66 +201,44 @@ export async function setCachedCountry(
   }
 }
 
-export async function resolveUserCountry(opts?: { prompt?: boolean }) {
+export async function resolveUserCountry(opts?: { prompt?: boolean; refresh?: boolean }) {
   const cached = await getCachedCountry();
-  if (cached) {
-    if (!norm(cached.continent) && norm(cached.code)) {
-      const continent = await resolveContinentByCountryCode(cached.code);
-      if (continent) {
-        await setCachedCountry(cached.code, cached.name, { ...cached, continent });
-        return { ...cached, continent };
-      }
-    }
-    return cached;
+  const shouldRefresh = Boolean(opts?.prompt || opts?.refresh);
+  const preferLiveLocation = Boolean(opts?.prompt || opts?.refresh);
+
+  if (!shouldRefresh && cached) {
+    return await withContinent(cached);
   }
 
-  try {
-    const { data: auth } = await supabase.auth.getUser();
-    const user = auth?.user;
-    if (user) {
-      const { data: profile } = await supabase
-        .from("market_seller_profiles")
-        .select("address")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const addr = (profile as any)?.address ?? {};
-      const code = norm(addr?.countryCode);
-      const name = norm(addr?.country);
-      const region = norm(addr?.region || addr?.state);
-      const city = norm(addr?.city);
-      if (code || name) {
-        const continent = await resolveContinentByCountryCode(code);
-        const out = { code, name, region, city, continent };
-        await setCachedCountry(code, name, out);
-        return out;
-      }
+  if (shouldRefresh) {
+    const fromLocation = await resolveCountryFromLocation();
+    if (fromLocation) {
+      await setCachedCountry(fromLocation.code, fromLocation.name, fromLocation);
+      return fromLocation;
     }
-  } catch {
-    // ignore
+
+    // If live lookup is requested (e.g. VPN test), avoid overriding with profile/cached country.
+    if (preferLiveLocation) {
+      return null;
+    }
+
+    const fromProfile = await resolveCountryFromProfile();
+    if (fromProfile) {
+      await setCachedCountry(fromProfile.code, fromProfile.name, fromProfile);
+      return fromProfile;
+    }
+
+    if (cached) {
+      return await withContinent(cached);
+    }
+
+    return null;
   }
 
-  if (opts?.prompt) {
-    const loc = await getCurrentLocationWithGeocode();
-    const code = norm(loc?.geo?.countryCode);
-    const name = norm(loc?.geo?.country);
-    const region = norm(loc?.geo?.region);
-    const city = norm(loc?.geo?.city);
-    const lat = Number(loc?.coords?.lat);
-    const lng = Number(loc?.coords?.lng);
-    if (code || name) {
-      const continent = await resolveContinentByCountryCode(code);
-      const out = {
-        code,
-        name,
-        region,
-        city,
-        continent,
-        lat: Number.isFinite(lat) ? lat : undefined,
-        lng: Number.isFinite(lng) ? lng : undefined,
-      };
-      await setCachedCountry(code, name, out);
-      return out;
-    }
+  const fromProfile = await resolveCountryFromProfile();
+  if (fromProfile) {
+    await setCachedCountry(fromProfile.code, fromProfile.name, fromProfile);
+    return fromProfile;
   }
 
   return null;
@@ -295,3 +341,4 @@ export function listingMatchesCountry(availability: any, country: UserCountry | 
 
   return includeGlobal;
 }
+

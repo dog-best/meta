@@ -119,9 +119,14 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export async function connectWalletConnectEvm(timeoutMs = 60_000) {
+type ConnectWalletConnectOpts = {
+  forceModal?: boolean;
+};
+
+export async function connectWalletConnectEvm(timeoutMs = 60_000, opts?: ConnectWalletConnectOpts) {
   const current = getWalletConnectSession();
-  if (current.connected && current.address) return current;
+  const forceModal = opts?.forceModal === true;
+  if (!forceModal && current.connected && current.address) return current;
 
   if (!current.runtime.openModal) {
     throw new Error("WalletConnect is not initialized. Add EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID and restart.");

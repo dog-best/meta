@@ -28,7 +28,7 @@ export default function BillsLayout() {
   }, []);
 
   if (userCountry === undefined) return null;
-  if (!isNigeria) return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+  if (!isNigeria) return <Redirect href="/market/wallet" />;
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
@@ -39,3 +39,5 @@ export default function BillsLayout() {
     </Stack>
   );
 }
+
+

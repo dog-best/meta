@@ -1,4 +1,5 @@
 import * as Location from "expo-location";
+import { Platform } from "react-native";
 
 export type LocationCoords = { lat: number; lng: number };
 export type LocationGeo = {
@@ -30,71 +31,243 @@ export type DeliveryGeo = {
   label: string;
 };
 
+type GeocodeOptions = {
+  preferIpOnWeb?: boolean;
+  preferIp?: boolean;
+};
+
+type IpLookupResult = {
+  coords: LocationCoords;
+  geo: LocationGeo;
+  label: string;
+};
+
+type IpApiCoPayload = {
+  country_name?: string;
+  country_code?: string;
+  region?: string;
+  city?: string;
+  postal?: string;
+  latitude?: number | string;
+  longitude?: number | string;
+};
+
+type IpWhoPayload = {
+  success?: boolean;
+  country?: string;
+  country_code?: string;
+  region?: string;
+  city?: string;
+  postal?: string;
+  latitude?: number | string;
+  longitude?: number | string;
+};
+
+type IpInfoPayload = {
+  country?: string;
+  region?: string;
+  city?: string;
+  postal?: string;
+  loc?: string;
+};
+
 function buildLabel(parts: Array<string | null | undefined>) {
   return parts.map((p) => String(p || "").trim()).filter(Boolean).join(", ");
 }
 
 function fallbackLabel(coords: LocationCoords) {
+  if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) {
+    return "Location unavailable";
+  }
   return `Lat ${coords.lat.toFixed(5)}, Lng ${coords.lng.toFixed(5)}`;
 }
 
-export async function getCurrentLocationWithGeocode() {
-  const perm = await Location.requestForegroundPermissionsAsync();
-  if (!perm.granted) {
-    throw new Error("Location permission denied.");
-  }
+function toNum(v: unknown) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}
 
-  const pos = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
+function parseIpInfoLoc(loc?: string) {
+  const raw = String(loc || "").trim();
+  if (!raw.includes(",")) return { lat: NaN, lng: NaN };
+  const [a, b] = raw.split(",");
+  return { lat: toNum(a), lng: toNum(b) };
+}
 
-  const coords: LocationCoords = {
-    lat: pos.coords.latitude,
-    lng: pos.coords.longitude,
+function withNoCache(url: string) {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}_=${Date.now()}`;
+}
+
+function ipLookupToResult(input: {
+  country?: string;
+  countryCode?: string;
+  region?: string;
+  city?: string;
+  postalCode?: string;
+  lat?: number;
+  lng?: number;
+}) {
+  const coords = {
+    lat: Number.isFinite(input.lat) ? Number(input.lat) : NaN,
+    lng: Number.isFinite(input.lng) ? Number(input.lng) : NaN,
   };
 
-  let geo: LocationGeo = {
-    country: "",
-    region: "",
-    city: "",
-    postalCode: "",
-    countryCode: "",
+  const geo: LocationGeo = {
+    country: String(input.country || ""),
+    countryCode: String(input.countryCode || "").toUpperCase(),
+    region: String(input.region || ""),
+    city: String(input.city || ""),
+    postalCode: String(input.postalCode || ""),
   };
 
-  let label = fallbackLabel(coords);
+  const label = buildLabel([geo.city, geo.region, geo.country]) || fallbackLabel(coords);
+  return { coords, geo, label };
+}
 
+async function fetchIpLocation(): Promise<IpLookupResult | null> {
   try {
-    const res = await Location.reverseGeocodeAsync({
-      latitude: coords.lat,
-      longitude: coords.lng,
+    const res = await fetch(withNoCache("https://ipapi.co/json/"), {
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
     });
-
-    const first = res?.[0];
-    if (first) {
-      geo = {
-        country: first.country ?? "",
-        region: first.region ?? "",
-        city: first.city ?? first.subregion ?? first.district ?? "",
-        postalCode: first.postalCode ?? "",
-        countryCode: first.isoCountryCode ?? "",
-      };
-
-      const line1 = buildLabel([first.name, first.street]);
-      const line2 = buildLabel([geo.city, geo.region]);
-      const line3 = buildLabel([geo.country]);
-      label = buildLabel([line1, line2, line3]) || fallbackLabel(coords);
+    if (res.ok) {
+      const payload = (await res.json()) as IpApiCoPayload;
+      const out = ipLookupToResult({
+        country: payload.country_name,
+        countryCode: payload.country_code,
+        region: payload.region,
+        city: payload.city,
+        postalCode: payload.postal,
+        lat: toNum(payload.latitude),
+        lng: toNum(payload.longitude),
+      });
+      if (out.geo.countryCode || out.geo.country) return out;
     }
   } catch {
-    // Keep best-effort coords and label
+    // ignore and continue
   }
 
-  return { coords, geo, label };
+  try {
+    const res = await fetch(withNoCache("https://ipwho.is/"), {
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
+    if (res.ok) {
+      const payload = (await res.json()) as IpWhoPayload;
+      if (payload?.success !== false) {
+        const out = ipLookupToResult({
+          country: payload.country,
+          countryCode: payload.country_code,
+          region: payload.region,
+          city: payload.city,
+          postalCode: payload.postal,
+          lat: toNum(payload.latitude),
+          lng: toNum(payload.longitude),
+        });
+        if (out.geo.countryCode || out.geo.country) return out;
+      }
+    }
+  } catch {
+    // ignore and continue
+  }
+
+  try {
+    const res = await fetch(withNoCache("https://ipinfo.io/json"), {
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
+    if (res.ok) {
+      const payload = (await res.json()) as IpInfoPayload;
+      const loc = parseIpInfoLoc(payload.loc);
+      const out = ipLookupToResult({
+        countryCode: payload.country,
+        region: payload.region,
+        city: payload.city,
+        postalCode: payload.postal,
+        lat: loc.lat,
+        lng: loc.lng,
+      });
+      if (out.geo.countryCode || out.geo.country) return out;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+export async function getCurrentLocationWithGeocode(opts?: GeocodeOptions) {
+  const preferIpFirst = Boolean(opts?.preferIp) || (Platform.OS === "web" && Boolean(opts?.preferIpOnWeb));
+  if (preferIpFirst) {
+    const ipFirst = await fetchIpLocation();
+    if (ipFirst) return ipFirst;
+  }
+
+  try {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (!perm.granted) {
+      throw new Error("Location permission denied.");
+    }
+
+    const pos = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+
+    const coords: LocationCoords = {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+    };
+
+    let geo: LocationGeo = {
+      country: "",
+      region: "",
+      city: "",
+      postalCode: "",
+      countryCode: "",
+    };
+
+    let label = fallbackLabel(coords);
+
+    try {
+      const res = await Location.reverseGeocodeAsync({
+        latitude: coords.lat,
+        longitude: coords.lng,
+      });
+
+      const first = res?.[0];
+      if (first) {
+        geo = {
+          country: first.country ?? "",
+          region: first.region ?? "",
+          city: first.city ?? first.subregion ?? first.district ?? "",
+          postalCode: first.postalCode ?? "",
+          countryCode: first.isoCountryCode ?? "",
+        };
+
+        const line1 = buildLabel([first.name, first.street]);
+        const line2 = buildLabel([geo.city, geo.region]);
+        const line3 = buildLabel([geo.country]);
+        label = buildLabel([line1, line2, line3]) || fallbackLabel(coords);
+      }
+    } catch {
+      // Keep best-effort coords and label
+    }
+
+    if (!geo.countryCode && !geo.country) {
+      const ipFallback = await fetchIpLocation();
+      if (ipFallback) return ipFallback;
+    }
+
+    return { coords, geo, label };
+  } catch (error: any) {
+    const ipFallback = await fetchIpLocation();
+    if (ipFallback) return ipFallback;
+    throw error;
+  }
 }
 
 export function formatAvailabilitySummary(availability: AvailabilityJson | null | undefined) {
   if (!availability || !availability.scope) return "Worldwide";
 
-  const note = availability.note ? ` • ${availability.note}` : "";
+  const note = availability.note ? ` - ${availability.note}` : "";
 
   switch (availability.scope) {
     case "global":
@@ -203,3 +376,4 @@ export function availabilityMayMatch(
 
   return true;
 }
+

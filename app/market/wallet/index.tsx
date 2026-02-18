@@ -1,213 +1,565 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { Redirect, router } from "expo-router";
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import { router } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
+import { createPublicClient, formatUnits, http } from "viem";
 
 import AppHeader from "@/components/common/AppHeader";
+import {
+  fetchMarketChains,
+  getPreferredMarketChain,
+  setPreferredMarketChain,
+  type MarketChainConfig,
+} from "@/services/market/chainConfig";
+import {
+  ensureWalletAddressOnChain,
+  getMyWalletForChain,
+  replaceSavedWalletWithDevice,
+} from "@/services/market/usdcCheckout";
+import {
+  connectWalletConnectEvm,
+  getWalletConnectSession,
+  subscribeWalletConnectSession,
+} from "@/services/wallet/walletConnectSession";
 import { supabase } from "@/services/supabase";
+import { getRpcUrlForChain } from "@/utils/aaWallet";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { friendlyMarketError } from "@/utils/marketUx";
 
-const BG0 = "#05040B";
-const BG1 = "#0A0620";
+const ABI = [
+  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] },
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+] as const;
 
-type WalletRow = { user_id: string; balance: number };
-type TxRow = { id: string; type: string; amount: number; reference: string; created_at: string; meta: any };
+type TxRow = {
+  id: string;
+  created_at: string;
+  intent_type: string;
+  status: string;
+  chain: string;
+  tx_hash: string | null;
+};
+
+function isAddress(v?: string | null) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
+function fmt(v: string) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "0";
+}
+
+function shortAddr(value?: string | null) {
+  const v = String(value || "");
+  if (!isAddress(v)) return "Not connected";
+  return `${v.slice(0, 6)}...${v.slice(-4)}`;
+}
+
+function chainLabel(raw?: string | null) {
+  return String(raw || "").toUpperCase().replace(/_/g, " ");
+}
+
+function statusTone(status?: string | null) {
+  const s = String(status || "").toUpperCase();
+  if (["COMPLETED", "SUCCESS", "CONFIRMED", "FINALIZED"].includes(s)) {
+    return { bg: "rgba(16,185,129,0.2)", border: "rgba(16,185,129,0.4)", text: "#A7F3D0" };
+  }
+  if (["FAILED", "REVERTED", "ERROR", "CANCELLED"].includes(s)) {
+    return { bg: "rgba(239,68,68,0.2)", border: "rgba(239,68,68,0.4)", text: "#FECACA" };
+  }
+  return { bg: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.12)", text: "#E5E7EB" };
+}
 
 export default function MarketWallet() {
-  const [loading, setLoading] = useState(true);
-  const [balance, setBalance] = useState<number>(0);
+  const { width } = useWindowDimensions();
+  const wide = width >= 980;
+
+  const [country, setCountry] = useState<UserCountry | undefined>(undefined);
+  const isNigeria = isNigeriaCountry(country?.code || country?.name);
+
+  const [chains, setChains] = useState<MarketChainConfig[]>([]);
+  const [chain, setChain] = useState<MarketChainConfig | null>(null);
+  const [chainErr, setChainErr] = useState<string | null>(null);
+  const [walletAddr, setWalletAddr] = useState("");
+  const [connectedAddr, setConnectedAddr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [usdc, setUsdc] = useState("0");
+  const [usdt, setUsdt] = useState("0");
   const [txs, setTxs] = useState<TxRow[]>([]);
-  const [userCountry, setUserCountry] = useState<UserCountry | undefined>(undefined);
-  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
-
-  async function load() {
-    console.log("[MarketWallet] load start");
-    setLoading(true);
-
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      const me = auth?.user?.id;
-      if (!me) {
-        router.replace("/(auth)/login" as any);
-        return;
-      }
-
-      // 1) balance
-      const { data: w } = await supabase
-        .from("app_wallets_simple")
-        .select("user_id,balance")
-        .eq("user_id", me)
-        .maybeSingle();
-
-      setBalance(Number((w as WalletRow | null)?.balance ?? 0));
-
-      // 2) market-related tx
-      // (filters by reference/meta pattern; adjust if your wallet tx schema differs)
-      const { data: rows } = await supabase
-        .from("app_wallet_tx_simple")
-        .select("id,type,amount,reference,created_at,meta")
-        .eq("user_id", me)
-        .order("created_at", { ascending: false })
-        .limit(30);
-
-      const filtered = (rows ?? []).filter((r: any) => {
-        const ref = String(r.reference || "");
-        const kind = String(r?.meta?.kind || "");
-        return ref.startsWith("mkt_") || ref.startsWith("market_") || kind.startsWith("market_") || kind.includes("escrow");
-      });
-
-      setTxs(filtered as any);
-    } catch {
-      setBalance(0);
-      setTxs([]);
-    } finally {
-      setLoading(false);
-      console.log("[MarketWallet] load end");
-    }
-  }
+  const [txLoading, setTxLoading] = useState(false);
+  const [netOpen, setNetOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const c = await resolveUserCountry({ prompt: true });
-        if (mounted) setUserCountry(c);
+        const c = await resolveUserCountry({ prompt: true, refresh: true });
+        if (mounted) setCountry(c);
       } catch {
-        if (mounted) setUserCountry(null);
+        if (mounted) setCountry(null);
       }
     })();
+
+    const sync = () => {
+      const s = getWalletConnectSession();
+      setConnectedAddr(s.connected ? String(s.address || "") : "");
+    };
+    sync();
+
+    const unsub = subscribeWalletConnectSession(sync);
     return () => {
       mounted = false;
+      unsub();
     };
   }, []);
 
-  useEffect(() => {
-    if (userCountry === undefined) return;
-    if (!isNigeria) {
-      setLoading(false);
-      return;
-    }
-    load();
-  }, [isNigeria, userCountry]);
+  async function refresh(selected?: MarketChainConfig | null, forced?: string) {
+    const c = selected ?? chain;
+    if (!c) return "";
 
-  if (userCountry !== undefined && !isNigeria) {
-    return <Redirect href="/fintech/(tabs)/wallet?action=crypto" />;
+    let addr = String(forced || "").trim();
+    if (!addr) {
+      const row = await getMyWalletForChain(c.chain);
+      addr = String(row?.address || "").trim();
+    }
+
+    setWalletAddr(addr);
+    if (!isAddress(addr)) {
+      setUsdc("0");
+      setUsdt("0");
+      return "";
+    }
+
+    const rpc = getRpcUrlForChain(c);
+    if (!rpc) return addr;
+    const client = createPublicClient({ transport: http(rpc) });
+
+    try {
+      if (isAddress(c.usdc_address)) {
+        const d = Number(await client.readContract({ address: c.usdc_address as `0x${string}`, abi: ABI, functionName: "decimals" }));
+        const raw = await client.readContract({ address: c.usdc_address as `0x${string}`, abi: ABI, functionName: "balanceOf", args: [addr as `0x${string}`] });
+        setUsdc(formatUnits(raw as bigint, d));
+      }
+    } catch {
+      setUsdc("0");
+    }
+
+    try {
+      if (isAddress(c.usdt_address)) {
+        const d = Number(await client.readContract({ address: c.usdt_address as `0x${string}`, abi: ABI, functionName: "decimals" }));
+        const raw = await client.readContract({ address: c.usdt_address as `0x${string}`, abi: ABI, functionName: "balanceOf", args: [addr as `0x${string}`] });
+        setUsdt(formatUnits(raw as bigint, d));
+      } else {
+        setUsdt("0");
+      }
+    } catch {
+      setUsdt("0");
+    }
+
+    return addr;
   }
 
+  async function loadTx(addrInput?: string) {
+    const addr = String(addrInput || walletAddr || "").trim();
+    if (!isAddress(addr)) {
+      setTxs([]);
+      return;
+    }
+    try {
+      setTxLoading(true);
+      const { data, error } = await supabase
+        .from("market_crypto_intents")
+        .select("id,created_at,intent_type,status,chain,tx_hash")
+        .or(`from_wallet.eq.${addr},to_wallet.eq.${addr}`)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      setTxs((data as TxRow[]) || []);
+    } catch {
+      setTxs([]);
+    } finally {
+      setTxLoading(false);
+    }
+  }
+
+  async function loadChains() {
+    try {
+      setChainErr(null);
+      const all = await fetchMarketChains();
+      setChains(all);
+      const selected = (await getPreferredMarketChain()) ?? all.find((c) => c.active) ?? all[0] ?? null;
+      setChain(selected);
+      const addr = await refresh(selected);
+      await loadTx(addr);
+    } catch (e: any) {
+      setChainErr(String(e?.message || "Unable to load networks."));
+    }
+  }
+
+  useEffect(() => {
+    loadChains();
+  }, []);
+
+  async function onConnect() {
+    if (!chain) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      await connectWalletConnectEvm(60_000, { forceModal: true });
+      const out = await ensureWalletAddressOnChain(chain);
+      const addr = await refresh(chain, out.address);
+      await loadTx(addr);
+      Alert.alert("Wallet connected", "WalletConnect wallet linked.");
+    } catch (e: any) {
+      setErr(friendlyMarketError(e, "Unable to connect wallet."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onUseConnected() {
+    if (!chain) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      await connectWalletConnectEvm(60_000, { forceModal: true });
+      const out = await replaceSavedWalletWithDevice(chain);
+      const addr = await refresh(chain, out.address);
+      await loadTx(addr);
+      Alert.alert("Wallet updated", "Saved address synced to connected wallet.");
+    } catch (e: any) {
+      setErr(friendlyMarketError(e, "Could not sync wallet."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const total = useMemo(() => Number(usdc || 0) + Number(usdt || 0), [usdc, usdt]);
+  const locationText = useMemo(() => {
+    if (!country) return "Location unavailable";
+    return [country.city, country.region, country.name || country.code].filter(Boolean).join(", ");
+  }, [country]);
+
   return (
-    <LinearGradient
-      colors={[BG1, BG0]}
-      start={{ x: 0.15, y: 0 }}
-      end={{ x: 0.9, y: 1 }}
-      style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}
-    >
-      <AppHeader title="Market Wallet" subtitle="Uses your existing wallet balance (no new funding)" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
-        {/* Header */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 }}>
-          <Pressable
-            onPress={() => router.back()}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 16,
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.08)",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#fff", fontSize: 22, fontWeight: "900" }}>Market wallet</Text>
-            <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-              Uses your existing wallet balance (no new funding)
-            </Text>
+    <LinearGradient colors={["#140C36", "#05040B"]} style={{ flex: 1 }}>
+      <View style={[s.wrap, wide && s.wrapWide]}>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28 }}>
+          <View style={{ paddingTop: 14 }}>
+            <AppHeader title="Crypto Wallet" subtitle="WalletConnect non-custodial wallet" />
+          </View>
+
+          <View style={s.hero}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.heroTitle}>WalletConnect Interface</Text>
+              <Text style={s.heroSub}>Tap connect to open wallet chooser and link your wallet.</Text>
+            </View>
+            <View style={s.heroMeta}>
+              <View style={[s.statePill, connectedAddr ? s.okPill : s.idlePill]}>
+                <Text style={s.stateText}>{connectedAddr ? "Connected" : "Not connected"}</Text>
+              </View>
+              {isNigeria ? (
+                <Pressable onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}>
+                  <Text style={s.link}>Open NGN Wallet</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Text style={s.locationText}>{locationText}</Text>
+          </View>
+
+          {!!err ? <Text style={s.err}>{err}</Text> : null}
+          {!!chainErr ? <Text style={s.err}>{chainErr}</Text> : null}
+
+          <View style={[s.grid, wide && s.gridWide]}>
+            <View style={s.col}>
+              <View style={s.card}>
+                <View style={s.rowBetween}>
+                  <Text style={s.h}>Network</Text>
+                  <Pressable style={s.iconBtn} disabled={busy} onPress={loadChains}>
+                    <Ionicons name="refresh" size={15} color="#fff" />
+                  </Pressable>
+                </View>
+
+                <Pressable style={s.selector} onPress={() => setNetOpen(true)}>
+                  <Text style={s.selectorText}>{chain ? chainLabel(chain.chain) : "Select network"}</Text>
+                  <Ionicons name="chevron-down" size={16} color="#fff" />
+                </Pressable>
+
+                <View style={s.metricsRow}>
+                  <View style={s.metric}>
+                    <Text style={s.metricLabel}>USDC</Text>
+                    <Text style={s.metricValue}>{fmt(usdc)}</Text>
+                  </View>
+                  <View style={s.metric}>
+                    <Text style={s.metricLabel}>USDT</Text>
+                    <Text style={s.metricValue}>{fmt(usdt)}</Text>
+                  </View>
+                  <View style={[s.metric, s.metricAccent]}>
+                    <Text style={s.metricLabel}>TOTAL</Text>
+                    <Text style={s.metricValue}>{fmt(String(total))}</Text>
+                  </View>
+                </View>
+
+                <View style={s.addrCard}>
+                  <View style={s.addrRow}>
+                    <Text style={s.addrLabel}>Saved</Text>
+                    <Text style={s.addrValue}>{shortAddr(walletAddr)}</Text>
+                  </View>
+                  <View style={s.addrRow}>
+                    <Text style={s.addrLabel}>Session</Text>
+                    <Text style={s.addrValue}>{shortAddr(connectedAddr)}</Text>
+                  </View>
+                </View>
+
+                <View style={s.row}>
+                  <Pressable
+                    style={s.btnSmall}
+                    disabled={!walletAddr}
+                    onPress={async () => {
+                      if (!walletAddr) return;
+                      await Clipboard.setStringAsync(walletAddr);
+                      Alert.alert("Copied", "Wallet address copied.");
+                    }}
+                  >
+                    <Text style={s.btnText}>Copy Address</Text>
+                  </Pressable>
+                  <Pressable style={s.btnSmall} disabled={txLoading || busy} onPress={() => loadTx()}>
+                    <Text style={s.btnText}>{txLoading ? "Loading..." : "Refresh Activity"}</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable style={[s.main, (!chain?.active || busy) && s.dimmed]} disabled={!chain?.active || busy} onPress={onConnect}>
+                  <Text style={s.mainText}>{busy ? "Connecting..." : "Connect Wallet"}</Text>
+                </Pressable>
+                <Pressable style={[s.altBtn, (!chain?.active || busy || !connectedAddr) && s.dimmed]} disabled={!chain?.active || busy || !connectedAddr} onPress={onUseConnected}>
+                  <Text style={s.btnText}>Use Connected Wallet</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={s.col}>
+              <View style={s.card}>
+                <View style={s.rowBetween}>
+                  <Text style={s.h}>Activity</Text>
+                  {txLoading ? <ActivityIndicator size="small" /> : null}
+                </View>
+
+                <FlatList
+                  data={txs}
+                  keyExtractor={(i) => i.id}
+                  scrollEnabled={false}
+                  ListEmptyComponent={
+                    <View style={s.emptyWrap}>
+                      <Ionicons name="hourglass-outline" size={18} color="rgba(255,255,255,0.55)" />
+                      <Text style={s.dim}>No crypto activity yet.</Text>
+                    </View>
+                  }
+                  renderItem={({ item }) => {
+                    const tone = statusTone(item.status);
+                    return (
+                      <View style={s.tx}>
+                        <View style={s.rowBetween}>
+                          <Text style={s.txTitle}>{item.intent_type || "Intent"}</Text>
+                          <View style={[s.txStatus, { backgroundColor: tone.bg, borderColor: tone.border }]}>
+                            <Text style={[s.txStatusText, { color: tone.text }]}>{item.status || "pending"}</Text>
+                          </View>
+                        </View>
+                        <Text style={s.dim}>{new Date(item.created_at).toLocaleString()}</Text>
+                        <Text style={s.dim}>{chainLabel(item.chain)}</Text>
+                        {!!item.tx_hash ? <Text numberOfLines={1} style={s.dim}>Tx: {item.tx_hash}</Text> : null}
+                      </View>
+                    );
+                  }}
+                />
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+
+      <Modal visible={netOpen} transparent animationType="fade" onRequestClose={() => setNetOpen(false)}>
+        <View style={s.modalBg}>
+          <View style={s.modalCard}>
+            <View style={s.rowBetween}>
+              <Text style={s.h}>Select network</Text>
+              <Pressable onPress={() => setNetOpen(false)}>
+                <Ionicons name="close" size={18} color="#fff" />
+              </Pressable>
+            </View>
+            {chains.map((c) => (
+              <Pressable
+                key={c.chain}
+                style={[s.selector, !c.active && s.dimmed]}
+                disabled={!c.active}
+                onPress={async () => {
+                  setNetOpen(false);
+                  setChain(c);
+                  await setPreferredMarketChain(c.chain);
+                  const addr = await refresh(c);
+                  await loadTx(addr);
+                }}
+              >
+                <Text style={s.selectorText}>{chainLabel(c.chain)}</Text>
+                {chain?.chain === c.chain ? <Ionicons name="checkmark-circle" size={16} color="#A78BFA" /> : null}
+              </Pressable>
+            ))}
           </View>
         </View>
-
-        {loading ? (
-          <View style={{ marginTop: 40, alignItems: "center" }}>
-            <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
-          </View>
-        ) : (
-          <>
-            <View style={{ borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
-              <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>Available NGN balance</Text>
-              <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 26 }}>
-                ₦{balance.toLocaleString()}
-              </Text>
-
-              <Pressable
-                onPress={() => router.push("/fintech/(tabs)/wallet" as any)}
-                style={{
-                  marginTop: 12,
-                  borderRadius: 18,
-                  paddingVertical: 14,
-                  alignItems: "center",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.10)",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Open main wallet</Text>
-              </Pressable>
-            </View>
-
-            <View style={{ marginTop: 12, borderRadius: 22, padding: 16, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 14 }}>Market activity</Text>
-
-              {txs.length === 0 ? (
-                <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.65)" }}>No market wallet activity yet.</Text>
-              ) : (
-                <View style={{ marginTop: 10, gap: 10 }}>
-                  {txs.slice(0, 15).map((t) => (
-                    <View
-                      key={t.id}
-                      style={{
-                        padding: 12,
-                        borderRadius: 16,
-                        backgroundColor: "rgba(255,255,255,0.06)",
-                        borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.10)",
-                      }}
-                    >
-                      <Text style={{ color: "#fff", fontWeight: "900" }}>
-                        {t.type} • ₦{Number(t.amount ?? 0).toLocaleString()}
-                      </Text>
-                      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                        {t.reference}
-                      </Text>
-                      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
-                        {new Date(t.created_at).toLocaleString()}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              <Pressable
-                onPress={load}
-                style={{
-                  marginTop: 14,
-                  borderRadius: 18,
-                  paddingVertical: 14,
-                  alignItems: "center",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.10)",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Refresh</Text>
-              </Pressable>
-            </View>
-          </>
-        )}
-      </ScrollView>
+      </Modal>
     </LinearGradient>
   );
 }
+
+const s = StyleSheet.create({
+  wrap: { flex: 1, width: "100%", alignSelf: "center" },
+  wrapWide: { maxWidth: 1160 },
+  hero: {
+    marginTop: 12,
+    borderRadius: 18,
+    padding: 16,
+    backgroundColor: "rgba(124,58,237,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(167,139,250,0.35)",
+  },
+  heroTitle: { color: "#fff", fontWeight: "900", fontSize: 18 },
+  heroSub: { marginTop: 4, color: "rgba(255,255,255,0.75)", fontSize: 12 },
+  heroMeta: { marginTop: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
+  statePill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  okPill: { backgroundColor: "rgba(16,185,129,0.2)", borderColor: "rgba(16,185,129,0.4)" },
+  idlePill: { backgroundColor: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.16)" },
+  stateText: { color: "#fff", fontWeight: "900", fontSize: 11 },
+  link: { color: "#ECFEFF", fontWeight: "900", fontSize: 12 },
+  locationText: { marginTop: 8, color: "rgba(255,255,255,0.62)", fontSize: 11 },
+  grid: { marginTop: 12, gap: 12 },
+  gridWide: { flexDirection: "row", alignItems: "flex-start" },
+  col: { flex: 1, minWidth: 0 },
+  card: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.11)",
+  },
+  h: { color: "#fff", fontWeight: "900", fontSize: 15 },
+  row: { marginTop: 10, flexDirection: "row", gap: 10, alignItems: "center" },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  iconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  selector: {
+    marginTop: 10,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectorText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  metricsRow: { marginTop: 10, flexDirection: "row", gap: 8 },
+  metric: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  metricAccent: {
+    backgroundColor: "rgba(124,58,237,0.18)",
+    borderColor: "rgba(167,139,250,0.35)",
+  },
+  metricLabel: { color: "rgba(255,255,255,0.62)", fontSize: 10, fontWeight: "800" },
+  metricValue: { marginTop: 4, color: "#fff", fontWeight: "900", fontSize: 14 },
+  addrCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    gap: 8,
+  },
+  addrRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  addrLabel: { color: "rgba(255,255,255,0.62)", fontSize: 11, fontWeight: "700" },
+  addrValue: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  btnSmall: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  btnText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  main: {
+    marginTop: 10,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: "#7C3AED",
+    borderWidth: 1,
+    borderColor: "#7C3AED",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  altBtn: {
+    marginTop: 10,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mainText: { color: "#fff", fontWeight: "900" },
+  dim: { marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 11 },
+  err: { marginTop: 8, color: "#FCA5A5", fontWeight: "800", fontSize: 12, paddingHorizontal: 4 },
+  emptyWrap: { marginTop: 14, alignItems: "center" },
+  tx: {
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.09)",
+  },
+  txTitle: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  txStatus: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
+  txStatusText: { fontWeight: "900", fontSize: 10 },
+  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.52)", justifyContent: "center", padding: 16 },
+  modalCard: { borderRadius: 16, padding: 14, backgroundColor: "#0D0B1D", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
+  dimmed: { opacity: 0.45 },
+});

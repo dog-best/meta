@@ -166,13 +166,36 @@ export default function MarketHome() {
   const [verifiedSellers, setVerifiedSellers] = useState<SellerCard[]>([]);
   const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
   const [countryErr, setCountryErr] = useState<string | null>(null);
-  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
-  // Fail-safe: if country is unresolved, treat as non-Nigeria for payment visibility.
-  const restrictToCrypto = !isNigeria;
+  const [locatingCountry, setLocatingCountry] = useState(false);
 
   const main = section === "service" ? "service" : "product";
   const categories = useMemo<CategoryItem[]>(() => getCategoriesByMain(main as MarketMainCategory), [main]);
   const supabaseUrl = (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
+  const locationLabel = useMemo(() => {
+    if (!userCountry) return "Location unavailable";
+    const name = userCountry.name || userCountry.code || "Unknown";
+    const code = userCountry.code ? ` (${userCountry.code})` : "";
+    return `${name}${code}`;
+  }, [userCountry]);
+
+  async function refreshCountry() {
+    setLocatingCountry(true);
+    setCountryErr(null);
+    try {
+      const c = await resolveUserCountry({ prompt: true, refresh: true });
+      setUserCountry(c);
+      if (!c) {
+        setCountryErr("Location not detected. Use Global to view all listings.");
+      }
+      return c;
+    } catch (e: any) {
+      setUserCountry(null);
+      setCountryErr(String(e?.message || "We couldn't read your location."));
+      return null;
+    } finally {
+      setLocatingCountry(false);
+    }
+  }
 
   async function loadDirectory() {
     const nowIso = new Date().toISOString();
@@ -199,10 +222,12 @@ export default function MarketHome() {
     setVerifiedSellers(verified);
   }
 
-  async function loadListings() {
+  async function loadListings(countryOverride?: UserCountry | null) {
     setLoading(true);
     setErr(null);
     try {
+      const effectiveCountry = countryOverride === undefined ? userCountry : countryOverride;
+      const restrictToCrypto = !isNigeriaCountry(effectiveCountry?.code || effectiveCountry?.name);
       let query = supabase
         .from(LISTINGS_TABLE)
         .select(
@@ -228,11 +253,13 @@ export default function MarketHome() {
         return Number.isFinite(t) ? t > Date.now() : true;
       });
       const scopedBase =
-        feedScope === "global" || !userCountry
+        feedScope === "global"
           ? items
-          : items.filter((r) =>
-              listingMatchesCountry(r.availability ?? r.payment_options?.availability, userCountry, false),
-            );
+          : effectiveCountry
+          ? items.filter((r) =>
+              listingMatchesCountry(r.availability ?? r.payment_options?.availability, effectiveCountry, false),
+            )
+          : [];
       const scoped = restrictToCrypto ? scopedBase.filter((r) => listingAllowsCrypto(r)) : scopedBase;
       const uniq = new Map<string, ListingRow>();
       scoped.forEach((r) => {
@@ -289,23 +316,27 @@ export default function MarketHome() {
   }, []);
 
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const c = await resolveUserCountry({ prompt: true });
-        if (mounted) setUserCountry(c);
-      } catch (e: any) {
-        if (mounted) setCountryErr(String(e?.message || "We couldn't read your location."));
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    if (feedScope === "country") {
+      refreshCountry();
+    }
+  }, [feedScope]);
 
   useEffect(() => {
     if (section !== "social") loadListings();
-  }, [section, selectedSlug, sortBy, q, directoryMode, feedScope, userCountry?.code, userCountry?.name]);
+  }, [
+    section,
+    selectedSlug,
+    sortBy,
+    q,
+    directoryMode,
+    feedScope,
+    userCountry?.code,
+    userCountry?.name,
+    userCountry?.region,
+    userCountry?.city,
+    userCountry?.lat,
+    userCountry?.lng,
+  ]);
 
   const directoryRows = useMemo(() => {
     const source = directoryMode === "featured" ? featuredSellers : verifiedSellers;
@@ -430,7 +461,10 @@ export default function MarketHome() {
                 setRefreshing(false);
                 return;
               }
-              if (directoryMode === "listings") await loadListings();
+              if (directoryMode === "listings") {
+                const c = feedScope === "country" ? await refreshCountry() : userCountry;
+                await loadListings(c);
+              }
               else await loadDirectory();
               setRefreshing(false);
             }}
@@ -499,6 +533,37 @@ export default function MarketHome() {
                     <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
                       <SectionPill label="My Country" active={feedScope === "country"} onPress={() => setFeedScope("country")} />
                       <SectionPill label="Global" active={feedScope === "global"} onPress={() => setFeedScope("global")} />
+                    </View>
+                    <View style={{ marginTop: 10, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                      <Ionicons name="location-outline" size={18} color="rgba(255,255,255,0.78)" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{locationLabel}</Text>
+                        <Text style={{ marginTop: 2, color: MUTED, fontSize: 11 }}>
+                          {feedScope === "country"
+                            ? "Country feed: local listings only, shown in local currency + USD approx."
+                            : "Global feed: all available listings."}
+                        </Text>
+                      </View>
+                      <Pressable
+                        disabled={locatingCountry}
+                        onPress={async () => {
+                          const c = await refreshCountry();
+                          if (feedScope === "country") await loadListings(c);
+                        }}
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 12,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: "rgba(255,255,255,0.08)",
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.12)",
+                          opacity: locatingCountry ? 0.6 : 1,
+                        }}
+                      >
+                        {locatingCountry ? <ActivityIndicator size="small" /> : <Ionicons name="refresh" size={15} color="#fff" />}
+                      </Pressable>
                     </View>
                     {feedScope === "country" && !userCountry ? (
                       <View style={{ marginTop: 10, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
