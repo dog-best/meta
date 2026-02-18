@@ -85,17 +85,63 @@ function normalizeOrderKey(key: string | null | undefined) {
 
 function extractLogs(payload: any): AlchemyLog[] {
   const logs: AlchemyLog[] = [];
+  const pushLog = (entry: any, ctx: Partial<AlchemyLog> = {}) => {
+    const topics = entry?.topics;
+    if (!Array.isArray(topics) || topics.length === 0) return;
+    const out: AlchemyLog = {
+      address: String(entry?.address ?? entry?.account?.address ?? ctx.address ?? "").toLowerCase() || undefined,
+      topics: topics.map((t: any) => String(t).toLowerCase()),
+      data: typeof entry?.data === "string" ? entry.data : undefined,
+      transactionHash: String(entry?.transactionHash ?? entry?.transaction?.hash ?? ctx.transactionHash ?? ""),
+      logIndex: Number(entry?.logIndex ?? entry?.index ?? ctx.logIndex ?? 0),
+      blockNumber: Number(entry?.blockNumber ?? entry?.block?.number ?? ctx.blockNumber ?? 0),
+      blockTimestamp: String(entry?.blockTimestamp ?? ctx.blockTimestamp ?? ""),
+    };
+    logs.push(out);
+  };
+
   const act = payload?.event?.activity;
   if (Array.isArray(act)) {
     for (const item of act) {
-      if (item?.log?.topics) logs.push(item.log);
-      if (item?.rawContract?.topics) logs.push(item.rawContract);
+      pushLog(item?.log);
+      pushLog(item?.rawContract);
     }
   }
-  if (Array.isArray(payload?.event?.logs)) logs.push(...payload.event.logs);
-  if (payload?.event?.log) logs.push(payload.event.log);
-  if (Array.isArray(payload?.logs)) logs.push(...payload.logs);
-  if (payload?.log) logs.push(payload.log);
+
+  if (Array.isArray(payload?.event?.logs)) {
+    for (const item of payload.event.logs) pushLog(item);
+  }
+  if (payload?.event?.log) pushLog(payload.event.log);
+  if (Array.isArray(payload?.logs)) {
+    for (const item of payload.logs) pushLog(item);
+  }
+  if (payload?.log) pushLog(payload.log);
+
+  // Alchemy Custom Webhook (GraphQL) commonly nests logs under event.data.block.logs.
+  const gqlBlock = payload?.event?.data?.block;
+  if (gqlBlock) {
+    const blockCtx: Partial<AlchemyLog> = {
+      blockNumber: Number(gqlBlock?.number ?? 0),
+      blockTimestamp: String(gqlBlock?.timestamp?.iso8601 ?? ""),
+    };
+    if (Array.isArray(gqlBlock?.logs)) {
+      for (const entry of gqlBlock.logs) {
+        pushLog(entry, blockCtx);
+        if (Array.isArray(entry?.transaction?.logs)) {
+          const txHash = String(entry?.transaction?.hash ?? "");
+          for (const txLog of entry.transaction.logs) {
+            pushLog(txLog, { ...blockCtx, transactionHash: txHash });
+          }
+        }
+      }
+    }
+  }
+
+  // Generic GraphQL fallback if query returns event.data.logs directly.
+  if (Array.isArray(payload?.event?.data?.logs)) {
+    for (const item of payload.event.data.logs) pushLog(item);
+  }
+
   return logs.filter((l) => Array.isArray(l.topics) && l.topics.length > 0);
 }
 
