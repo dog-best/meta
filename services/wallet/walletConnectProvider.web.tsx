@@ -1,10 +1,4 @@
-import React, { useEffect } from "react";
-
-import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider } from "@reown/appkit/react";
-import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
-import { arbitrum, base, baseSepolia, mainnet, optimism, polygon, sepolia } from "@reown/appkit/networks";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
+import React, { useEffect, useMemo, useState } from "react";
 
 import {
   clearWalletConnectConnection,
@@ -22,41 +16,97 @@ const metadata = {
   icons: ["https://bestcity.app/icon.png"],
 };
 
-const networks = [mainnet, sepolia, base, baseSepolia, polygon, arbitrum, optimism] as any;
+type RuntimeModules = {
+  createAppKit: any;
+  useAppKit: any;
+  useAppKitAccount: any;
+  useAppKitProvider: any;
+  WagmiAdapter: any;
+  networks: any;
+  QueryClient: any;
+  QueryClientProvider: any;
+  WagmiProvider: any;
+};
 
+let runtime: RuntimeModules | null = null;
+let runtimeLoadFailed = false;
 let adapter: any = null;
+let queryClient: any = null;
 let initialized = false;
+
+function canUseBrowserRuntime() {
+  return typeof window !== "undefined" && typeof document !== "undefined";
+}
+
+function loadRuntime(): RuntimeModules | null {
+  if (runtimeLoadFailed || !canUseBrowserRuntime()) return null;
+  if (runtime) return runtime;
+
+  try {
+    const reownReact = require("@reown/appkit/react");
+    const adapterPkg = require("@reown/appkit-adapter-wagmi");
+    const networksPkg = require("@reown/appkit/networks");
+    const queryPkg = require("@tanstack/react-query");
+    const wagmiPkg = require("wagmi");
+
+    runtime = {
+      createAppKit: reownReact.createAppKit,
+      useAppKit: reownReact.useAppKit,
+      useAppKitAccount: reownReact.useAppKitAccount,
+      useAppKitProvider: reownReact.useAppKitProvider,
+      WagmiAdapter: adapterPkg.WagmiAdapter,
+      networks: networksPkg,
+      QueryClient: queryPkg.QueryClient,
+      QueryClientProvider: queryPkg.QueryClientProvider,
+      WagmiProvider: wagmiPkg.WagmiProvider,
+    };
+
+    return runtime;
+  } catch (e: any) {
+    runtimeLoadFailed = true;
+    console.warn("[WalletConnect] Web runtime failed to load:", String(e?.message || e));
+    return null;
+  }
+}
+
+function getNetworks(rt: RuntimeModules) {
+  const n = rt.networks;
+  return [n.mainnet, n.sepolia, n.base, n.baseSepolia, n.polygon, n.arbitrum, n.optimism] as any;
+}
 
 function ensureInitialized() {
   if (initialized) return;
   initialized = true;
-  if (!projectId) return;
+  if (!projectId || !canUseBrowserRuntime()) return;
 
-  adapter = new WagmiAdapter({
+  const rt = loadRuntime();
+  if (!rt) return;
+
+  const networks = getNetworks(rt);
+
+  adapter = new rt.WagmiAdapter({
     projectId,
     networks,
   });
 
-  createAppKit({
+  rt.createAppKit({
     adapters: [adapter],
     projectId,
     metadata,
     networks,
-    defaultNetwork: baseSepolia,
+    defaultNetwork: rt.networks.baseSepolia,
     features: {
       analytics: true,
     },
   });
+
+  queryClient = new rt.QueryClient();
 }
 
-ensureInitialized();
-
-const queryClient = new QueryClient();
-
-function SessionBinder() {
-  const appKit = useAppKit() as any;
-  const accountState = useAppKitAccount() as any;
-  const providerState = useAppKitProvider("eip155") as any;
+function SessionBinder({ rt }: { rt: RuntimeModules }) {
+  const appKit = rt.useAppKit() as any;
+  const accountState = rt.useAppKitAccount() as any;
+  const providerState = rt.useAppKitProvider("eip155") as any;
 
   const open = appKit?.open;
   const isConnected = Boolean(accountState?.isConnected);
@@ -94,14 +144,32 @@ function SessionBinder() {
 }
 
 export function WalletConnectProvider({ children }: { children: React.ReactNode }) {
-  if (!projectId || !adapter) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!projectId) return;
+    if (!canUseBrowserRuntime()) return;
+
+    loadRuntime();
+    ensureInitialized();
+
+    if (adapter && queryClient) {
+      setReady(true);
+    }
+  }, []);
+
+  const rt = useMemo(() => loadRuntime(), [ready]);
+  if (!projectId || !rt || !adapter || !queryClient) {
     return <>{children}</>;
   }
+
+  const WagmiProvider = rt.WagmiProvider as any;
+  const QueryClientProvider = rt.QueryClientProvider as any;
 
   return (
     <WagmiProvider config={adapter.wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <SessionBinder />
+        <SessionBinder rt={rt} />
         {children}
       </QueryClientProvider>
     </WagmiProvider>
