@@ -24,7 +24,12 @@ const TOPIC_REFUND_SINGLE = keccak256(stringToHex("EscrowRefunded(bytes32,addres
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "POST, GET, HEAD, OPTIONS",
+    },
   });
 }
 
