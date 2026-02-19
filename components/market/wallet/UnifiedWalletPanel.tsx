@@ -176,7 +176,7 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Ionicons name="sparkles-outline" size={14} color="#2DD4BF" />
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Smart Wallet</Text>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Base wallet</Text>
             </View>
           </Pressable>
         </View>
