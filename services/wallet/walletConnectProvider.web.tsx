@@ -23,9 +23,6 @@ type RuntimeModules = {
   useAppKitProvider: any;
   WagmiAdapter: any;
   networks: any;
-  injected: any;
-  coinbaseWallet: any;
-  walletConnect: any;
   QueryClient: any;
   QueryClientProvider: any;
   WagmiProvider: any;
@@ -46,24 +43,20 @@ function loadRuntime(): RuntimeModules | null {
   if (runtime) return runtime;
 
   try {
-    const reownReactCore = require("@reown/appkit/react-core");
-    const reownControllersReact = require("@reown/appkit-controllers/react");
+    const reownReact = require("@reown/appkit/react");
     const adapterPkg = require("@reown/appkit-adapter-wagmi");
     const networksPkg = require("@reown/appkit/networks");
     const queryPkg = require("@tanstack/react-query");
     const wagmiPkg = require("wagmi");
-    const wagmiConnectorsPkg = require("wagmi/connectors");
+    const controllersReact = require("@reown/appkit-controllers/react");
 
     runtime = {
-      createAppKit: reownReactCore.createAppKit,
-      useAppKit: reownReactCore.useAppKit,
-      useAppKitAccount: reownReactCore.useAppKitAccount,
-      useAppKitProvider: reownControllersReact.useAppKitProvider,
+      createAppKit: reownReact.createAppKit,
+      useAppKit: reownReact.useAppKit,
+      useAppKitAccount: reownReact.useAppKitAccount,
+      useAppKitProvider: reownReact.useAppKitProvider || controllersReact.useAppKitProvider,
       WagmiAdapter: adapterPkg.WagmiAdapter,
       networks: networksPkg,
-      injected: wagmiConnectorsPkg.injected,
-      coinbaseWallet: wagmiConnectorsPkg.coinbaseWallet,
-      walletConnect: wagmiConnectorsPkg.walletConnect,
       QueryClient: queryPkg.QueryClient,
       QueryClientProvider: queryPkg.QueryClientProvider,
       WagmiProvider: wagmiPkg.WagmiProvider,
@@ -96,20 +89,9 @@ function ensureInitialized() {
     url: canUseBrowserRuntime() ? window.location.origin : metadata.url,
   };
 
-  const connectors = [
-    typeof rt.injected === "function" ? rt.injected({ shimDisconnect: true }) : null,
-    typeof rt.coinbaseWallet === "function"
-      ? rt.coinbaseWallet({ appName: runtimeMetadata.name })
-      : null,
-    typeof rt.walletConnect === "function"
-      ? rt.walletConnect({ projectId, metadata: runtimeMetadata, showQrModal: false })
-      : null,
-  ].filter(Boolean);
-
   adapter = new rt.WagmiAdapter({
     projectId,
     networks,
-    connectors: connectors.length ? connectors : undefined,
     ssr: false,
   });
 
@@ -120,15 +102,8 @@ function ensureInitialized() {
     networks,
     defaultNetwork: rt.networks.baseSepolia,
     enableCoinbase: false,
-    allWallets: true,
-    enableWallets: true,
     features: {
       analytics: false,
-      send: false,
-      receive: false,
-      legalCheckbox: false,
-      collapseWallets: false,
-      connectMethodsOrder: ["wallet"],
     },
   });
 
@@ -152,11 +127,7 @@ function SessionBinder({ rt }: { rt: RuntimeModules }) {
     if (!open) return;
     setWalletConnectRuntime({
       openModal: async () => {
-        try {
-          await Promise.resolve(open({ view: "Connect" }));
-        } catch {
-          await Promise.resolve(open());
-        }
+        await Promise.resolve(open());
       },
     });
   }, [open]);
