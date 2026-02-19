@@ -448,6 +448,10 @@ export default function OrderDetails() {
 
   // Buyer releases only after OTP verified + delivered
   const canRelease = !!order && isBuyer && otpVerified && order.status === "DELIVERED";
+  const canSellerUpload =
+    !!order &&
+    isSeller &&
+    ["IN_ESCROW", "OUT_FOR_DELIVERY", "DELIVERABLE_UPLOADED"].includes(String(order.status || "").toUpperCase());
 
   const otpExpiresAtMs = otp?.expires_at ? new Date(otp.expires_at).getTime() : 0;
   const otpExpiryRemainingSec = otpVerified || !otpExpiresAtMs ? 0 : Math.max(0, Math.ceil((otpExpiresAtMs - nowMs) / 1000));
@@ -775,6 +779,10 @@ async function pickAndUpload(access: "preview" | "final") {
     setUploadErr("Only the seller can upload deliverables for this order.");
     return;
   }
+  if (!canSellerUpload) {
+    setUploadErr(`Upload is only allowed while order is in escrow/delivery. Current status: ${order.status}`);
+    return;
+  }
 
   setUploadBusy(true);
   setUploadErr(null);
@@ -831,7 +839,14 @@ async function pickAndUpload(access: "preview" | "final") {
 
     await load();
   } catch (e: any) {
-    setUploadErr(e?.message || "Upload failed");
+    const msg = String(e?.message || "Upload failed");
+    if (msg.toLowerCase().includes("row-level security")) {
+      setUploadErr(
+        "Upload blocked by RLS policy. Apply the latest market deliverables RLS migration, then retry.",
+      );
+    } else {
+      setUploadErr(msg);
+    }
   } finally {
     setUploadBusy(false);
   }
@@ -1291,7 +1306,7 @@ async function pickAndUpload(access: "preview" | "final") {
 
                   <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
                     <Pressable
-                      disabled={uploadBusy}
+                      disabled={uploadBusy || !canSellerUpload}
                       onPress={() => pickAndUpload("preview")}
                       style={{
                         flex: 1,
@@ -1301,14 +1316,14 @@ async function pickAndUpload(access: "preview" | "final") {
                         backgroundColor: "rgba(124,58,237,0.20)",
                         borderWidth: 1,
                         borderColor: "rgba(124,58,237,0.35)",
-                        opacity: uploadBusy ? 0.7 : 1,
+                        opacity: uploadBusy || !canSellerUpload ? 0.7 : 1,
                       }}
                     >
                       <Text style={{ color: "#fff", fontWeight: "900" }}>{uploadBusy ? "Uploading…" : "Upload preview"}</Text>
                     </Pressable>
 
                     <Pressable
-                      disabled={uploadBusy}
+                      disabled={uploadBusy || !canSellerUpload}
                       onPress={() => pickAndUpload("final")}
                       style={{
                         flex: 1,
@@ -1318,12 +1333,18 @@ async function pickAndUpload(access: "preview" | "final") {
                         backgroundColor: "rgba(16,185,129,0.20)",
                         borderWidth: 1,
                         borderColor: "rgba(16,185,129,0.35)",
-                        opacity: uploadBusy ? 0.7 : 1,
+                        opacity: uploadBusy || !canSellerUpload ? 0.7 : 1,
                       }}
                     >
                       <Text style={{ color: "#fff", fontWeight: "900" }}>{uploadBusy ? "Uploading…" : "Upload full"}</Text>
                     </Pressable>
                   </View>
+
+                  {!canSellerUpload ? (
+                    <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                      Upload is available when order is IN_ESCROW, OUT_FOR_DELIVERY, or DELIVERABLE_UPLOADED.
+                    </Text>
+                  ) : null}
 
                   {deliverables.length ? (
                     <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.60)", fontSize: 12 }}>
