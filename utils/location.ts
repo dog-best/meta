@@ -72,6 +72,10 @@ type IpInfoPayload = {
   loc?: string;
 };
 
+type CountryIsPayload = {
+  country?: string;
+};
+
 function buildLabel(parts: Array<string | null | undefined>) {
   return parts.map((p) => String(p || "").trim()).filter(Boolean).join(", ");
 }
@@ -187,6 +191,22 @@ async function fetchIpLocation(): Promise<IpLookupResult | null> {
         lng: loc.lng,
       });
       if (out.geo.countryCode || out.geo.country) return out;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Minimal country fallback with broad availability.
+  try {
+    const res = await fetch(withNoCache("https://api.country.is/"), {
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
+    if (res.ok) {
+      const payload = (await res.json()) as CountryIsPayload;
+      const out = ipLookupToResult({
+        countryCode: String(payload.country || "").toUpperCase(),
+      });
+      if (out.geo.countryCode) return out;
     }
   } catch {
     // ignore

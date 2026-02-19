@@ -208,7 +208,8 @@ export async function setCachedCountry(
 export async function resolveUserCountry(opts?: { prompt?: boolean; refresh?: boolean; ipOnly?: boolean }) {
   const cached = await getCachedCountry();
   const shouldRefresh = Boolean(opts?.prompt || opts?.refresh);
-  const preferLiveLocation = Boolean(opts?.prompt || opts?.refresh);
+  // Only enforce strict live-IP behavior for VPN-sensitive flows.
+  const preferLiveLocation = Boolean(opts?.ipOnly);
   const strictIp = Boolean(opts?.ipOnly);
 
   if (!shouldRefresh && cached) {
@@ -222,7 +223,7 @@ export async function resolveUserCountry(opts?: { prompt?: boolean; refresh?: bo
       return fromLocation;
     }
 
-    // If live lookup is requested (e.g. VPN test), avoid overriding with profile/cached country.
+    // If strict live lookup is requested (e.g. VPN test), avoid overriding with profile/cached country.
     if (preferLiveLocation) {
       return null;
     }
