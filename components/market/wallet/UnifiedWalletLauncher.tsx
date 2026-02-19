@@ -19,18 +19,35 @@ export default function UnifiedWalletLauncher() {
     return false;
   }, [pathname]);
 
+  const compact = useMemo(() => {
+    const p = String(pathname || "");
+    return p.includes("/market/orders") || p.includes("/market/stock");
+  }, [pathname]);
+
+  const bottomPad = useMemo(() => {
+    const base = Platform.OS === "ios" ? 96 : 82;
+    return compact ? base + 26 : base;
+  }, [compact]);
+
   if (hidden) return null;
 
   return (
     <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
-      <View pointerEvents="box-none" style={{ alignItems: "flex-end", paddingHorizontal: 16, paddingBottom: Platform.OS === "ios" ? 96 : 82 }}>
+      <View
+        pointerEvents="box-none"
+        style={{
+          alignItems: "flex-end",
+          paddingHorizontal: compact ? 12 : 16,
+          paddingBottom: bottomPad,
+        }}
+      >
         <Pressable
           onPress={() => setOpen(true)}
           style={{
-            minWidth: 146,
-            height: 54,
-            borderRadius: 20,
-            paddingHorizontal: 14,
+            minWidth: compact ? 120 : 146,
+            height: compact ? 48 : 54,
+            borderRadius: compact ? 18 : 20,
+            paddingHorizontal: compact ? 11 : 14,
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "space-between",
@@ -47,24 +64,24 @@ export default function UnifiedWalletLauncher() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
             <View
               style={{
-                width: 32,
-                height: 32,
-                borderRadius: 11,
+                width: compact ? 28 : 32,
+                height: compact ? 28 : 32,
+                borderRadius: compact ? 10 : 11,
                 alignItems: "center",
                 justifyContent: "center",
                 backgroundColor: "rgba(124,58,237,0.3)",
               }}
             >
-              <Ionicons name="wallet-outline" size={17} color="#fff" />
+              <Ionicons name="wallet-outline" size={compact ? 15 : 17} color="#fff" />
             </View>
             <View>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Wallet</Text>
-              <Text style={{ color: "rgba(255,255,255,0.72)", fontWeight: "700", fontSize: 10 }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: compact ? 11 : 12 }}>Wallet</Text>
+              <Text style={{ color: "rgba(255,255,255,0.72)", fontWeight: "700", fontSize: compact ? 9 : 10 }}>
                 ${wallet.overallUsdApprox.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </Text>
             </View>
           </View>
-          <Ionicons name="chevron-up" size={16} color="#fff" />
+          <Ionicons name="chevron-up" size={compact ? 14 : 16} color="#fff" />
         </Pressable>
       </View>
 

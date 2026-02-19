@@ -116,7 +116,17 @@ function Chip({
   );
 }
 
-function SectionPill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function SectionPill({
+  label,
+  active,
+  onPress,
+  icon,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+}) {
   return (
     <Pressable
       onPress={onPress}
@@ -131,7 +141,10 @@ function SectionPill({ label, active, onPress }: { label: string; active: boolea
         borderColor: active ? "rgba(124,58,237,0.55)" : BORDER,
       }}
     >
-      <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+        {icon ? <Ionicons name={icon} size={15} color="#fff" /> : null}
+        <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -506,9 +519,32 @@ export default function MarketHome() {
             <AppHeader title="Marketplace" subtitle="Products, services, and social feed" />
 
             <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
-              <SectionPill label="Products" active={section === "product"} onPress={() => { setSection("product"); setDirectoryMode("listings"); setSelectedSlug(null); }} />
-              <SectionPill label="Services" active={section === "service"} onPress={() => { setSection("service"); setDirectoryMode("listings"); setSelectedSlug(null); }} />
-              <SectionPill label="Social Feed" active={section === "social"} onPress={() => setSection("social")} />
+              <SectionPill
+                icon="storefront-outline"
+                label="Products"
+                active={section === "product"}
+                onPress={() => {
+                  setSection("product");
+                  setDirectoryMode("listings");
+                  setSelectedSlug(null);
+                }}
+              />
+              <SectionPill
+                icon="construct-outline"
+                label="Services"
+                active={section === "service"}
+                onPress={() => {
+                  setSection("service");
+                  setDirectoryMode("listings");
+                  setSelectedSlug(null);
+                }}
+              />
+              <SectionPill
+                icon="people-outline"
+                label="Social Feed"
+                active={section === "social"}
+                onPress={() => setSection("social")}
+              />
             </View>
 
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
@@ -561,8 +597,18 @@ export default function MarketHome() {
                 {directoryMode === "listings" ? (
                   <>
                     <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
-                      <SectionPill label="My Country" active={feedScope === "country"} onPress={() => setFeedScope("country")} />
-                      <SectionPill label="Global" active={feedScope === "global"} onPress={() => setFeedScope("global")} />
+                      <SectionPill
+                        icon="location-outline"
+                        label="My Country"
+                        active={feedScope === "country"}
+                        onPress={() => setFeedScope("country")}
+                      />
+                      <SectionPill
+                        icon="earth-outline"
+                        label="Global"
+                        active={feedScope === "global"}
+                        onPress={() => setFeedScope("global")}
+                      />
                     </View>
                     <View style={{ marginTop: 10, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, flexDirection: "row", alignItems: "center", gap: 10 }}>
                       <Ionicons name="location-outline" size={18} color="rgba(255,255,255,0.78)" />
@@ -626,14 +672,14 @@ export default function MarketHome() {
                     onPress={() => setDirectoryMode("listings")}
                   />
                   <Chip
-                    label="🔥 Featured Accounts"
+                    label="🔥 Featured"
                     icon="flame"
                     iconColor="#FDBA74"
                     active={directoryMode === "featured"}
                     onPress={() => setDirectoryMode("featured")}
                   />
                   <Chip
-                    label="Verified Accounts"
+                    label="Verified"
                     icon="checkmark-circle"
                     iconColor="#60A5FA"
                     active={directoryMode === "verified"}
@@ -689,4 +735,3 @@ export default function MarketHome() {
     </LinearGradient>
   );
 }
-

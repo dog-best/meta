@@ -8,6 +8,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Platform,
   Pressable,
   RefreshControl,
   Text,
@@ -85,6 +86,16 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
     return () => clearTimeout(id);
   }, [value, delayMs]);
   return debounced;
+}
+
+function isMissingRpcError(error: unknown) {
+  const msg = String((error as any)?.message || error || "").toLowerCase();
+  return (
+    msg.includes("could not find the function") ||
+    msg.includes("pgrst202") ||
+    msg.includes("42883") ||
+    msg.includes("schema cache")
+  );
 }
 
 function pickUrl(img: ListingImage | null | undefined, supabaseUrl: string) {
@@ -355,6 +366,108 @@ export default function ListingsFeed() {
     router.setParams({ q: q.trim() } as any);
   }, [q]);
 
+  const runToggleActive = useCallback(
+    async (listing: Listing, nextActive: boolean) => {
+      setBusyId(listing.id);
+      try {
+        let resolvedNext = nextActive;
+        try {
+          const { data, error } = await supabase.rpc("market_set_listing_active", {
+            p_listing_id: listing.id,
+            p_is_active: nextActive,
+          });
+          if (error) throw error;
+          if (typeof (data as any)?.is_active === "boolean") {
+            resolvedNext = Boolean((data as any).is_active);
+          }
+        } catch (rpcError: any) {
+          if (!isMissingRpcError(rpcError)) throw new Error(rpcError?.message || "Failed to update listing.");
+
+          if (!nextActive) {
+            const { count, error: countErr } = await supabase
+              .from("market_orders")
+              .select("id", { count: "exact", head: true })
+              .eq("listing_id", listing.id)
+              .in("status", ["CREATED", "IN_ESCROW", "OUT_FOR_DELIVERY", "DELIVERED"]);
+            if (countErr) throw new Error(countErr.message);
+            if (Number(count || 0) > 0) {
+              throw new Error("Cannot disable listing with pending or active orders.");
+            }
+          }
+
+          let updateQuery = supabase
+            .from(LISTINGS_TABLE)
+            .update({ is_active: nextActive, updated_at: new Date().toISOString() })
+            .eq("id", listing.id);
+          if (viewerUid) updateQuery = updateQuery.eq("seller_id", viewerUid);
+
+          const { data: updated, error: updateErr } = await updateQuery.select("id,is_active").maybeSingle();
+          if (updateErr) throw new Error(updateErr.message);
+          if (!updated) throw new Error("Listing not found or you no longer have permission.");
+          resolvedNext = Boolean((updated as any).is_active);
+        }
+
+        setRows((prev) => {
+          const next = prev.map((r) => (r.id === listing.id ? { ...r, is_active: resolvedNext } : r));
+          if (activeFilter === "active" && !resolvedNext) return next.filter((r) => r.id !== listing.id);
+          if (activeFilter === "disabled" && resolvedNext) return next.filter((r) => r.id !== listing.id);
+          return next;
+        });
+      } catch (e: any) {
+        Alert.alert("Action blocked", e?.message ?? "Failed");
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [activeFilter, viewerUid],
+  );
+
+  const runDelete = useCallback(
+    async (listing: Listing) => {
+      setBusyId(listing.id);
+      try {
+        try {
+          const { error } = await supabase.rpc("market_delete_listing", {
+            p_listing_id: listing.id,
+          });
+          if (error) throw error;
+        } catch (rpcError: any) {
+          if (!isMissingRpcError(rpcError)) throw new Error(rpcError?.message || "Failed to delete listing.");
+
+          const { count, error: countErr } = await supabase
+            .from("market_orders")
+            .select("id", { count: "exact", head: true })
+            .eq("listing_id", listing.id);
+          if (countErr) throw new Error(countErr.message);
+          if (Number(count || 0) > 0) {
+            throw new Error("Cannot delete listing that already has orders.");
+          }
+
+          let updateQuery = supabase
+            .from(LISTINGS_TABLE)
+            .update({
+              is_active: false,
+              deleted_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", listing.id);
+          if (viewerUid) updateQuery = updateQuery.eq("seller_id", viewerUid);
+
+          const { data: updated, error: updateErr } = await updateQuery.select("id").maybeSingle();
+          if (updateErr) throw new Error(updateErr.message);
+          if (!updated) throw new Error("Listing not found or you no longer have permission.");
+        }
+
+        setRows((prev) => prev.filter((r) => r.id !== listing.id));
+      } catch (e: any) {
+        Alert.alert("Action blocked", e?.message ?? "Failed");
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [viewerUid],
+  );
+
   const rpcToggleActive = useCallback(
     async (listing: Listing, nextActive: boolean) => {
       if (!isMineView) return;
@@ -364,69 +477,55 @@ export default function ListingsFeed() {
         ? "This will make your listing visible to buyers again."
         : "This will hide your listing from buyers. This is blocked if there are pending/active orders.";
 
+      if (Platform.OS === "web") {
+        const confirmFn = (globalThis as any)?.confirm;
+        const ok = typeof confirmFn === "function" ? confirmFn(`${title}\n\n${msg}`) : true;
+        if (!ok) return;
+        await runToggleActive(listing, nextActive);
+        return;
+      }
+
       Alert.alert(title, msg, [
         { text: "Cancel", style: "cancel" },
         {
           text: nextActive ? "Enable" : "Disable",
           style: "default",
           onPress: async () => {
-            try {
-              setBusyId(listing.id);
-              const { data, error } = await supabase.rpc("market_set_listing_active", {
-                p_listing_id: listing.id,
-                p_is_active: nextActive,
-              });
-              if (error) throw new Error(error.message);
-              const resolvedNext =
-                typeof (data as any)?.is_active === "boolean" ? Boolean((data as any).is_active) : nextActive;
-
-              setRows((prev) =>
-                prev.map((r) => (r.id === listing.id ? { ...r, is_active: resolvedNext } : r)),
-              );
-            } catch (e: any) {
-              Alert.alert("Action blocked", e?.message ?? "Failed");
-            } finally {
-              setBusyId(null);
-            }
+            await runToggleActive(listing, nextActive);
           },
         },
       ]);
     },
-    [isMineView],
+    [isMineView, runToggleActive],
   );
 
   const rpcDelete = useCallback(
     async (listing: Listing) => {
       if (!isMineView) return;
 
-      Alert.alert(
-        "Delete listing?",
-        "Allowed only if there are NO orders ever on this listing.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                setBusyId(listing.id);
-                const { error } = await supabase.rpc("market_delete_listing", {
-                  p_listing_id: listing.id,
-                });
-                if (error) throw new Error(error.message);
+      const title = "Delete listing?";
+      const msg = "Allowed only if there are NO orders ever on this listing.";
 
-                setRows((prev) => prev.filter((r) => r.id !== listing.id));
-              } catch (e: any) {
-                Alert.alert("Action blocked", e?.message ?? "Failed");
-              } finally {
-                setBusyId(null);
-              }
-            },
+      if (Platform.OS === "web") {
+        const confirmFn = (globalThis as any)?.confirm;
+        const ok = typeof confirmFn === "function" ? confirmFn(`${title}\n\n${msg}`) : true;
+        if (!ok) return;
+        await runDelete(listing);
+        return;
+      }
+
+      Alert.alert(title, msg, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            await runDelete(listing);
           },
-        ],
-      );
+        },
+      ]);
     },
-    [isMineView],
+    [isMineView, runDelete],
   );
 
   const Header = useMemo(() => {
