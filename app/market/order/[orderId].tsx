@@ -841,7 +841,9 @@ async function releaseFunds() {
 
   async function downloadDeliverable(d: OrderDeliverable) {
     try {
-      const url = await signedUrlForDeliverable(d, 900);
+      const rawName = String((d.meta as any)?.originalName || d.title || `deliverable-${d.id}` || "").trim();
+      const safeName = rawName ? rawName.replace(/[^\w.\-]+/g, "_") : `deliverable-${d.id}`;
+      const url = await signedUrlForDeliverable(d, 900, { download: safeName });
       if (!url) throw new Error("No download URL");
       await Linking.openURL(url);
     } catch (e: any) {

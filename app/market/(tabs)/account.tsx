@@ -377,7 +377,7 @@ export default function MarketAccountTab() {
             />
             <EnginePill
               icon="sparkles-outline"
-              label="Smart Wallet"
+              label="Base Wallet"
               active={wallet.walletMode === "base_smart"}
               accent="#2DD4BF"
             />

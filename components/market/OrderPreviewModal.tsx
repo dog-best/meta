@@ -96,7 +96,7 @@ export function OrderPreviewModal({
           <View style={{ alignItems: "flex-end" }}>
             <Text style={{ color: "#fff", fontWeight: "900" }}>{title}</Text>
             <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-              {isPreview ? "Low quality • Watermarked" : "Full quality"}
+              {isPreview ? "Low quality - Watermarked" : "Original quality"}
             </Text>
           </View>
         </View>
@@ -104,7 +104,7 @@ export function OrderPreviewModal({
         {busy ? (
           <View style={{ marginTop: 30, alignItems: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading…</Text>
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading...</Text>
           </View>
         ) : err ? (
           <View style={{ marginTop: 18, borderRadius: 18, padding: 14, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" }}>
@@ -141,15 +141,49 @@ function MediaFrame({ watermark, children }: { watermark: boolean; children: Rea
       <View style={{ height: 380, backgroundColor: "rgba(255,255,255,0.05)" }}>
         {children}
         {watermark ? (
-          <View pointerEvents="none" style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
-            <Image source={WatermarkIcon} style={{ width: 92, height: 92, opacity: 0.20 }} />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontWeight: "900" }}>BestCity Preview</Text>
+          <View pointerEvents="none" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+            {Array.from({ length: 8 }).map((_, row) => (
+              <View
+                key={`wm-row-${row}`}
+                style={{
+                  position: "absolute",
+                  top: row * 56 - 20,
+                  left: row % 2 === 0 ? -24 : -82,
+                  flexDirection: "row",
+                }}
+              >
+                {Array.from({ length: 7 }).map((__, col) => (
+                  <View
+                    key={`wm-cell-${row}-${col}`}
+                    style={{
+                      width: 138,
+                      transform: [{ rotate: "-24deg" }],
+                      opacity: 0.18,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "rgba(255,255,255,0.40)",
+                        fontSize: 10,
+                        fontWeight: "900",
+                        letterSpacing: 0.8,
+                      }}
+                    >
+                      BESTCITY PREVIEW
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ))}
+            <View style={{ position: "absolute", right: 10, bottom: 10, opacity: 0.22 }}>
+              <Image source={WatermarkIcon} style={{ width: 34, height: 34 }} />
+            </View>
           </View>
         ) : null}
       </View>
       <View style={{ padding: 12, backgroundColor: "rgba(0,0,0,0.35)" }}>
         <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
-          {watermark ? "Preview Only • Low quality / Watermarked" : "Full quality deliverable"}
+          {watermark ? "Preview only - Low quality / Watermarked" : "Original quality deliverable"}
         </Text>
       </View>
     </View>
@@ -178,7 +212,7 @@ function FileBlock({ uri, watermark }: { uri: string | null; watermark: boolean 
           opacity: uri ? 1 : 0.7,
         }}
       >
-        <Text style={{ color: "#fff", fontWeight: "900" }}>{uri ? "Open / Download" : "Loading…"}</Text>
+        <Text style={{ color: "#fff", fontWeight: "900" }}>{uri ? "Open / Download" : "Loading..."}</Text>
       </Pressable>
     </View>
   );
@@ -209,7 +243,7 @@ function VideoBlock({ uri, watermark, previewSeconds }: { uri: string | null; wa
     return (
       <View style={{ marginTop: 18, alignItems: "center" }}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading video…</Text>
+        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading video...</Text>
       </View>
     );
   }
@@ -323,7 +357,7 @@ function AudioBlock({ uri, watermark, previewSeconds }: { uri: string | null; wa
     return (
       <View style={{ marginTop: 18, alignItems: "center" }}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading audio…</Text>
+        <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading audio...</Text>
       </View>
     );
   }
@@ -368,7 +402,7 @@ function AudioBlock({ uri, watermark, previewSeconds }: { uri: string | null; wa
           opacity: sound ? 1 : 0.7,
         }}
       >
-        <Text style={{ color: "#fff", fontWeight: "900" }}>{sound ? (playing ? "Pause" : "Play") : "Loading…"}</Text>
+        <Text style={{ color: "#fff", fontWeight: "900" }}>{sound ? (playing ? "Pause" : "Play") : "Loading..."}</Text>
       </Pressable>
     </View>
   );

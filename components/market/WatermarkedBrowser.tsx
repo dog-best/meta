@@ -95,7 +95,7 @@ export function WatermarkedBrowser({
       >
         <Text style={{ color: "#fff", fontWeight: "900" }}>{title}</Text>
         <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-          Watermarked preview • URL hidden in-app • Best-effort protection
+          Watermarked preview - URL hidden in-app - Best-effort protection
         </Text>
 
         {allowGoogleSearch ? (
@@ -117,7 +117,7 @@ export function WatermarkedBrowser({
             <TextInput
               value={q}
               onChangeText={setQ}
-              placeholder="Search domain or keywords…"
+              placeholder="Search domain or keywords..."
               placeholderTextColor="rgba(255,255,255,0.40)"
               style={{ flex: 1, color: "#fff", fontWeight: "800" }}
               returnKeyType="search"
@@ -215,37 +215,48 @@ export function WatermarkedBrowser({
           <View style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
             <ActivityIndicator />
             <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
-              Loading preview…
+              Loading preview...
             </Text>
           </View>
         ) : null}
 
-        {/* Center watermark */}
-        <View pointerEvents="none" style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center" }}>
-          <Image source={WatermarkIcon} style={{ width: 92, height: 92, opacity: 0.18 }} />
-          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.55)", fontWeight: "900" }}>
-            BestCity Preview
-          </Text>
-        </View>
-
-        {/* Corner watermark */}
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            right: 12,
-            bottom: 12,
-            paddingHorizontal: 10,
-            paddingVertical: 8,
-            borderRadius: 14,
-            backgroundColor: "rgba(0,0,0,0.35)",
-            borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.10)",
-          }}
-        >
-          <Text style={{ color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 }}>
-            BestCity • Preview
-          </Text>
+        <View pointerEvents="none" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+          {Array.from({ length: 9 }).map((_, row) => (
+            <View
+              key={`wm-browser-row-${row}`}
+              style={{
+                position: "absolute",
+                top: row * 56 - 20,
+                left: row % 2 === 0 ? -26 : -86,
+                flexDirection: "row",
+              }}
+            >
+              {Array.from({ length: 8 }).map((__, col) => (
+                <View
+                  key={`wm-browser-cell-${row}-${col}`}
+                  style={{
+                    width: 140,
+                    transform: [{ rotate: "-24deg" }],
+                    opacity: 0.16,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "rgba(255,255,255,0.42)",
+                      fontSize: 10,
+                      fontWeight: "900",
+                      letterSpacing: 0.9,
+                    }}
+                  >
+                    BESTCITY PREVIEW
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ))}
+          <View style={{ position: "absolute", right: 10, bottom: 10, opacity: 0.22 }}>
+            <Image source={WatermarkIcon} style={{ width: 34, height: 34 }} />
+          </View>
         </View>
       </View>
     </View>

@@ -2,6 +2,8 @@ import { supabase } from "@/services/supabase";
 
 export type DeliverableAccess = "preview" | "final";
 export type DeliverableKind = "image" | "audio" | "video" | "file" | "link";
+const FN_ORDER_DELIVERABLE_URL = "market-order-deliverable-url";
+export type SignedUrlOptions = { download?: boolean | string };
 
 export type OrderDeliverable = {
   id: string;
@@ -24,12 +26,21 @@ function looksLikeHttpUrl(input?: string | null) {
   return /^https?:\/\//i.test(String(input || "").trim());
 }
 
+function decodeMaybe(input: string) {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return input;
+  }
+}
+
 function normalizeStoragePath(bucket: string, rawPath: string) {
   const p = String(rawPath || "").trim();
   if (!p) return "";
   if (looksLikeHttpUrl(p)) return p;
 
   let out = p.replace(/^\/+/, "");
+  out = decodeMaybe(out);
   const prefixA = `${bucket}/`;
   const prefixB = `public/${bucket}/`;
   if (out.startsWith(prefixB)) out = out.slice(prefixB.length);
@@ -51,12 +62,19 @@ export async function listOrderDeliverables(orderId: string) {
   return (data ?? []) as OrderDeliverable[];
 }
 
-export async function signedUrl(bucket: string, path: string, expiresSec = 900) {
+export async function signedUrl(bucket: string, path: string, expiresSec = 900, options: SignedUrlOptions = {}) {
   const normalizedPath = normalizeStoragePath(bucket, path);
   if (!normalizedPath) return null;
   if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;
 
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalizedPath, expiresSec);
+  const download = options.download;
+  const signOptions =
+    typeof download === "string" && download.trim()
+      ? { download: download.trim() }
+      : download
+      ? { download: true }
+      : undefined;
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalizedPath, expiresSec, signOptions as any);
   if (error) {
     const msg = String(error.message || "");
     const code = String((error as any)?.code || "");
@@ -71,9 +89,57 @@ export async function signedUrl(bucket: string, path: string, expiresSec = 900) 
   return data?.signedUrl ?? null;
 }
 
-export async function signedUrlForDeliverable(d: OrderDeliverable, expiresSec = 900) {
+async function signedUrlViaFunction(
+  deliverableId: string,
+  orderId: string,
+  access: DeliverableAccess,
+  bucket: string,
+  path: string,
+  expiresSec = 900,
+  options: SignedUrlOptions = {},
+) {
+  const { data, error } = await supabase.functions.invoke(FN_ORDER_DELIVERABLE_URL, {
+    body: {
+      deliverable_id: deliverableId,
+      order_id: orderId,
+      access,
+      storage_bucket: bucket,
+      storage_path: path,
+      expires_sec: expiresSec,
+      download: typeof options.download === "boolean" ? options.download : !!options.download,
+      filename: typeof options.download === "string" ? options.download : null,
+    },
+  });
+  if (error) throw new Error(String(error.message || error));
+  const url = String((data as any)?.url || "").trim();
+  return url || null;
+}
+
+export async function signedUrlForDeliverable(d: OrderDeliverable, expiresSec = 900, options: SignedUrlOptions = {}) {
   if (!d.storage_path) return null;
-  return signedUrl(d.storage_bucket || "market-deliverables", d.storage_path, expiresSec);
+  const bucket = d.storage_bucket || "market-deliverables";
+  const normalizedPath = normalizeStoragePath(bucket, d.storage_path);
+  if (!normalizedPath) return null;
+  if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;
+
+  // Use Edge Function first so URL signing runs with service role
+  // and bypasses client-side Storage policy/cast issues.
+  try {
+    const viaFn = await signedUrlViaFunction(d.id, d.order_id, d.access, bucket, normalizedPath, expiresSec, options);
+    if (viaFn) return viaFn;
+  } catch {
+    // continue to direct call fallback
+  }
+
+  try {
+    const direct = await signedUrl(bucket, normalizedPath, expiresSec, options);
+    if (direct) return direct;
+  } catch {
+    // continue to public URL fallback
+  }
+
+  const pub = supabase.storage.from(bucket).getPublicUrl(normalizedPath)?.data?.publicUrl || null;
+  return pub;
 }
 
 export function guessKindFromMime(mime: string | null, name: string | null): DeliverableKind {
