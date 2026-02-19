@@ -21,6 +21,7 @@ import AppHeader from "@/components/common/AppHeader";
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
 import { supabase } from "@/services/supabase";
 import { getCurrentLocationWithGeocode } from "@/utils/location";
+import { normalizeCountryName } from "@/utils/countryNames";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -263,14 +264,19 @@ export default function EditMarketProfile() {
     setLocatingAddress(true);
     try {
       const res = await getCurrentLocationWithGeocode();
+      const country = normalizeCountryName(res.geo.country, res.geo.countryCode);
       setLocationText(res.label);
       setAddress({
         label: res.label,
-        city: res.geo.city || "",
-        region: res.geo.region || "",
-        country: res.geo.country || "",
+        city: res.geo.city || res.geo.town || res.geo.locality || "",
+        region: res.geo.region || res.geo.subregion || res.geo.district || "",
+        country,
         countryCode: res.geo.countryCode || "",
         postalCode: res.geo.postalCode || "",
+        subregion: res.geo.subregion || "",
+        district: res.geo.district || "",
+        town: res.geo.town || "",
+        locality: res.geo.locality || "",
         lat: res.coords.lat,
         lng: res.coords.lng,
       });

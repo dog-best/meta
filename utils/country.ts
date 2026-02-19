@@ -1,6 +1,7 @@
 import * as SecureStore from "@/utils/secureStore";
 import { supabase } from "@/services/supabase";
 import { getCurrentLocationWithGeocode } from "@/utils/location";
+import { normalizeCountryCode, normalizeCountryName } from "@/utils/countryNames";
 
 const KEY_COUNTRY_CODE = "bc_user_country_code_v1";
 const KEY_COUNTRY_NAME = "bc_user_country_name_v1";
@@ -31,6 +32,14 @@ function norm(val?: string | null) {
 function toNum(val?: string | null) {
   const n = Number(val);
   return Number.isFinite(n) ? n : NaN;
+}
+
+function inferCountryCode(rawCode?: string | null, rawName?: string | null) {
+  const code = normalizeCountryCode(rawCode);
+  if (code) return code;
+  const maybe = norm(rawName);
+  if (/^[A-Za-z]{2,3}$/.test(maybe)) return normalizeCountryCode(maybe);
+  return "";
 }
 
 export function isNigeriaCountry(codeOrName?: string | null) {
@@ -94,10 +103,10 @@ async function resolveCountryFromProfile(): Promise<UserCountry> {
       .maybeSingle();
 
     const addr = (profile as any)?.address ?? {};
-    const code = norm(addr?.countryCode).toUpperCase();
-    const name = norm(addr?.country);
+    const code = inferCountryCode(addr?.countryCode, addr?.country);
+    const name = normalizeCountryName(addr?.country, code);
     const region = norm(addr?.region || addr?.state);
-    const city = norm(addr?.city);
+    const city = norm(addr?.city || addr?.town || addr?.district || addr?.subregion || addr?.locality);
 
     if (!code && !name) return null;
 
@@ -115,10 +124,10 @@ async function resolveCountryFromLocation(opts?: { ipOnly?: boolean }): Promise<
       preferIp: true,
       ipOnly: Boolean(opts?.ipOnly),
     });
-    const code = norm(loc?.geo?.countryCode).toUpperCase();
-    const name = norm(loc?.geo?.country);
-    const region = norm(loc?.geo?.region);
-    const city = norm(loc?.geo?.city);
+    const code = inferCountryCode(loc?.geo?.countryCode, loc?.geo?.country);
+    const name = normalizeCountryName(loc?.geo?.country, code);
+    const region = norm(loc?.geo?.region || loc?.geo?.subregion || loc?.geo?.district);
+    const city = norm(loc?.geo?.city || loc?.geo?.town || loc?.geo?.locality || loc?.geo?.district);
     const lat = Number(loc?.coords?.lat);
     const lng = Number(loc?.coords?.lng);
 
@@ -140,8 +149,9 @@ async function resolveCountryFromLocation(opts?: { ipOnly?: boolean }): Promise<
 }
 
 export async function getCachedCountry(): Promise<UserCountry> {
-  const code = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CODE));
-  const name = norm(await SecureStore.getItemAsync(KEY_COUNTRY_NAME));
+  const code = normalizeCountryCode(await SecureStore.getItemAsync(KEY_COUNTRY_CODE));
+  const nameRaw = norm(await SecureStore.getItemAsync(KEY_COUNTRY_NAME));
+  const name = normalizeCountryName(nameRaw, code);
   const region = norm(await SecureStore.getItemAsync(KEY_COUNTRY_REGION));
   const city = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CITY));
   const continent = norm(await SecureStore.getItemAsync(KEY_COUNTRY_CONTINENT));
@@ -167,8 +177,8 @@ export async function setCachedCountry(
   name?: string | null,
   extras?: Partial<NonNullable<UserCountry>>
 ) {
-  const c = norm(code).toUpperCase();
-  const n = norm(name);
+  const c = normalizeCountryCode(code);
+  const n = normalizeCountryName(name, c);
   const region = norm(extras?.region);
   const city = norm(extras?.city);
   const continent = norm(extras?.continent);

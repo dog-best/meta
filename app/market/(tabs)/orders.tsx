@@ -56,13 +56,31 @@ type FnResponse = {
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
-  if (currency?.toUpperCase() === "USDC") return `$${n.toLocaleString()}`;
-  return `₦${n.toLocaleString()}`;
+  const c = String(currency || "").toUpperCase();
+  if (c === "USDC" || c === "USDT" || c === "USD") return `$${n.toLocaleString()}`;
+  if (c === "NGN") return `NGN ${n.toLocaleString()}`;
+  return `${c || "AMOUNT"} ${n.toLocaleString()}`;
 }
 
 function formatStatusLabel(status: string) {
   const s = (status || "").toUpperCase();
   return s.replace(/_/g, " ");
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNetworkError(error: unknown) {
+  const msg = String((error as any)?.message || error || "").toLowerCase();
+  return (
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("request failed") ||
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("abort")
+  );
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -250,66 +268,80 @@ export default function MarketOrdersTab() {
 
       try {
         console.log("[MarketOrdersTab] load start", { role: roleParam, silent });
+        const maxAttempts = 2;
+        let lastError: unknown = null;
 
-        let token = "";
-        try {
-          token = await getSupabaseJwtOrThrow();
-        } catch (e) {
-          router.replace("/(auth)/login" as any);
-          throw e;
-        }
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            let token = "";
+            try {
+              token = await getSupabaseJwtOrThrow();
+            } catch (e) {
+              router.replace("/(auth)/login" as any);
+              throw e;
+            }
 
-        const base = getSupabaseFunctionsBaseUrl();
-        const url = new URL(`${base}/${FN_MARKET_ORDERS_LIST}`);
-        url.searchParams.set("role", roleParam);
-        url.searchParams.set("limit", "50");
-        url.searchParams.set("offset", "0");
+            const base = getSupabaseFunctionsBaseUrl();
+            const url = new URL(`${base}/${FN_MARKET_ORDERS_LIST}`);
+            url.searchParams.set("role", roleParam);
+            url.searchParams.set("limit", "50");
+            url.searchParams.set("offset", "0");
 
-        console.log("[MarketOrdersTab] edge call -> start", url.toString());
-        const { res, text, json } = await fetchJsonWithTimeout(
-          url.toString(),
-          {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              apikey: getSupabaseAnonKeyOrThrow(),
-              Accept: "application/json",
-            },
-          },
-          20000,
-        );
+            console.log("[MarketOrdersTab] edge call -> start", { attempt, url: url.toString() });
+            const { res, text, json } = await fetchJsonWithTimeout(
+              url.toString(),
+              {
+                method: "GET",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  apikey: getSupabaseAnonKeyOrThrow(),
+                  Accept: "application/json",
+                },
+              },
+              20000,
+            );
 
-        if (!res.ok) {
-          console.log("[MarketOrdersTab] edge call -> HTTP", res.status, text);
-          const msg =
-            (json as any)?.message ||
-            (json as any)?.error ||
-            (typeof json === "string" ? json : null) ||
-            (text && text.length < 400 ? text : null) ||
-            `Failed to load orders (HTTP ${res.status})`;
+            if (!res.ok) {
+              console.log("[MarketOrdersTab] edge call -> HTTP", res.status, text);
+              const msg =
+                (json as any)?.message ||
+                (json as any)?.error ||
+                (typeof json === "string" ? json : null) ||
+                (text && text.length < 400 ? text : null) ||
+                `Failed to load orders (HTTP ${res.status})`;
 
-          // If auth failed, bounce to login (keeps UX tight)
-          if (res.status === 401) {
-            // optional: sign out locally to force clean auth
-            // await supabase.auth.signOut();
-            router.replace("/(auth)/login" as any);
+              if (res.status === 401) {
+                router.replace("/(auth)/login" as any);
+                return;
+              }
+
+              throw new Error(friendlyMarketError({ message: msg }, "We couldn't load orders right now."));
+            }
+
+            const payload = json as FnResponse;
+            const nextItems = Array.isArray(payload?.items) ? payload.items : [];
+
+            if (!aliveRef.current) return;
+            setItems(nextItems);
+            setErr(null);
+            console.log("[MarketOrdersTab] edge call -> ok", { status: res.status, attempt });
             return;
+          } catch (e: any) {
+            lastError = e;
+            const retryable = isRetryableNetworkError(e);
+            if (attempt < maxAttempts && retryable) {
+              await sleep(550 * attempt);
+              continue;
+            }
+            break;
           }
-
-          throw new Error(friendlyMarketError({ message: msg }, "We couldn't load orders right now."));
         }
 
-        const payload = json as FnResponse;
-        const nextItems = Array.isArray(payload?.items) ? payload.items : [];
-
-        if (!aliveRef.current) return;
-        setItems(nextItems);
-        setErr(null);
-        console.log("[MarketOrdersTab] edge call -> ok", res.status);
+        throw lastError ?? new Error("Unknown orders load error.");
       } catch (e: any) {
         if (!aliveRef.current) return;
         setErr(friendlyMarketError(e, "We couldn't load orders right now."));
-        setItems([]);
+        if (!items.length) setItems([]);
       } finally {
         if (!aliveRef.current) return;
         if (!silent) {
@@ -318,7 +350,7 @@ export default function MarketOrdersTab() {
         }
       }
     },
-    [roleParam],
+    [items.length, roleParam],
   );
 
   useEffect(() => {
@@ -518,3 +550,4 @@ export default function MarketOrdersTab() {
     </LinearGradient>
   );
 }
+

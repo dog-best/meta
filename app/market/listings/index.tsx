@@ -244,9 +244,7 @@ export default function ListingsFeed() {
         setErr(null);
         setHasMore(true);
         setPage(0);
-
-        if (rows.length === 0) setLoading(true);
-        else setRefreshing(true);
+        setLoading(true);
       } else {
         if (loadingMore || !hasMore) return;
         setLoadingMore(true);
@@ -320,7 +318,6 @@ export default function ListingsFeed() {
       mode,
       authChecked,
       viewerUid,
-      rows.length,
       loadingMore,
       hasMore,
       page,
@@ -338,7 +335,8 @@ export default function ListingsFeed() {
     if (mode === "invalid") return;
     listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
     fetchPage(true);
-  }, [mode, resolvedSellerId, tab, sortBy, debouncedQ, activeFilter, fetchPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, resolvedSellerId, tab, sortBy, debouncedQ, activeFilter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -379,9 +377,11 @@ export default function ListingsFeed() {
                 p_is_active: nextActive,
               });
               if (error) throw new Error(error.message);
+              const resolvedNext =
+                typeof (data as any)?.is_active === "boolean" ? Boolean((data as any).is_active) : nextActive;
 
               setRows((prev) =>
-                prev.map((r) => (r.id === listing.id ? { ...r, is_active: (data as any).is_active } : r)),
+                prev.map((r) => (r.id === listing.id ? { ...r, is_active: resolvedNext } : r)),
               );
             } catch (e: any) {
               Alert.alert("Action blocked", e?.message ?? "Failed");

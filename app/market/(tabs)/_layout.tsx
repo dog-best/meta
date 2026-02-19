@@ -65,17 +65,17 @@ export default function MarketTabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: true,
-        tabBarPosition: isWebDesktop ? "top" : "bottom",
+        tabBarPosition: isWebDesktop ? "left" : "bottom",
         tabBarStyle: isWebDesktop
           ? {
               backgroundColor: "rgba(9,9,17,0.96)",
-              borderBottomColor: "rgba(255,255,255,0.09)",
-              borderBottomWidth: 1,
+              borderRightColor: "rgba(255,255,255,0.09)",
+              borderRightWidth: 1,
               borderTopWidth: 0,
-              height: 66,
-              paddingTop: 8,
-              paddingBottom: 8,
-              paddingHorizontal: 24,
+              width: 220,
+              paddingTop: 14,
+              paddingBottom: 14,
+              paddingHorizontal: 8,
             }
           : {
               backgroundColor: BG,
@@ -86,12 +86,17 @@ export default function MarketTabsLayout() {
             },
         tabBarActiveTintColor: PURPLE,
         tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "800" as any },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: "800" as any },
+        tabBarItemStyle: isWebDesktop
+          ? {
+              borderRadius: 14,
+              marginVertical: 4,
+              marginHorizontal: 2,
+            }
+          : undefined,
         sceneStyle: isWebDesktop
           ? {
               width: "100%",
-              maxWidth: 1400,
-              alignSelf: "center",
             }
           : undefined,
       }}

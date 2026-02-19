@@ -70,28 +70,55 @@ export function getSupabaseAnonKeyOrThrow() {
   return key;
 }
 
+function isLikelyNetworkError(error: any) {
+  const msg = String(error?.message || error || "").toLowerCase();
+  return (
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("request failed") ||
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("abort")
+  );
+}
+
 export async function getSupabaseJwtOrThrow() {
   const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
   if (sessionErr) throw sessionErr;
 
   const session = sessionData.session;
   const now = Date.now();
-  const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
+  let expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
   let token = session?.access_token || "";
 
   if (!token || expiresAtMs - now <= 60_000) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) throw refreshErr;
-    token = refreshed.session?.access_token || "";
+    try {
+      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+      if (refreshErr) throw refreshErr;
+      token = refreshed.session?.access_token || "";
+      expiresAtMs = refreshed.session?.expires_at ? refreshed.session.expires_at * 1000 : expiresAtMs;
+    } catch (e: any) {
+      if (token && expiresAtMs - now > 15_000 && isLikelyNetworkError(e)) {
+        return token;
+      }
+      throw e;
+    }
   }
 
   if (!token) throw new Error("No session. Please sign in again.");
 
-  const probe = await supabase.auth.getUser(token);
-  if (probe.error || !probe.data.user) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) throw refreshErr;
-    token = refreshed.session?.access_token || "";
+  try {
+    const probe = await supabase.auth.getUser(token);
+    if (probe.error || !probe.data.user) {
+      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+      if (refreshErr) throw refreshErr;
+      token = refreshed.session?.access_token || "";
+      expiresAtMs = refreshed.session?.expires_at ? refreshed.session.expires_at * 1000 : expiresAtMs;
+    }
+  } catch (e: any) {
+    if (!(token && expiresAtMs - now > 15_000 && isLikelyNetworkError(e))) {
+      throw e;
+    }
   }
 
   if (!token) throw new Error("No session. Please sign in again.");
@@ -99,10 +126,16 @@ export async function getSupabaseJwtOrThrow() {
     throw new Error("Invalid auth token format. Please sign in again.");
   }
 
-  // Final validation: do not return a token that Supabase Auth cannot verify.
-  const finalProbe = await supabase.auth.getUser(token);
-  if (finalProbe.error || !finalProbe.data.user) {
-    throw new Error("Session expired. Please sign in again.");
+  // Final validation: keep token on transient network errors, reject on real auth failures.
+  try {
+    const finalProbe = await supabase.auth.getUser(token);
+    if (finalProbe.error || !finalProbe.data.user) {
+      throw new Error("Session expired. Please sign in again.");
+    }
+  } catch (e: any) {
+    if (!(token && expiresAtMs - now > 15_000 && isLikelyNetworkError(e))) {
+      throw e;
+    }
   }
 
   return token;

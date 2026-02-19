@@ -13,6 +13,7 @@ import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { normalizeCountryName } from "@/utils/countryNames";
 import { getCountryFx } from "@/utils/fx";
 import { formatCurrency } from "@/utils/pricing";
 
@@ -348,7 +349,7 @@ export default function SellTab() {
 
         if (c) {
           if (!availabilityCountryName && !availabilityCountryCode) {
-            setAvailabilityCountryName(String(c.name || ""));
+            setAvailabilityCountryName(normalizeCountryName(c.name, c.code));
             setAvailabilityCountryCode(String(c.code || ""));
           }
           if (availabilityScope === "global") {
@@ -414,11 +415,12 @@ export default function SellTab() {
     setLocatingAvailability(true);
     try {
       const res = await getCurrentLocationWithGeocode();
+      const normalizedCountryName = normalizeCountryName(res.geo.country || "", res.geo.countryCode || "");
       setAvailabilityCenter({ lat: res.coords.lat, lng: res.coords.lng, label: res.label });
-      setAvailabilityCountryName(res.geo.country || "");
+      setAvailabilityCountryName(normalizedCountryName);
       setAvailabilityCountryCode(res.geo.countryCode || "");
-      setAvailabilityState(res.geo.region || "");
-      setAvailabilityCity(res.geo.city || "");
+      setAvailabilityState(res.geo.region || res.geo.subregion || res.geo.district || "");
+      setAvailabilityCity(res.geo.city || res.geo.town || res.geo.locality || res.geo.district || "");
       if (availabilityScope === "radius" && !availabilityRadiusKm.trim()) {
         setAvailabilityRadiusKm("10");
       }

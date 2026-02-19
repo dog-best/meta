@@ -23,6 +23,7 @@ import { friendlyMarketError } from "@/utils/marketUx";
 import { getCachedCountry, isNigeriaCountry, listingMatchesCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
 import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
+import { formatCountryLabel } from "@/utils/countryNames";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
@@ -173,9 +174,7 @@ export default function MarketHome() {
   const supabaseUrl = (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
   const locationLabel = useMemo(() => {
     if (!userCountry) return "Location unavailable";
-    const name = userCountry.name || userCountry.code || "Unknown";
-    const code = userCountry.code ? ` (${userCountry.code})` : "";
-    return `${name}${code}`;
+    return formatCountryLabel(userCountry.name, userCountry.code) || "Unknown location";
   }, [userCountry]);
 
   async function refreshCountry() {

@@ -1,5 +1,6 @@
 import * as Location from "expo-location";
 import { Platform } from "react-native";
+import { countryNameFromCode, normalizeCountryCode, normalizeCountryName } from "@/utils/countryNames";
 
 export type LocationCoords = { lat: number; lng: number };
 export type LocationGeo = {
@@ -8,6 +9,10 @@ export type LocationGeo = {
   city: string;
   postalCode: string;
   countryCode: string;
+  subregion?: string;
+  district?: string;
+  town?: string;
+  locality?: string;
 };
 
 export type AvailabilityJson = {
@@ -47,6 +52,7 @@ type IpApiCoPayload = {
   country_name?: string;
   country_code?: string;
   region?: string;
+  region_code?: string;
   city?: string;
   postal?: string;
   latitude?: number | string;
@@ -58,6 +64,7 @@ type IpWhoPayload = {
   country?: string;
   country_code?: string;
   region?: string;
+  region_code?: string;
   city?: string;
   postal?: string;
   latitude?: number | string;
@@ -67,6 +74,7 @@ type IpWhoPayload = {
 type IpInfoPayload = {
   country?: string;
   region?: string;
+  region_code?: string;
   city?: string;
   postal?: string;
   loc?: string;
@@ -110,23 +118,40 @@ function ipLookupToResult(input: {
   region?: string;
   city?: string;
   postalCode?: string;
+  subregion?: string;
+  district?: string;
+  town?: string;
+  locality?: string;
   lat?: number;
   lng?: number;
 }) {
+  const directCode = normalizeCountryCode(input.countryCode);
+  const inferredCode = !directCode && /^[A-Za-z]{2,3}$/.test(String(input.country || ""))
+    ? normalizeCountryCode(input.country)
+    : "";
+  const countryCode = directCode || inferredCode;
+  const countryName = normalizeCountryName(input.country, countryCode);
+
   const coords = {
     lat: Number.isFinite(input.lat) ? Number(input.lat) : NaN,
     lng: Number.isFinite(input.lng) ? Number(input.lng) : NaN,
   };
 
   const geo: LocationGeo = {
-    country: String(input.country || ""),
-    countryCode: String(input.countryCode || "").toUpperCase(),
+    country: String(countryName || ""),
+    countryCode,
     region: String(input.region || ""),
     city: String(input.city || ""),
     postalCode: String(input.postalCode || ""),
+    subregion: String(input.subregion || ""),
+    district: String(input.district || ""),
+    town: String(input.town || ""),
+    locality: String(input.locality || ""),
   };
 
-  const label = buildLabel([geo.city, geo.region, geo.country]) || fallbackLabel(coords);
+  const label =
+    buildLabel([geo.city || geo.town || geo.locality, geo.region || geo.subregion || geo.district, geo.country]) ||
+    fallbackLabel(coords);
   return { coords, geo, label };
 }
 
@@ -183,7 +208,8 @@ async function fetchIpLocation(): Promise<IpLookupResult | null> {
       const payload = (await res.json()) as IpInfoPayload;
       const loc = parseIpInfoLoc(payload.loc);
       const out = ipLookupToResult({
-        countryCode: payload.country,
+        countryCode: normalizeCountryCode(payload.country),
+        country: countryNameFromCode(payload.country),
         region: payload.region,
         city: payload.city,
         postalCode: payload.postal,
@@ -204,7 +230,8 @@ async function fetchIpLocation(): Promise<IpLookupResult | null> {
     if (res.ok) {
       const payload = (await res.json()) as CountryIsPayload;
       const out = ipLookupToResult({
-        countryCode: String(payload.country || "").toUpperCase(),
+        countryCode: normalizeCountryCode(payload.country),
+        country: countryNameFromCode(payload.country),
       });
       if (out.geo.countryCode) return out;
     }
@@ -251,6 +278,10 @@ export async function getCurrentLocationWithGeocode(opts?: GeocodeOptions) {
       city: "",
       postalCode: "",
       countryCode: "",
+      subregion: "",
+      district: "",
+      town: "",
+      locality: "",
     };
 
     let label = fallbackLabel(coords);
@@ -263,16 +294,28 @@ export async function getCurrentLocationWithGeocode(opts?: GeocodeOptions) {
 
       const first = res?.[0];
       if (first) {
+        const countryCode = normalizeCountryCode(first.isoCountryCode ?? "");
+        const countryName = normalizeCountryName(first.country ?? "", countryCode);
+        const city = first.city ?? first.subregion ?? first.district ?? first.name ?? "";
+        const subregion = first.subregion ?? "";
+        const district = first.district ?? "";
+        const town = first.city ?? first.name ?? "";
+        const locality = first.name ?? first.street ?? "";
+
         geo = {
-          country: first.country ?? "",
+          country: countryName,
           region: first.region ?? "",
-          city: first.city ?? first.subregion ?? first.district ?? "",
+          city,
           postalCode: first.postalCode ?? "",
-          countryCode: first.isoCountryCode ?? "",
+          countryCode,
+          subregion,
+          district,
+          town,
+          locality,
         };
 
         const line1 = buildLabel([first.name, first.street]);
-        const line2 = buildLabel([geo.city, geo.region]);
+        const line2 = buildLabel([geo.city || geo.town, geo.region || geo.subregion || geo.district]);
         const line3 = buildLabel([geo.country]);
         label = buildLabel([line1, line2, line3]) || fallbackLabel(coords);
       }
@@ -306,15 +349,20 @@ export function formatAvailabilitySummary(availability: AvailabilityJson | null 
       return list ? `Continents: ${list}${note}` : `Continents only${note}`;
     }
     case "country": {
-      const country = availability.country?.name || availability.country?.code || "Selected country";
+      const country =
+        normalizeCountryName(availability.country?.name, availability.country?.code) ||
+        normalizeCountryCode(availability.country?.code) ||
+        "Selected country";
       return `Country: ${country}${note}`;
     }
     case "state": {
-      const parts = [availability.state, availability.country?.name || availability.country?.code].filter(Boolean);
+      const country = normalizeCountryName(availability.country?.name, availability.country?.code) || availability.country?.code;
+      const parts = [availability.state, country].filter(Boolean);
       return `State: ${parts.join(", ") || "Selected state"}${note}`;
     }
     case "city": {
-      const parts = [availability.city, availability.state, availability.country?.name || availability.country?.code].filter(Boolean);
+      const country = normalizeCountryName(availability.country?.name, availability.country?.code) || availability.country?.code;
+      const parts = [availability.city, availability.state, country].filter(Boolean);
       return `City: ${parts.join(", ") || "Selected city"}${note}`;
     }
     case "radius": {

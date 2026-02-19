@@ -1,15 +1,16 @@
-import { supabase } from "@/services/supabase";
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
+
+import { supabase } from "@/services/supabase";
 
 type UploadParams = {
   bucket: string;
-  path: string; // e.g. `${userId}/logo/logo_${Date.now()}.jpg`
+  path: string;
   localUri: string;
   contentType?: string;
-  upsert?: boolean; // ✅ optional, won't break existing call sites
+  upsert?: boolean;
 };
 
-// ---------------- TIMEOUT WRAPPER ----------------
 function withTimeout<T>(p: Promise<T>, ms: number, label = "Operation") {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
@@ -23,10 +24,9 @@ function withTimeout<T>(p: Promise<T>, ms: number, label = "Operation") {
   });
 }
 
-// Pure JS base64 decoder (no atob / no extra packages)
 function base64ToUint8Array(base64: string) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let str = base64.replace(/=+$/, "");
+  const str = base64.replace(/=+$/, "");
   const bytesLength = (str.length * 3) >> 2;
   const bytes = new Uint8Array(bytesLength);
 
@@ -49,40 +49,58 @@ function base64ToUint8Array(base64: string) {
   return bytes.slice(0, p);
 }
 
-async function readFileAsBytes(localUri: string) {
-  // Reading large files can hang sometimes; give it a timeout too.
+function shouldReadViaFetch(localUri: string) {
+  if (Platform.OS === "web") return true;
+  return /^(https?:\/\/|blob:|data:)/i.test(String(localUri || ""));
+}
+
+async function readFileAsBytesViaFetch(localUri: string) {
+  const res = await withTimeout(fetch(localUri, { cache: "no-store" }), 30_000, "Reading file");
+  if (!res.ok) {
+    throw new Error(`Reading file failed (HTTP ${res.status})`);
+  }
+  const buf = await withTimeout(res.arrayBuffer(), 30_000, "Reading file bytes");
+  return new Uint8Array(buf);
+}
+
+async function readFileAsBytesViaFileSystem(localUri: string) {
   const base64 = await withTimeout(
     FileSystem.readAsStringAsync(localUri, {
-      encoding: "base64" as any, // ✅ works even when EncodingType is missing
+      encoding: "base64" as any,
     }),
-    30000,
+    30_000,
     "Reading file",
   );
-
   return base64ToUint8Array(base64);
+}
+
+async function readFileAsBytes(localUri: string) {
+  if (shouldReadViaFetch(localUri)) {
+    try {
+      return await readFileAsBytesViaFetch(localUri);
+    } catch (e) {
+      if (Platform.OS === "web") throw e;
+      // Fallback for native if URI can still be read by FileSystem.
+    }
+  }
+  return readFileAsBytesViaFileSystem(localUri);
 }
 
 export async function uploadToSupabaseStorage(params: UploadParams) {
   const { bucket, path, localUri, contentType = "image/jpeg", upsert = true } = params;
 
-  // Ensure session exists so Storage request includes JWT
-  const { data: sess, error: sessErr } = await withTimeout(
-    supabase.auth.getSession(),
-    15000,
-    "Auth session check",
-  );
+  const { data: sess, error: sessErr } = await withTimeout(supabase.auth.getSession(), 15_000, "Auth session check");
   if (sessErr) throw sessErr;
   if (!sess.session) throw new Error("No session. Please sign in again.");
 
   const bytes = await readFileAsBytes(localUri);
 
-  // Storage uploads can be slow on mobile networks; allow 2 minutes
   const uploadPromise = supabase.storage.from(bucket).upload(path, bytes, {
     contentType,
     upsert,
   });
 
-  const { error: uploadErr } = await withTimeout(uploadPromise, 120000, "Storage upload");
+  const { error: uploadErr } = await withTimeout(uploadPromise, 120_000, "Storage upload");
   if (uploadErr) throw uploadErr;
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
@@ -95,5 +113,5 @@ export async function uploadImageToSupabase(params: UploadParams): Promise<strin
   return publicUrl;
 }
 
-// Backward-compatible alias
 export const uploadListingImage = uploadImageToSupabase;
+

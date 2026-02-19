@@ -44,6 +44,7 @@ import {
 import { supabase } from "@/services/supabase";
 import { getRpcUrlForChain } from "@/utils/aaWallet";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { formatCountryLabel } from "@/utils/countryNames";
 import { friendlyMarketError } from "@/utils/marketUx";
 
 const ABI = [
@@ -265,7 +266,7 @@ export default function MarketWallet() {
   const total = useMemo(() => Number(usdc || 0) + Number(usdt || 0), [usdc, usdt]);
   const locationText = useMemo(() => {
     if (!country) return "Location unavailable";
-    return [country.city, country.region, country.name || country.code].filter(Boolean).join(", ");
+    return [country.city, country.region, formatCountryLabel(country.name, country.code)].filter(Boolean).join(", ");
   }, [country]);
 
   const modeTitle = walletMode === "base_smart" ? "Base Smart Account" : "WalletConnect";

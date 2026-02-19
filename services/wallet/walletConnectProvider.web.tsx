@@ -23,6 +23,9 @@ type RuntimeModules = {
   useAppKitProvider: any;
   WagmiAdapter: any;
   networks: any;
+  injected: any;
+  coinbaseWallet: any;
+  walletConnect: any;
   QueryClient: any;
   QueryClientProvider: any;
   WagmiProvider: any;
@@ -49,6 +52,7 @@ function loadRuntime(): RuntimeModules | null {
     const networksPkg = require("@reown/appkit/networks");
     const queryPkg = require("@tanstack/react-query");
     const wagmiPkg = require("wagmi");
+    const wagmiConnectorsPkg = require("wagmi/connectors");
 
     runtime = {
       createAppKit: reownReactCore.createAppKit,
@@ -57,6 +61,9 @@ function loadRuntime(): RuntimeModules | null {
       useAppKitProvider: reownControllersReact.useAppKitProvider,
       WagmiAdapter: adapterPkg.WagmiAdapter,
       networks: networksPkg,
+      injected: wagmiConnectorsPkg.injected,
+      coinbaseWallet: wagmiConnectorsPkg.coinbaseWallet,
+      walletConnect: wagmiConnectorsPkg.walletConnect,
       QueryClient: queryPkg.QueryClient,
       QueryClientProvider: queryPkg.QueryClientProvider,
       WagmiProvider: wagmiPkg.WagmiProvider,
@@ -84,21 +91,44 @@ function ensureInitialized() {
   if (!rt) return;
 
   const networks = getNetworks(rt);
+  const runtimeMetadata = {
+    ...metadata,
+    url: canUseBrowserRuntime() ? window.location.origin : metadata.url,
+  };
+
+  const connectors = [
+    typeof rt.injected === "function" ? rt.injected({ shimDisconnect: true }) : null,
+    typeof rt.coinbaseWallet === "function"
+      ? rt.coinbaseWallet({ appName: runtimeMetadata.name })
+      : null,
+    typeof rt.walletConnect === "function"
+      ? rt.walletConnect({ projectId, metadata: runtimeMetadata, showQrModal: false })
+      : null,
+  ].filter(Boolean);
 
   adapter = new rt.WagmiAdapter({
     projectId,
     networks,
+    connectors: connectors.length ? connectors : undefined,
+    ssr: false,
   });
 
   rt.createAppKit({
     adapters: [adapter],
     projectId,
-    metadata,
+    metadata: runtimeMetadata,
     networks,
     defaultNetwork: rt.networks.baseSepolia,
     enableCoinbase: false,
+    allWallets: true,
+    enableWallets: true,
     features: {
       analytics: false,
+      send: false,
+      receive: false,
+      legalCheckbox: false,
+      collapseWallets: false,
+      connectMethodsOrder: ["wallet"],
     },
   });
 
@@ -122,7 +152,11 @@ function SessionBinder({ rt }: { rt: RuntimeModules }) {
     if (!open) return;
     setWalletConnectRuntime({
       openModal: async () => {
-        await Promise.resolve(open());
+        try {
+          await Promise.resolve(open({ view: "Connect" }));
+        } catch {
+          await Promise.resolve(open());
+        }
       },
     });
   }, [open]);
