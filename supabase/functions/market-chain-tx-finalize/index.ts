@@ -3,6 +3,10 @@ import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supab
 
 type EventType = "DEPOSIT" | "RELEASE" | "REFUND";
 
+function isHexHash(v?: string | null) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || "").trim());
+}
+
 async function rpcCall(rpcUrl: string, method: string, params: unknown[]) {
   const res = await fetch(rpcUrl, {
     method: "POST",
@@ -38,7 +42,7 @@ Deno.serve(async (req) => {
   const chain = String(body?.chain ?? "");
 
   if (!order_id) return bad("order_id required");
-  if (!tx_hash.startsWith("0x")) return bad("tx_hash required");
+  if (!isHexHash(tx_hash)) return bad("tx_hash required");
   if (!(["DEPOSIT", "RELEASE", "REFUND"] as string[]).includes(event_type)) return bad("event_type must be DEPOSIT, RELEASE or REFUND");
 
   const { data: order, error: orderErr } = await admin
@@ -92,18 +96,31 @@ Deno.serve(async (req) => {
 
   const { data: esc } = await admin
     .from("market_crypto_escrows")
-    .select("order_id,buyer_wallet,seller_wallet,amount_units,amount_raw")
+    .select("order_id,buyer_wallet,seller_wallet,escrow_address,amount_units,amount_raw")
     .eq("order_id", order_id)
     .maybeSingle();
 
   if (!esc) return bad("Crypto escrow mapping missing");
 
+  let fromWallet: string | null = null;
+  let toWallet: string | null = null;
+  if (event_type === "DEPOSIT") {
+    fromWallet = esc.buyer_wallet ?? null;
+    toWallet = esc.escrow_address ?? null;
+  } else if (event_type === "RELEASE") {
+    fromWallet = esc.escrow_address ?? null;
+    toWallet = esc.seller_wallet ?? null;
+  } else if (event_type === "REFUND") {
+    fromWallet = esc.escrow_address ?? null;
+    toWallet = esc.buyer_wallet ?? null;
+  }
+
   await admin.rpc("market_set_crypto_intent", {
     p_order_id: order_id,
     p_intent_type: event_type,
     p_status: "CONFIRMED",
-    p_from_wallet: esc.buyer_wallet,
-    p_to_wallet: esc.seller_wallet,
+    p_from_wallet: fromWallet,
+    p_to_wallet: toWallet,
     p_amount_units: Number(esc.amount_units ?? 0),
     p_amount_raw: esc.amount_raw ?? null,
     p_tx_hash: tx_hash,

@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
 
   const { data: esc, error: escErr } = await admin
     .from("market_crypto_escrows")
-    .select("order_id,buyer_wallet,seller_wallet,amount_units,amount_raw")
+    .select("order_id,buyer_wallet,seller_wallet,escrow_address,amount_units,amount_raw")
     .eq("order_id", order_id)
     .maybeSingle();
 
@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
     p_intent_type: "DEPOSIT",
     p_status: "SUBMITTED",
     p_from_wallet: esc.buyer_wallet,
-    p_to_wallet: esc.seller_wallet,
+    p_to_wallet: esc.escrow_address ?? null,
     p_amount_units: Number(esc.amount_units ?? 0),
     p_amount_raw: esc.amount_raw ?? null,
     p_tx_hash: tx_hash || null,

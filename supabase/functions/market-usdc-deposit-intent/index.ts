@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     p_intent_type: "DEPOSIT",
     p_status: "CREATED",
     p_from_wallet: buyerAddr,
-    p_to_wallet: sellerAddr,
+    p_to_wallet: cfg.escrow_address,
     p_amount_units: amountUnits,
     p_amount_raw: amountRaw,
     p_tx_hash: null,

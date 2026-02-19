@@ -59,10 +59,28 @@ type TxRow = {
   status: string;
   chain: string;
   tx_hash: string | null;
+  from_wallet?: string | null;
+  to_wallet?: string | null;
 };
 
 function isAddress(v?: string | null) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
+
+function lowerHex(v?: string | null) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function shouldShowTxForAddress(tx: TxRow, addr: string) {
+  const who = lowerHex(addr);
+  if (!who) return false;
+  const from = lowerHex(tx.from_wallet);
+  const to = lowerHex(tx.to_wallet);
+  const mineFrom = from === who;
+  const mineTo = to === who;
+  const kind = String(tx.intent_type || "").toUpperCase();
+  if (kind === "DEPOSIT") return mineFrom;
+  return mineFrom || mineTo;
 }
 
 function fmt(v: string) {
@@ -198,12 +216,13 @@ export default function MarketWallet() {
       setTxLoading(true);
       const { data, error } = await supabase
         .from("market_crypto_intents")
-        .select("id,created_at,intent_type,status,chain,tx_hash")
+        .select("id,created_at,intent_type,status,chain,tx_hash,from_wallet,to_wallet")
         .or(`from_wallet.eq.${addr},to_wallet.eq.${addr}`)
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) throw error;
-      setTxs((data as TxRow[]) || []);
+      const rows = ((data as TxRow[]) || []).filter((row) => shouldShowTxForAddress(row, addr));
+      setTxs(rows);
     } catch {
       setTxs([]);
     } finally {

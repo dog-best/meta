@@ -27,6 +27,72 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isHexHash(v?: string | null) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || "").trim());
+}
+
+function normalizeHexHash(v?: string | null) {
+  const value = String(v || "").trim();
+  return isHexHash(value) ? value : "";
+}
+
+async function hashLooksLikeOnchainTx(chain: MarketChainConfig, hash: string) {
+  const h = normalizeHexHash(hash);
+  if (!h) return false;
+  const rpcUrl = String(chain.rpc_url || "").trim();
+  if (!rpcUrl) return false;
+
+  try {
+    const publicClient = createPublicClient({ transport: http(rpcUrl) });
+    try {
+      const receipt = await publicClient.getTransactionReceipt({ hash: h as `0x${string}` });
+      if (receipt) return true;
+    } catch {
+      // fall through
+    }
+    try {
+      const requestAny = publicClient.request as any;
+      const tx = await requestAny({
+        method: "eth_getTransactionByHash" as any,
+        params: [h as `0x${string}`],
+      });
+      if (String(tx?.hash || "").toLowerCase() === h.toLowerCase()) return true;
+    } catch {
+      // ignore
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
+}
+
+async function resolveSubmittedHashes(chain: MarketChainConfig, sendResult: any) {
+  const hashCandidate = normalizeHexHash(String(sendResult?.hash ?? ""));
+  const txFromResult = normalizeHexHash(String(sendResult?.transactionHash ?? ""));
+  const userOpFromResult = normalizeHexHash(String(sendResult?.userOpHash ?? sendResult?.userOperationHash ?? ""));
+
+  let txHash = txFromResult;
+  let userOpHash = userOpFromResult;
+
+  if (!txHash && hashCandidate) {
+    if (await hashLooksLikeOnchainTx(chain, hashCandidate)) {
+      txHash = hashCandidate;
+    } else if (!userOpHash) {
+      userOpHash = hashCandidate;
+    }
+  }
+
+  if (!txHash && userOpHash) {
+    txHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
+  }
+  if (!txHash && userOpHash) {
+    txHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
+  }
+
+  return { txHash: normalizeHexHash(txHash), userOpHash: normalizeHexHash(userOpHash) };
+}
+
 type ChainFinalizeEvent = "DEPOSIT" | "RELEASE" | "REFUND";
 
 function expectedOrderStatusForEvent(eventType: ChainFinalizeEvent) {
@@ -43,7 +109,7 @@ async function resolveUserOpToTxHash(
   intervalMs = 3000,
 ) {
   const op = String(userOpHash || "").trim();
-  if (!op.startsWith("0x")) return "";
+  if (!isHexHash(op)) return "";
   const rpcUrl = String(chain.rpc_url || "").trim();
   if (!rpcUrl) return "";
 
@@ -62,7 +128,7 @@ async function resolveUserOpToTxHash(
             params: [op as `0x${string}`],
           }));
         const tx = String(receipt?.receipt?.transactionHash || receipt?.transactionHash || "");
-        if (tx.startsWith("0x")) return tx;
+        if (isHexHash(tx)) return tx;
       } catch {
         // keep retrying until attempts exhausted
       }
@@ -134,7 +200,7 @@ async function settleOrderFromTx(
   intervalMs = 5000,
 ) {
   const want = expectedOrderStatusForEvent(eventType);
-  if (!txHash.startsWith("0x")) return false;
+  if (!isHexHash(txHash)) return false;
 
   for (let i = 0; i < maxAttempts; i++) {
     const rpcRes = await tryFinalizeOnce(orderId, chainName, txHash, eventType);
@@ -162,7 +228,7 @@ async function settleOrderFromTx(
 async function runReindexFallback(orderId: string, txHash?: string | null) {
   try {
     const body: Record<string, unknown> = { order_id: orderId };
-    if (String(txHash || "").startsWith("0x")) body.tx_hash = txHash;
+    if (isHexHash(txHash)) body.tx_hash = txHash;
     const { data, error } = await supabase.functions.invoke("market-escrow-reindex", {
       body,
     });
@@ -190,8 +256,8 @@ async function readLatestDepositIntent(orderId: string) {
   const txHash = String((data as any)?.tx_hash || "").trim();
   const userOpHash = String((data as any)?.client_reference || "").trim();
   return {
-    txHash: txHash.startsWith("0x") ? txHash : "",
-    userOpHash: userOpHash.startsWith("0x") ? userOpHash : "",
+    txHash: normalizeHexHash(txHash),
+    userOpHash: normalizeHexHash(userOpHash),
     chain: String((data as any)?.chain || "").trim(),
     status: String((data as any)?.status || "").trim(),
   };
@@ -203,9 +269,17 @@ async function ensureDepositSettled(
   txHash: string,
   userOpHash: string,
 ) {
-  let resolvedTxHash = String(txHash || "").trim();
-  let resolvedUserOpHash = String(userOpHash || "").trim();
+  let resolvedTxHash = normalizeHexHash(txHash);
+  let resolvedUserOpHash = normalizeHexHash(userOpHash);
   let recoveredFinalizeAttempted = false;
+
+  if (resolvedTxHash && !resolvedUserOpHash) {
+    const maybeResolved = await resolveUserOpToTxHash(chain, resolvedTxHash, 5, 2000);
+    if (isHexHash(maybeResolved)) {
+      resolvedUserOpHash = resolvedTxHash;
+      resolvedTxHash = maybeResolved;
+    }
+  }
 
   if (!resolvedTxHash && resolvedUserOpHash) {
     resolvedTxHash = await resolveUserOpToTxHash(chain, resolvedUserOpHash, 50, 3000);
@@ -596,26 +670,22 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     data: depositData,
   });
 
-  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
-  const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
+  const txHash = normalizeHexHash(String((sendResult as any)?.transactionHash ?? ""));
+  const userOpHash = normalizeHexHash(String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? ""));
+  const rawHash = normalizeHexHash(String((sendResult as any)?.hash ?? ""));
   console.log("[Checkout] deposit send result", {
-    tx_hash: txHash || null,
+    tx_hash: txHash || rawHash || null,
     user_op_hash: userOpHash || null,
     chain: chain.chain,
   });
 
-  // Try to resolve tx hash when wallet middleware returns an operation hash first.
-  let resolvedTxHash = txHash;
-  if (!resolvedTxHash && userOpHash) {
-    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
-  }
-  // One more pass for slower bundlers.
-  if (!resolvedTxHash && userOpHash) {
-    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
-  }
+  // Some AA wallets return userOp hash in `hash`. Classify and resolve before persisting.
+  const resolvedHashes = await resolveSubmittedHashes(chain, sendResult);
+  let resolvedTxHash = resolvedHashes.txHash;
+  const resolvedUserOpHash = resolvedHashes.userOpHash || userOpHash || (resolvedTxHash ? "" : rawHash);
   console.log("[Checkout] deposit resolved tx", {
     resolved_tx_hash: resolvedTxHash || null,
-    user_op_hash: userOpHash || null,
+    user_op_hash: resolvedUserOpHash || null,
   });
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
@@ -630,7 +700,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
   // Ensure intent is marked submitted even if we only have a userOp hash.
   const intentUpdate: any = { status: "SUBMITTED" };
   if (resolvedTxHash) intentUpdate.tx_hash = resolvedTxHash;
-  if (userOpHash) intentUpdate.client_reference = userOpHash;
+  if (resolvedUserOpHash) intentUpdate.client_reference = resolvedUserOpHash;
   const { error: intentUpdErr } = await supabase
     .from("market_crypto_intents")
     .update(intentUpdate)
@@ -641,7 +711,7 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     console.log("[Checkout] deposit intent update blocked", intentUpdErr.message);
   }
 
-  const settle = await ensureDepositSettled(orderId, chain, resolvedTxHash, userOpHash);
+  const settle = await ensureDepositSettled(orderId, chain, resolvedTxHash, resolvedUserOpHash);
   if (settle.txHash && !resolvedTxHash) {
     resolvedTxHash = settle.txHash;
   }
@@ -649,11 +719,11 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     console.log("[Checkout] deposit not settled within wait window", {
       order_id: orderId,
       tx_hash: resolvedTxHash || null,
-      user_op_hash: userOpHash || null,
+      user_op_hash: resolvedUserOpHash || null,
     });
   }
 
-  return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: resolvedTxHash || null, user_op_hash: userOpHash || null };
+  return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: resolvedTxHash || null, user_op_hash: resolvedUserOpHash || null };
 }
 
 export async function payUsdcForOrder(orderId: string) {
@@ -706,16 +776,11 @@ export async function releaseUsdcForOrder(orderId: string) {
     data,
   });
 
-  const txHash = String((sendResult as any)?.hash ?? (sendResult as any)?.transactionHash ?? "");
-  const userOpHash = String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? "");
-
-  let resolvedTxHash = txHash;
-  if (!resolvedTxHash && userOpHash) {
-    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 30, 3000);
-  }
-  if (!resolvedTxHash && userOpHash) {
-    resolvedTxHash = await resolveUserOpToTxHash(chain, userOpHash, 20, 5000);
-  }
+  const userOpHash = normalizeHexHash(String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? ""));
+  const rawHash = normalizeHexHash(String((sendResult as any)?.hash ?? ""));
+  const resolvedHashes = await resolveSubmittedHashes(chain, sendResult);
+  let resolvedTxHash = resolvedHashes.txHash;
+  const resolvedUserOpHash = resolvedHashes.userOpHash || userOpHash || (resolvedTxHash ? "" : rawHash);
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
     p_order_id: orderId,
@@ -727,7 +792,7 @@ export async function releaseUsdcForOrder(orderId: string) {
   }
   const intentUpdate: any = { status: "SUBMITTED" };
   if (resolvedTxHash) intentUpdate.tx_hash = resolvedTxHash;
-  if (userOpHash) intentUpdate.client_reference = userOpHash;
+  if (resolvedUserOpHash) intentUpdate.client_reference = resolvedUserOpHash;
   const { error: intentUpdErr } = await supabase
     .from("market_crypto_intents")
     .update(intentUpdate)
@@ -741,5 +806,5 @@ export async function releaseUsdcForOrder(orderId: string) {
     await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "RELEASE", 36, 5000);
   }
 
-  return { ...intent, tx_hash: resolvedTxHash || null, user_op_hash: userOpHash || null };
+  return { ...intent, tx_hash: resolvedTxHash || null, user_op_hash: resolvedUserOpHash || null };
 }

@@ -38,6 +38,10 @@ function isAddress(v?: string | null) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
 }
 
+function isHexHash(v?: string | null) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || "").trim());
+}
+
 async function invokeCheckoutWallet(orderId: string) {
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
     const timeout = new Promise<never>((_, reject) =>
@@ -603,7 +607,7 @@ export default function Checkout() {
   async function showStableDepositResult(symbol: "USDC" | "USDT", res: any) {
     const txHash = String(res?.tx_hash || "").trim();
     const userOpHash = String(res?.user_op_hash || "").trim();
-    if (txHash.startsWith("0x")) {
+    if (isHexHash(txHash)) {
       Alert.alert(
         "Deposit submitted",
         `Your ${symbol} deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
@@ -617,7 +621,7 @@ export default function Checkout() {
       );
       return;
     }
-    if (userOpHash.startsWith("0x")) {
+    if (isHexHash(userOpHash)) {
       Alert.alert(
         "Deposit submitted",
         `Your ${symbol} deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
@@ -625,7 +629,7 @@ export default function Checkout() {
           { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
           {
             text: "Continue",
-            onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(userOpHash)}` as any) as any),
+            onPress: () => router.replace((`/market/order/${oid}?uo=${encodeURIComponent(userOpHash)}` as any) as any),
           },
         ],
       );

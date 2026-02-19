@@ -148,6 +148,10 @@ function money(currency: string | null, amt: any) {
   return `₦${n.toLocaleString()}`;
 }
 
+function isHexHash(v?: string | null) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(v || "").trim());
+}
+
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string; label: string }> = {
     CREATED: { bg: "rgba(255,255,255,0.08)", fg: "#E5E7EB", label: "Created" },
@@ -221,9 +225,10 @@ async function safeLoadListing(listingId: string) {
 
 export default function OrderDetails() {
   const insets = useSafeAreaInsets();
-  const { orderId, tx } = useLocalSearchParams<{ orderId: string; tx?: string }>();
+  const { orderId, tx, uo } = useLocalSearchParams<{ orderId: string; tx?: string; uo?: string }>();
   const oid = useMemo(() => String(orderId || ""), [orderId]);
   const navTx = useMemo(() => String(tx || "").trim(), [tx]);
+  const navUserOp = useMemo(() => String(uo || "").trim(), [uo]);
 
   const [loading, setLoading] = useState(true);
   const [me, setMe] = useState<string | null>(null);
@@ -273,17 +278,19 @@ export default function OrderDetails() {
       (i) =>
         String(i.intent_type || "").toUpperCase() === "DEPOSIT" &&
         ["SUBMITTED", "CONFIRMED"].includes(String(i.status || "").toUpperCase()),
-    ) || navTx.startsWith("0x");
-  }, [intents, navTx]);
+    ) || isHexHash(latestDepositIntent?.tx_hash) || isHexHash(latestDepositIntent?.client_reference) || isHexHash(navTx) || isHexHash(navUserOp);
+  }, [intents, latestDepositIntent?.tx_hash, latestDepositIntent?.client_reference, navTx, navUserOp]);
   const defaultDepositTx = useMemo(() => {
-    const v = String(
-      latestDepositIntent?.tx_hash ||
-        latestDepositIntent?.client_reference ||
-        navTx ||
-        ""
-    ).trim();
-    return v.startsWith("0x") ? v : "";
-  }, [latestDepositIntent?.tx_hash, latestDepositIntent?.client_reference, navTx]);
+    const v = String(latestDepositIntent?.tx_hash || navTx || "").trim();
+    return isHexHash(v) ? v : "";
+  }, [latestDepositIntent?.tx_hash, navTx]);
+  const defaultDepositRef = useMemo(() => {
+    const v = String(latestDepositIntent?.client_reference || navUserOp || "").trim();
+    if (isHexHash(v)) return v;
+    if (!latestDepositIntent?.tx_hash && isHexHash(navTx)) return navTx;
+    return "";
+  }, [latestDepositIntent?.client_reference, latestDepositIntent?.tx_hash, navTx, navUserOp]);
+  const defaultDepositHash = defaultDepositTx || defaultDepositRef;
   // Note: `market_crypto_intents` can be temporarily empty (RLS, RPC not writing tx_hash, etc).
   // Resync must still be available for strict on-chain confirmation.
   const awaitingConfirmations =
@@ -418,9 +425,9 @@ export default function OrderDetails() {
 
   useEffect(() => {
     if (!awaitingConfirmations) return;
-    if (!defaultDepositTx) return;
+    if (!defaultDepositHash) return;
 
-    const key = `${order?.id || ""}:${defaultDepositTx}`;
+    const key = `${order?.id || ""}:${defaultDepositHash}`;
     if (autoReindexKeyRef.current === key) return;
     autoReindexKeyRef.current = key;
 
@@ -429,7 +436,7 @@ export default function OrderDetails() {
     }, 1200);
 
     return () => clearTimeout(timer);
-  }, [awaitingConfirmations, defaultDepositTx, order?.id]);
+  }, [awaitingConfirmations, defaultDepositHash, order?.id]);
 
   // Buttons conditions (your existing logic)
   const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
@@ -584,8 +591,9 @@ async function releaseFunds() {
     setBusy(true);
     setErr(null);
     try {
-      const txHash = (reindexTx || defaultDepositTx || "").trim();
-      if (!txHash) throw new Error("Enter a transaction hash.");
+      const txHash = (reindexTx || defaultDepositHash || "").trim();
+      if (!txHash) throw new Error("Enter a transaction hash or UserOp hash.");
+      if (!isHexHash(txHash)) throw new Error("Enter a valid transaction hash or UserOp hash.");
       // Client-side reindex: read tx receipt + logs directly, then apply via RPC.
       let { data: esc, error: escErr } = await supabase
         .from("market_crypto_escrows")
@@ -948,14 +956,19 @@ async function pickAndUpload(access: "preview" | "final") {
                     Tx: {defaultDepositTx}
                   </Text>
                 ) : null}
+                {!defaultDepositTx && defaultDepositRef ? (
+                  <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                    Reference: {defaultDepositRef}
+                  </Text>
+                ) : null}
                 <Pressable
                   onPress={() => {
                     if (awaitingConfirmations || canResyncDeposit) {
-                      if (!defaultDepositTx) {
+                      if (!defaultDepositHash) {
                         setReindexOpen(true);
                         return;
                       }
-                      setReindexTx(defaultDepositTx);
+                      setReindexTx(defaultDepositHash);
                       reindexDeposit();
                     } else {
                       load();
@@ -976,7 +989,7 @@ async function pickAndUpload(access: "preview" | "final") {
                 </Pressable>
                 <Pressable
                   onPress={() => {
-                    setReindexTx(defaultDepositTx);
+                    setReindexTx(defaultDepositHash);
                     setReindexOpen(true);
                   }}
                   disabled={busy}
@@ -1025,9 +1038,31 @@ async function pickAndUpload(access: "preview" | "final") {
                     </Pressable>
                   </View>
                 ) : null}
+                {!defaultDepositTx && defaultDepositRef ? (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                      Reference: {defaultDepositRef}
+                    </Text>
+                    <Pressable
+                      onPress={() => Clipboard.setStringAsync(defaultDepositRef)}
+                      style={{
+                        marginTop: 8,
+                        alignSelf: "flex-start",
+                        borderRadius: 10,
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        backgroundColor: "rgba(255,255,255,0.08)",
+                        borderWidth: 1,
+                        borderColor: "rgba(255,255,255,0.12)",
+                      }}
+                    >
+                      <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>Copy hash</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 <Pressable
                   onPress={() => {
-                    setReindexTx(defaultDepositTx);
+                    setReindexTx(defaultDepositHash);
                     setReindexOpen(true);
                   }}
                   disabled={busy}
@@ -1641,7 +1676,7 @@ async function pickAndUpload(access: "preview" | "final") {
           <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" }}>
             <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Resync deposit</Text>
             <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
-              Paste the deposit transaction hash to force a resync.
+              Paste the deposit transaction hash (or UserOp hash) to force a resync.
             </Text>
             <TextInput
               value={reindexTx}
