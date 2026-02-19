@@ -363,7 +363,7 @@ export default function MarketWallet() {
             >
               <View style={s.engineInner}>
                 <Ionicons name="sparkles-outline" size={14} color="#2DD4BF" />
-                <Text style={s.engineText}>Smart Wallet</Text>
+                <Text style={s.engineText}>Base Wallet</Text>
               </View>
             </Pressable>
           </View>
