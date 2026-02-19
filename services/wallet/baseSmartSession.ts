@@ -1,21 +1,21 @@
-export type WalletConnectRuntime = {
+export type BaseSmartRuntime = {
   openModal?: () => Promise<void> | void;
   disconnect?: () => Promise<void> | void;
   switchNetwork?: (caipNetwork: string) => Promise<void> | void;
 };
 
-export type WalletConnectSession = {
+export type BaseSmartSession = {
   connected: boolean;
   address: string;
   chainId: number;
   provider: any | null;
   providerType: string;
-  runtime: WalletConnectRuntime;
+  runtime: BaseSmartRuntime;
 };
 
-const EMPTY_RUNTIME: WalletConnectRuntime = {};
+const EMPTY_RUNTIME: BaseSmartRuntime = {};
 
-let state: WalletConnectSession = {
+let state: BaseSmartSession = {
   connected: false,
   address: "",
   chainId: 0,
@@ -24,14 +24,14 @@ let state: WalletConnectSession = {
   runtime: EMPTY_RUNTIME,
 };
 
-const listeners = new Set<(next: WalletConnectSession) => void>();
+const listeners = new Set<(next: BaseSmartSession) => void>();
 
 function isAddress(value: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(value || ""));
 }
 
 function notify() {
-  const snapshot = getWalletConnectSession();
+  const snapshot = getBaseSmartSession();
   listeners.forEach((listener) => {
     try {
       listener(snapshot);
@@ -41,16 +41,21 @@ function notify() {
   });
 }
 
-export function parseChainIdFromCaipAddress(caipAddress?: string | null) {
-  const raw = String(caipAddress || "").trim();
-  // CAIP address format for EVM: eip155:<chainId>:<address>
-  const m = /^eip155:(\d+):0x[a-fA-F0-9]{40}$/.exec(raw);
-  if (!m) return 0;
-  const n = Number(m[1]);
-  return Number.isFinite(n) ? n : 0;
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function setWalletConnectRuntime(runtime: WalletConnectRuntime) {
+async function waitForOpenModal(timeoutMs: number) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const open = getBaseSmartSession().runtime.openModal;
+    if (open) return open;
+    await sleep(120);
+  }
+  return null;
+}
+
+export function setBaseSmartRuntime(runtime: BaseSmartRuntime) {
   state = {
     ...state,
     runtime: runtime || EMPTY_RUNTIME,
@@ -58,7 +63,7 @@ export function setWalletConnectRuntime(runtime: WalletConnectRuntime) {
   notify();
 }
 
-export function setWalletConnectConnection(input: {
+export function setBaseSmartConnection(input: {
   connected?: boolean;
   address?: string | null;
   chainId?: number | null;
@@ -75,13 +80,13 @@ export function setWalletConnectConnection(input: {
     address: nextConnected ? nextAddress : "",
     chainId: Number.isFinite(nextChainId) ? nextChainId : 0,
     provider: input.provider ?? null,
-    providerType: String(input.providerType || ""),
+    providerType: String(input.providerType || "base_smart"),
   };
 
   notify();
 }
 
-export function clearWalletConnectConnection() {
+export function clearBaseSmartConnection() {
   state = {
     ...state,
     connected: false,
@@ -93,7 +98,7 @@ export function clearWalletConnectConnection() {
   notify();
 }
 
-export function getWalletConnectSession(): WalletConnectSession {
+export function getBaseSmartSession(): BaseSmartSession {
   return {
     connected: state.connected,
     address: state.address,
@@ -108,33 +113,19 @@ export function getWalletConnectSession(): WalletConnectSession {
   };
 }
 
-export function subscribeWalletConnectSession(listener: (next: WalletConnectSession) => void) {
+export function subscribeBaseSmartSession(listener: (next: BaseSmartSession) => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForOpenModal(timeoutMs: number) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const open = getWalletConnectSession().runtime.openModal;
-    if (open) return open;
-    await sleep(120);
-  }
-  return null;
-}
-
-type ConnectWalletConnectOpts = {
+type ConnectBaseSmartOpts = {
   forceModal?: boolean;
 };
 
-export async function connectWalletConnectEvm(timeoutMs = 60_000, opts?: ConnectWalletConnectOpts) {
-  const current = getWalletConnectSession();
+export async function connectBaseSmartEvm(timeoutMs = 60_000, opts?: ConnectBaseSmartOpts) {
+  const current = getBaseSmartSession();
   const forceModal = opts?.forceModal === true;
   if (!forceModal && current.connected && current.address) return current;
 
@@ -144,32 +135,32 @@ export async function connectWalletConnectEvm(timeoutMs = 60_000, opts?: Connect
   }
 
   if (!openModal) {
-    throw new Error("WalletConnect is still initializing. Retry in a moment.");
+    throw new Error("Base Smart Account is still initializing. Retry in a moment.");
   }
 
   await Promise.resolve(openModal());
 
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const next = getWalletConnectSession();
+    const next = getBaseSmartSession();
     if (next.connected && next.address) return next;
     await sleep(200);
   }
 
-  throw new Error("Wallet connection timed out. Open WalletConnect and approve the session.");
+  throw new Error("Base Smart Account connection timed out. Approve the connection and retry.");
 }
 
-export async function getWalletConnectEip155Provider(timeoutMs = 60_000) {
-  let connected = await connectWalletConnectEvm(timeoutMs);
+export async function getBaseSmartEip155Provider(timeoutMs = 60_000) {
+  let connected = await connectBaseSmartEvm(timeoutMs);
   let provider = connected.provider;
 
   if (!provider || typeof provider.request !== "function") {
-    const runtime = getWalletConnectSession().runtime;
+    const runtime = getBaseSmartSession().runtime;
     if (runtime.openModal) {
       await Promise.resolve(runtime.openModal());
       const started = Date.now();
       while (Date.now() - started < timeoutMs) {
-        connected = getWalletConnectSession();
+        connected = getBaseSmartSession();
         provider = connected.provider;
         if (connected.connected && connected.address && provider && typeof provider.request === "function") {
           break;
@@ -180,7 +171,7 @@ export async function getWalletConnectEip155Provider(timeoutMs = 60_000) {
   }
 
   if (!provider || typeof provider.request !== "function") {
-    throw new Error("Connected wallet provider is unavailable. Reconnect your wallet and try again.");
+    throw new Error("Base Smart provider is unavailable. Reconnect and try again.");
   }
 
   return {

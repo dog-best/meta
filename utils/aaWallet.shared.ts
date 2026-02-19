@@ -1,7 +1,7 @@
 import { createWalletClient, custom } from "viem";
 import { arbitrum, base, baseSepolia, mainnet, optimism, polygon, sepolia } from "viem/chains";
 
-import { connectWalletConnectEvm, getWalletConnectEip155Provider, getWalletConnectSession } from "@/services/wallet/walletConnectSession";
+import { connectActiveWalletEvm, getActiveWalletEip155Provider, getActiveWalletSession } from "@/services/wallet/activeWalletSession";
 
 export type MarketChainConfig = {
   chain: string;
@@ -92,7 +92,7 @@ async function getCurrentProviderChainId(provider: any) {
     // ignore provider read errors
   }
 
-  const session = getWalletConnectSession();
+  const session = getActiveWalletSession();
   return normalizeChainId(session.chainId);
 }
 
@@ -103,7 +103,7 @@ async function ensureProviderChain(chain: any, chainConfig: MarketChainConfig, p
   const current = await getCurrentProviderChainId(provider);
   if (current === chainId) return;
 
-  const session = getWalletConnectSession();
+  const session = getActiveWalletSession();
   if (session.runtime.switchNetwork) {
     try {
       await Promise.resolve(session.runtime.switchNetwork(`eip155:${chainId}`));
@@ -167,12 +167,12 @@ export function normalizePrivateKey(rawKey: string): `0x${string}` {
 }
 
 export async function getOrCreatePrivateKey(_scope?: string | null): Promise<`0x${string}`> {
-  await connectWalletConnectEvm();
+  await connectActiveWalletEvm();
   return EXTERNAL_WALLET_SENTINEL_PK;
 }
 
 export async function getStoredPrivateKey(_scope?: string | null): Promise<`0x${string}` | null> {
-  const session = getWalletConnectSession();
+  const session = getActiveWalletSession();
   return session.connected && isAddress(session.address) ? EXTERNAL_WALLET_SENTINEL_PK : null;
 }
 
@@ -193,7 +193,7 @@ export async function regenerateWalletKey(_scope?: string | null) {
 }
 
 export async function getScopedWalletAddress(_scope?: string | null) {
-  const connected = await connectWalletConnectEvm();
+  const connected = await connectActiveWalletEvm();
   if (!isAddress(connected.address)) throw new Error("Wallet connection failed. No valid address returned.");
   return connected.address as `0x${string}`;
 }
@@ -210,7 +210,7 @@ async function ensureConnectedProviderAndAddress(chainConfig: MarketChainConfig)
     throw new Error("Missing RPC URL or Alchemy API key.");
   }
 
-  const { provider, address } = await getWalletConnectEip155Provider();
+  const { provider, address } = await getActiveWalletEip155Provider();
   if (!isAddress(address)) {
     throw new Error("Wallet connection failed. No valid wallet address returned.");
   }
@@ -280,7 +280,7 @@ export async function getSmartAccount(chainConfig: MarketChainConfig, _scope?: s
 }
 
 export async function deriveSmartAccountAddress(_chainConfig: MarketChainConfig, _privateKey: `0x${string}`) {
-  const connected = await connectWalletConnectEvm();
+  const connected = await connectActiveWalletEvm();
   if (!isAddress(connected.address)) {
     throw new Error("Connect wallet first.");
   }
@@ -292,7 +292,7 @@ export async function getWalletPrivateKey(_scope?: string | null) {
 }
 
 export async function importPrivateKey(_scope: string | null | undefined, _rawKey: string) {
-  const connected = await connectWalletConnectEvm();
+  const connected = await connectActiveWalletEvm();
   if (!isAddress(connected.address)) {
     throw new Error("Wallet connection failed. No valid wallet address returned.");
   }

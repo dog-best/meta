@@ -39,8 +39,9 @@ if (projectId) {
     metadata,
     networks,
     defaultNetwork: baseSepolia,
+    enableCoinbase: false,
     features: {
-      analytics: true,
+      analytics: false,
     },
   });
 }

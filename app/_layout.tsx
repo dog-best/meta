@@ -15,7 +15,7 @@ import {
 import "../global.css";
 import { useAuth } from "../hooks/authentication/useAuth";
 import { initMobileAds } from "@/services/ads/initMobileAds";
-import { WalletConnectProvider } from "@/services/wallet/walletConnectProvider";
+import { ExternalWalletProvider } from "@/services/wallet/externalWalletProvider";
 
 import * as Application from "expo-application";
 import * as Linking from "expo-linking";
@@ -246,10 +246,10 @@ export default function RootLayout() {
   }
 
   return (
-    <WalletConnectProvider>
+    <ExternalWalletProvider>
       <Slot />
       <StatusBar style="light" />
-    </WalletConnectProvider>
+    </ExternalWalletProvider>
   );
 }
 

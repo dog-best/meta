@@ -43,17 +43,18 @@ function loadRuntime(): RuntimeModules | null {
   if (runtime) return runtime;
 
   try {
-    const reownReact = require("@reown/appkit/react");
+    const reownReactCore = require("@reown/appkit/react-core");
+    const reownControllersReact = require("@reown/appkit-controllers/react");
     const adapterPkg = require("@reown/appkit-adapter-wagmi");
     const networksPkg = require("@reown/appkit/networks");
     const queryPkg = require("@tanstack/react-query");
     const wagmiPkg = require("wagmi");
 
     runtime = {
-      createAppKit: reownReact.createAppKit,
-      useAppKit: reownReact.useAppKit,
-      useAppKitAccount: reownReact.useAppKitAccount,
-      useAppKitProvider: reownReact.useAppKitProvider,
+      createAppKit: reownReactCore.createAppKit,
+      useAppKit: reownReactCore.useAppKit,
+      useAppKitAccount: reownReactCore.useAppKitAccount,
+      useAppKitProvider: reownControllersReact.useAppKitProvider,
       WagmiAdapter: adapterPkg.WagmiAdapter,
       networks: networksPkg,
       QueryClient: queryPkg.QueryClient,
@@ -95,8 +96,9 @@ function ensureInitialized() {
     metadata,
     networks,
     defaultNetwork: rt.networks.baseSepolia,
+    enableCoinbase: false,
     features: {
-      analytics: true,
+      analytics: false,
     },
   });
 
@@ -117,9 +119,9 @@ function SessionBinder({ rt }: { rt: RuntimeModules }) {
   const walletProvider = providerState?.walletProvider ?? providerState?.provider ?? null;
 
   useEffect(() => {
+    if (!open) return;
     setWalletConnectRuntime({
       openModal: async () => {
-        if (!open) throw new Error("WalletConnect modal is unavailable.");
         await Promise.resolve(open());
       },
     });

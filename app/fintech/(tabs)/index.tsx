@@ -451,7 +451,7 @@ export default function Dashboard() {
         <View style={styles.bigRow}>
           <BigCard
             title="Crypto"
-            sub="WalletConnect - USDC/USDT"
+            sub="Smart Account / WalletConnect"
             onPress={onGoCrypto}
             icon={<MaterialCommunityIcons name="bitcoin" size={34} color="#fff" />}
           />

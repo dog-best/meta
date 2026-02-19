@@ -30,10 +30,17 @@ import {
   replaceSavedWalletWithDevice,
 } from "@/services/market/usdcCheckout";
 import {
-  connectWalletConnectEvm,
-  getWalletConnectSession,
-  subscribeWalletConnectSession,
-} from "@/services/wallet/walletConnectSession";
+  connectActiveWalletEvm,
+  getActiveWalletSession,
+  subscribeActiveWalletSession,
+} from "@/services/wallet/activeWalletSession";
+import {
+  getWalletModeSync,
+  isBaseSmartSupported,
+  setWalletMode as setPreferredWalletMode,
+  subscribeWalletMode,
+  type WalletMode,
+} from "@/services/wallet/walletMode";
 import { supabase } from "@/services/supabase";
 import { getRpcUrlForChain } from "@/utils/aaWallet";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
@@ -95,6 +102,7 @@ export default function MarketWallet() {
   const [chainErr, setChainErr] = useState<string | null>(null);
   const [walletAddr, setWalletAddr] = useState("");
   const [connectedAddr, setConnectedAddr] = useState("");
+  const [walletMode, setWalletMode] = useState<WalletMode>(getWalletModeSync());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [usdc, setUsdc] = useState("0");
@@ -115,15 +123,17 @@ export default function MarketWallet() {
     })();
 
     const sync = () => {
-      const s = getWalletConnectSession();
+      const s = getActiveWalletSession();
       setConnectedAddr(s.connected ? String(s.address || "") : "");
     };
     sync();
 
-    const unsub = subscribeWalletConnectSession(sync);
+    const unsub = subscribeActiveWalletSession(sync);
+    const unsubMode = subscribeWalletMode((next) => setWalletMode(next));
     return () => {
       mounted = false;
       unsub();
+      unsubMode();
     };
   }, []);
 
@@ -219,11 +229,11 @@ export default function MarketWallet() {
     setErr(null);
     setBusy(true);
     try {
-      await connectWalletConnectEvm(60_000, { forceModal: true });
+      await connectActiveWalletEvm(60_000, { forceModal: true });
       const out = await ensureWalletAddressOnChain(chain);
       const addr = await refresh(chain, out.address);
       await loadTx(addr);
-      Alert.alert("Wallet connected", "WalletConnect wallet linked.");
+      Alert.alert("Wallet connected", "Wallet linked successfully.");
     } catch (e: any) {
       setErr(friendlyMarketError(e, "Unable to connect wallet."));
     } finally {
@@ -236,7 +246,7 @@ export default function MarketWallet() {
     setErr(null);
     setBusy(true);
     try {
-      await connectWalletConnectEvm(60_000, { forceModal: true });
+      await connectActiveWalletEvm(60_000, { forceModal: true });
       const out = await replaceSavedWalletWithDevice(chain);
       const addr = await refresh(chain, out.address);
       await loadTx(addr);
@@ -254,18 +264,24 @@ export default function MarketWallet() {
     return [country.city, country.region, country.name || country.code].filter(Boolean).join(", ");
   }, [country]);
 
+  const modeTitle = walletMode === "base_smart" ? "Base Smart Account" : "WalletConnect";
+  const modeSubtitle =
+    walletMode === "base_smart"
+      ? "Use Base smart account signing and approvals."
+      : "Use WalletConnect wallet chooser and session signing.";
+
   return (
     <LinearGradient colors={["#140C36", "#05040B"]} style={{ flex: 1 }}>
       <View style={[s.wrap, wide && s.wrapWide]}>
         <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28 }}>
           <View style={{ paddingTop: 14 }}>
-            <AppHeader title="Crypto Wallet" subtitle="WalletConnect non-custodial wallet" />
+            <AppHeader title="Crypto Wallet" subtitle="Choose WalletConnect or Base Smart Account" />
           </View>
 
           <View style={s.hero}>
             <View style={{ flex: 1 }}>
-              <Text style={s.heroTitle}>WalletConnect Interface</Text>
-              <Text style={s.heroSub}>Tap connect to open wallet chooser and link your wallet.</Text>
+              <Text style={s.heroTitle}>{modeTitle}</Text>
+              <Text style={s.heroSub}>{modeSubtitle}</Text>
             </View>
             <View style={s.heroMeta}>
               <View style={[s.statePill, connectedAddr ? s.okPill : s.idlePill]}>
@@ -279,6 +295,48 @@ export default function MarketWallet() {
             </View>
             <Text style={s.locationText}>{locationText}</Text>
           </View>
+
+          <View style={s.engineRow}>
+            <Pressable
+              onPress={async () => {
+                try {
+                  setErr(null);
+                  await setPreferredWalletMode("walletconnect");
+                } catch (e: any) {
+                  setErr(friendlyMarketError(e, "Unable to switch wallet mode."));
+                }
+              }}
+              style={[
+                s.engineBtn,
+                walletMode === "walletconnect" ? s.engineBtnActivePurple : undefined,
+              ]}
+            >
+              <Text style={s.engineText}>WalletConnect</Text>
+            </Pressable>
+            <Pressable
+              onPress={async () => {
+                try {
+                  setErr(null);
+                  await setPreferredWalletMode("base_smart");
+                } catch (e: any) {
+                  setErr(friendlyMarketError(e, "Unable to switch wallet mode."));
+                }
+              }}
+              disabled={!isBaseSmartSupported()}
+              style={[
+                s.engineBtn,
+                walletMode === "base_smart" ? s.engineBtnActiveGreen : undefined,
+                !isBaseSmartSupported() ? s.dimmed : undefined,
+              ]}
+            >
+              <Text style={s.engineText}>Base Smart</Text>
+            </Pressable>
+          </View>
+          {!isBaseSmartSupported() ? (
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.58)", fontSize: 11 }}>
+              Base Smart is currently available on web.
+            </Text>
+          ) : null}
 
           {!!err ? <Text style={s.err}>{err}</Text> : null}
           {!!chainErr ? <Text style={s.err}>{chainErr}</Text> : null}
@@ -448,6 +506,26 @@ const s = StyleSheet.create({
   stateText: { color: "#fff", fontWeight: "900", fontSize: 11 },
   link: { color: "#ECFEFF", fontWeight: "900", fontSize: 12 },
   locationText: { marginTop: 8, color: "rgba(255,255,255,0.62)", fontSize: 11 },
+  engineRow: { marginTop: 10, flexDirection: "row", gap: 8 },
+  engineBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  engineBtnActivePurple: {
+    borderColor: "rgba(124,58,237,0.55)",
+    backgroundColor: "rgba(124,58,237,0.22)",
+  },
+  engineBtnActiveGreen: {
+    borderColor: "rgba(45,212,191,0.55)",
+    backgroundColor: "rgba(45,212,191,0.22)",
+  },
+  engineText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   grid: { marginTop: 12, gap: 12 },
   gridWide: { flexDirection: "row", alignItems: "flex-start" },
   col: { flex: 1, minWidth: 0 },

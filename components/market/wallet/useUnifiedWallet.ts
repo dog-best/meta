@@ -5,7 +5,8 @@ import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain, type MarketChainConfig } from "@/services/market/chainConfig";
 import { fetchMyStockPortfolio } from "@/services/market/stocks";
 import { ensureWalletAddressOnChain, getMyWalletForChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
-import { connectWalletConnectEvm, getWalletConnectSession, subscribeWalletConnectSession } from "@/services/wallet/walletConnectSession";
+import { connectActiveWalletEvm, getActiveWalletSession, subscribeActiveWalletSession } from "@/services/wallet/activeWalletSession";
+import { getWalletModeSync, isBaseSmartSupported, setWalletMode, subscribeWalletMode, type WalletMode } from "@/services/wallet/walletMode";
 import { getRpcUrlForChain } from "@/utils/aaWallet";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -44,6 +45,7 @@ export function useUnifiedWallet() {
   const [chainErr, setChainErr] = useState<string | null>(null);
   const [savedAddress, setSavedAddress] = useState("");
   const [connectedAddress, setConnectedAddress] = useState("");
+  const [walletMode, setWalletModeState] = useState<WalletMode>(getWalletModeSync());
   const [usdcBalance, setUsdcBalance] = useState("0");
   const [usdtBalance, setUsdtBalance] = useState("0");
   const [portfolioTotalUsdc, setPortfolioTotalUsdc] = useState(0);
@@ -198,7 +200,7 @@ export function useUnifiedWallet() {
     setBusy(true);
     setError(null);
     try {
-      await connectWalletConnectEvm(60_000, { forceModal: true });
+      await connectActiveWalletEvm(60_000, { forceModal: true });
       const out = await ensureWalletAddressOnChain(chain);
       await refreshChainBalances(chain, out.address);
     } catch (e: any) {
@@ -213,7 +215,7 @@ export function useUnifiedWallet() {
     setBusy(true);
     setError(null);
     try {
-      await connectWalletConnectEvm(60_000, { forceModal: true });
+      await connectActiveWalletEvm(60_000, { forceModal: true });
       const out = await replaceSavedWalletWithDevice(chain);
       await refreshChainBalances(chain, out.address);
     } catch (e: any) {
@@ -235,13 +237,29 @@ export function useUnifiedWallet() {
 
   useEffect(() => {
     const sync = () => {
-      const s = getWalletConnectSession();
+      const s = getActiveWalletSession();
       setConnectedAddress(s.connected ? String(s.address || "") : "");
     };
     sync();
-    const unsub = subscribeWalletConnectSession(sync);
+    const unsub = subscribeActiveWalletSession(sync);
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    const unsub = subscribeWalletMode((next) => setWalletModeState(next));
+    return () => unsub();
+  }, []);
+
+  const changeWalletMode = useCallback(async (next: WalletMode) => {
+    setError(null);
+    try {
+      await setWalletMode(next);
+      setWalletModeState(next);
+      await refreshChainBalances();
+    } catch (e: any) {
+      setError(friendlyMarketError(e, "Unable to change wallet mode."));
+    }
+  }, [refreshChainBalances]);
 
   useEffect(() => {
     loadChains();
@@ -256,6 +274,8 @@ export function useUnifiedWallet() {
     ngnBalance: Number(ngnBalance || 0),
     country,
     isNigeria,
+    walletMode,
+    baseSmartSupported: isBaseSmartSupported(),
     chains,
     chain,
     savedAddress,
@@ -268,6 +288,7 @@ export function useUnifiedWallet() {
     overallUsdApprox,
     connectWallet,
     useConnectedWallet,
+    setWalletMode: changeWalletMode,
     refreshAll,
     refreshCountry,
     selectChain,

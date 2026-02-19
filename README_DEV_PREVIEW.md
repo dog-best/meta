@@ -1,44 +1,23 @@
-# Fintech (BestCity Pay) - MVP Dev Preview
+# BestCity Market - Dev Preview
 
-This repo is an Expo Router app wired to Supabase (Auth + DB) and Supabase Edge Functions for Paystack + bill payments.
+## Start Commands
 
-## 1) Requirements
-- Node.js LTS
-- Expo CLI (`npm i -g expo`)
+Use the command style for your shell:
 
-## 2) Configure env
-Copy `.env.example` to `.env` and fill:
-- `EXPO_PUBLIC_SUPABASE_URL`
-- `EXPO_PUBLIC_SUPABASE_ANON_KEY`
-
-Do **not** put service role keys or Paystack secret keys in the mobile app.
-Those must live in Supabase Edge Functions secrets.
-
-## 3) Install & run
+- Bash/WSL:
 ```bash
-npm install
-npm run start
+export NODE_OPTIONS=--max-old-space-size=8192
+npx expo start --clear --tunnel
 ```
 
-## 4) Supabase Edge Functions
-Edge functions live in `supabase/functions/*`.
-Deploy them from your Supabase project:
-```bash
-supabase functions deploy --no-verify-jwt
+- PowerShell:
+```powershell
+$env:NODE_OPTIONS="--max-old-space-size=8192"
+npx expo start --clear --tunnel
 ```
-(Use your preferred deploy flow; this repo keeps the function sources.)
 
-## 5) MVP flow to demo
-1. Register / Login
-2. Wallet tab:
-   - Fund wallet (shows Dedicated Virtual Account details from `paystack-dva`)
-   - Recent transactions (ledger)
-3. Bills:
-   - Airtime / Data / Electricity (Paystack-backed)
+## Wallet Engine
 
-## 6) Database reference exports
-For review and versioning, DB exports are stored in `supabase/supabase_project/`:
-- `rpc_functions.sql`
-- `rls_policies.txt`
-- `triggers.txt`
-- `tables_columns.txt`
+- `WalletConnect` and `Base Smart` are both available in the unified wallet UI.
+- Transactions (checkout, stock create, stock trade) follow the selected wallet engine automatically.
+- On native builds, WalletConnect is the supported path by default.

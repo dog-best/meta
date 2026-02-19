@@ -130,6 +130,51 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
 
       <View style={{ marginTop: 10 }}>
         <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 11, marginBottom: 8 }}>
+          Wallet Engine
+        </Text>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            onPress={() => wallet.setWalletMode("walletconnect")}
+            style={{
+              flex: 1,
+              borderRadius: 12,
+              height: 38,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: wallet.walletMode === "walletconnect" ? "rgba(124,58,237,0.55)" : "rgba(255,255,255,0.12)",
+              backgroundColor: wallet.walletMode === "walletconnect" ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.05)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>WalletConnect</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => wallet.setWalletMode("base_smart")}
+            disabled={!wallet.baseSmartSupported}
+            style={{
+              flex: 1,
+              borderRadius: 12,
+              height: 38,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: wallet.walletMode === "base_smart" ? "rgba(45,212,191,0.55)" : "rgba(255,255,255,0.12)",
+              backgroundColor: wallet.walletMode === "base_smart" ? "rgba(45,212,191,0.2)" : "rgba(255,255,255,0.05)",
+              opacity: wallet.baseSmartSupported ? 1 : 0.55,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Base Smart</Text>
+          </Pressable>
+        </View>
+        {!wallet.baseSmartSupported ? (
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+            Base Smart Account is currently available on web.
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={{ marginTop: 10 }}>
+        <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800", fontSize: 11, marginBottom: 8 }}>
           Network
         </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
