@@ -92,7 +92,7 @@ export default function MarketSearchScreen() {
         return;
       }
 
-      const userCountry = await resolveUserCountry({ prompt: true });
+      const userCountry = await resolveUserCountry({ prompt: true, refresh: true, ipOnly: true });
       const restrictToCrypto = !isNigeriaCountry(userCountry?.code || userCountry?.name);
       // ✅ Search by title / description / sub_category
       // If you later add FTS, we replace this with a proper text search.

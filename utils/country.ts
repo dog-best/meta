@@ -108,9 +108,13 @@ async function resolveCountryFromProfile(): Promise<UserCountry> {
   }
 }
 
-async function resolveCountryFromLocation(): Promise<UserCountry> {
+async function resolveCountryFromLocation(opts?: { ipOnly?: boolean }): Promise<UserCountry> {
   try {
-    const loc = await getCurrentLocationWithGeocode({ preferIpOnWeb: true, preferIp: true });
+    const loc = await getCurrentLocationWithGeocode({
+      preferIpOnWeb: true,
+      preferIp: true,
+      ipOnly: Boolean(opts?.ipOnly),
+    });
     const code = norm(loc?.geo?.countryCode).toUpperCase();
     const name = norm(loc?.geo?.country);
     const region = norm(loc?.geo?.region);
@@ -201,17 +205,18 @@ export async function setCachedCountry(
   }
 }
 
-export async function resolveUserCountry(opts?: { prompt?: boolean; refresh?: boolean }) {
+export async function resolveUserCountry(opts?: { prompt?: boolean; refresh?: boolean; ipOnly?: boolean }) {
   const cached = await getCachedCountry();
   const shouldRefresh = Boolean(opts?.prompt || opts?.refresh);
   const preferLiveLocation = Boolean(opts?.prompt || opts?.refresh);
+  const strictIp = Boolean(opts?.ipOnly);
 
   if (!shouldRefresh && cached) {
     return await withContinent(cached);
   }
 
   if (shouldRefresh) {
-    const fromLocation = await resolveCountryFromLocation();
+    const fromLocation = await resolveCountryFromLocation({ ipOnly: strictIp });
     if (fromLocation) {
       await setCachedCountry(fromLocation.code, fromLocation.name, fromLocation);
       return fromLocation;

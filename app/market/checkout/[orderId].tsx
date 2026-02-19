@@ -5,22 +5,38 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
+import { createPublicClient, formatUnits, http } from "viem";
 
 import AppHeader from "@/components/common/AppHeader";
 import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { DeliveryGeo, availabilityMayMatch, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
-import { isWalletMismatchError, payUsdcForOrder, payUsdtForOrder, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
-import { getPreferredMarketChain } from "@/services/market/chainConfig";
+import { getMyWalletForChain, isWalletMismatchError, payUsdcForOrder, payUsdtForOrder, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
+import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain, type MarketChainConfig } from "@/services/market/chainConfig";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { getRpcUrlForChain } from "@/utils/aaWallet";
 
 const BG0 = "#05040B";
 const BG1 = "#0A0620";
-const PURPLE = "#7C3AED";
 
 // Real function names in your repo
 const RPC_CHECKOUT_WALLET = "market_checkout_wallet_rpc"; // NGN wallet escrow lock (SQL RPC)
+
+const ERC20_ABI = [
+  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+function isAddress(v?: string | null) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
+}
 
 async function invokeCheckoutWallet(orderId: string) {
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
@@ -81,8 +97,6 @@ function Pill({
   onPress: () => void;
   disabled?: boolean;
 }) {
-
-
   return (
     <Pressable
       disabled={!!disabled}
@@ -141,9 +155,17 @@ export default function Checkout() {
   const [contactEmail, setContactEmail] = useState("");
   const [contactNote, setContactNote] = useState("");
   const [savingContact, setSavingContact] = useState(false);
-  const [chain, setChain] = useState<{ chain: string } | null>(null);
+  const [chains, setChains] = useState<MarketChainConfig[]>([]);
+  const [chain, setChain] = useState<MarketChainConfig | null>(null);
+  const [walletAddress, setWalletAddress] = useState("");
+  const [ngnBalance, setNgnBalance] = useState(0);
+  const [usdcBalance, setUsdcBalance] = useState(0);
+  const [usdtBalance, setUsdtBalance] = useState(0);
+  const [fundingLoading, setFundingLoading] = useState(false);
   const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
+  const orderCurrency = String((order as any)?.currency ?? listingCurrency).toUpperCase();
+  const orderAmount = Number((order as any)?.amount ?? 0);
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
   const hasExplicitRoutes =
     typeof paymentOptions?.allow_ngn === "boolean" ||
@@ -161,6 +183,12 @@ export default function Checkout() {
   const allowUsdt = hasExplicitRoutes
     ? paymentOptions?.allow_usdt === true
     : listingCurrency === "USDT";
+  const ngnRequired = orderCurrency === "NGN" ? orderAmount : 0;
+  const ngnShortfall = allowNgn && ngnRequired > 0 ? Math.max(0, ngnRequired - ngnBalance) : 0;
+  const usdcRequired = orderCurrency === "USDC" ? orderAmount : 0;
+  const usdtRequired = orderCurrency === "USDT" ? orderAmount : 0;
+  const usdcShortfall = allowUsdc && usdcRequired > 0 ? Math.max(0, usdcRequired - usdcBalance) : 0;
+  const usdtShortfall = allowUsdt && usdtRequired > 0 ? Math.max(0, usdtRequired - usdtBalance) : 0;
 
   async function requireAuth() {
     const { data } = await supabase.auth.getUser();
@@ -170,6 +198,89 @@ export default function Checkout() {
       return null;
     }
     return user;
+  }
+
+  async function refreshFunding(selectedChain?: MarketChainConfig | null) {
+    const active = selectedChain ?? chain;
+    setFundingLoading(true);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const user = auth?.user;
+      if (!user) {
+        setNgnBalance(0);
+        setUsdcBalance(0);
+        setUsdtBalance(0);
+        setWalletAddress("");
+        return;
+      }
+
+      const { data: ngnWallet } = await supabase
+        .from("app_wallets_simple")
+        .select("balance")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      setNgnBalance(Number((ngnWallet as any)?.balance ?? 0));
+
+      if (!active) {
+        setUsdcBalance(0);
+        setUsdtBalance(0);
+        setWalletAddress("");
+        return;
+      }
+
+      const wallet = await getMyWalletForChain(active.chain).catch(() => null);
+      const addr = String((wallet as any)?.address || "").trim();
+      setWalletAddress(addr);
+      if (!isAddress(addr)) {
+        setUsdcBalance(0);
+        setUsdtBalance(0);
+        return;
+      }
+
+      const rpc = getRpcUrlForChain(active);
+      if (!rpc) {
+        setUsdcBalance(0);
+        setUsdtBalance(0);
+        return;
+      }
+
+      const client = createPublicClient({ transport: http(rpc) });
+      try {
+        if (isAddress(active.usdc_address)) {
+          const d = Number(await client.readContract({ address: active.usdc_address as `0x${string}`, abi: ERC20_ABI, functionName: "decimals" }));
+          const raw = await client.readContract({
+            address: active.usdc_address as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [addr as `0x${string}`],
+          });
+          setUsdcBalance(Number(formatUnits(raw as bigint, d)));
+        } else {
+          setUsdcBalance(0);
+        }
+      } catch {
+        setUsdcBalance(0);
+      }
+
+      try {
+        if (isAddress(active.usdt_address)) {
+          const d = Number(await client.readContract({ address: active.usdt_address as `0x${string}`, abi: ERC20_ABI, functionName: "decimals" }));
+          const raw = await client.readContract({
+            address: active.usdt_address as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "balanceOf",
+            args: [addr as `0x${string}`],
+          });
+          setUsdtBalance(Number(formatUnits(raw as bigint, d)));
+        } else {
+          setUsdtBalance(0);
+        }
+      } catch {
+        setUsdtBalance(0);
+      }
+    } finally {
+      setFundingLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -182,7 +293,7 @@ export default function Checkout() {
         {
           const first = await supabase
             .from("market_orders")
-            .select("id,listing_id,delivery_address,buyer_contact")
+            .select("id,listing_id,amount,currency,delivery_address,buyer_contact")
             .eq("id", oid)
             .maybeSingle();
           if (!first.error) {
@@ -190,7 +301,7 @@ export default function Checkout() {
           } else if (String(first.error.message || "").includes("buyer_contact")) {
             const fallback = await supabase
               .from("market_orders")
-              .select("id,listing_id,delivery_address")
+              .select("id,listing_id,amount,currency,delivery_address")
               .eq("id", oid)
               .maybeSingle();
             if (fallback.error) throw fallback.error;
@@ -230,8 +341,11 @@ export default function Checkout() {
       }
     })();
     (async () => {
-      const c = await getPreferredMarketChain().catch(() => null);
-      if (mounted) setChain(c);
+      const all = await fetchMarketChains().catch(() => []);
+      const preferred = await getPreferredMarketChain().catch(() => null);
+      if (!mounted) return;
+      setChains(all as MarketChainConfig[]);
+      setChain((preferred as MarketChainConfig | null) ?? ((all as MarketChainConfig[])[0] ?? null));
     })();
     (async () => {
       try {
@@ -245,6 +359,10 @@ export default function Checkout() {
       mounted = false;
     };
   }, [oid]);
+
+  useEffect(() => {
+    refreshFunding();
+  }, [chain?.chain, order?.id, order?.amount, order?.currency, userCountry?.code, userCountry?.name]);
 
   async function saveDeliveryGeo(geo: DeliveryGeo) {
     if (!oid) return;
@@ -328,6 +446,9 @@ export default function Checkout() {
     setErr(null);
     if (!oid) return setErr("Missing orderId");
     if (!allowNgn) return setErr("This listing does not accept NGN payments.");
+    if (ngnShortfall > 0) {
+      return setErr(`Insufficient NGN balance. Fund wallet with NGN ${ngnShortfall.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`);
+    }
     const user = await requireAuth();
     if (!user) return;
 
@@ -367,6 +488,9 @@ export default function Checkout() {
     setErr(null);
     if (!oid) return setErr("Missing orderId");
     if (!allowUsdc) return setErr("This listing does not accept USDC payments.");
+    if (usdcShortfall > 0) {
+      return setErr(`Insufficient USDC on selected network. Add ${usdcShortfall.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC and retry.`);
+    }
     const user = await requireAuth();
     if (!user) return;
 
@@ -423,6 +547,9 @@ export default function Checkout() {
     setErr(null);
     if (!oid) return setErr("Missing orderId");
     if (!allowUsdt) return setErr("This listing does not accept USDT payments.");
+    if (usdtShortfall > 0) {
+      return setErr(`Insufficient USDT on selected network. Add ${usdtShortfall.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDT and retry.`);
+    }
     const user = await requireAuth();
     if (!user) return;
 
@@ -537,6 +664,24 @@ export default function Checkout() {
               Choose how you want to pay for this order
             </Text>
           </View>
+        </View>
+
+        <View
+          style={{
+            borderRadius: 20,
+            padding: 14,
+            backgroundColor: "rgba(124,58,237,0.14)",
+            borderWidth: 1,
+            borderColor: "rgba(124,58,237,0.35)",
+          }}
+        >
+          <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 11 }}>ORDER AMOUNT</Text>
+          <Text style={{ marginTop: 4, color: "#fff", fontWeight: "900", fontSize: 22 }}>
+            {Number(orderAmount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} {orderCurrency || listingCurrency || "NGN"}
+          </Text>
+          <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+            Fund only appears when your selected payment wallet is insufficient.
+          </Text>
         </View>
 
         <View
@@ -737,10 +882,195 @@ export default function Checkout() {
               NGN payments are available only to Nigeria users. Please use USDC/USDT.
             </Text>
           ) : null}
-          {chain ? (
-            <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-              Network: {String(chain.chain).toUpperCase().replace("_", " ")}
+
+          <View
+            style={{
+              marginTop: 10,
+              borderRadius: 14,
+              padding: 10,
+              backgroundColor: "rgba(255,255,255,0.04)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.1)",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Available balances</Text>
+              <Pressable
+                onPress={() => refreshFunding()}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 10,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.12)",
+                  backgroundColor: "rgba(255,255,255,0.05)",
+                }}
+              >
+                <Ionicons name="refresh" size={14} color="#fff" />
+              </Pressable>
+            </View>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+              NGN {ngnBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
             </Text>
+            <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+              USDC {usdcBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            </Text>
+            <Text style={{ marginTop: 2, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+              USDT {usdtBalance.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+            </Text>
+            {walletAddress ? (
+              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                Saved wallet: {walletAddress}
+              </Text>
+            ) : null}
+            {fundingLoading ? (
+              <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <ActivityIndicator size="small" />
+                <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Refreshing balances...</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={{ marginTop: 10 }}>
+            <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>Select network</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+              {chains.map((c) => {
+                const selected = chain?.chain === c.chain;
+                return (
+                  <Pressable
+                    key={c.chain}
+                    disabled={!c.active}
+                    onPress={async () => {
+                      try {
+                        setErr(null);
+                        setChain(c);
+                        await setPreferredMarketChain(c.chain);
+                        await refreshFunding(c);
+                      } catch (e: any) {
+                        setErr(friendlyMarketError(e, "Unable to switch network."));
+                      }
+                    }}
+                    style={{
+                      marginRight: 8,
+                      borderRadius: 999,
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderWidth: 1,
+                      borderColor: selected ? "rgba(124,58,237,0.55)" : "rgba(255,255,255,0.12)",
+                      backgroundColor: selected ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.05)",
+                      opacity: c.active ? 1 : 0.5,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>
+                      {String(c.chain).toUpperCase().replace("_", " ")}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            {chain ? (
+              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.6)", fontSize: 11 }}>
+                Active network: {String(chain.chain).toUpperCase().replace("_", " ")}
+              </Text>
+            ) : null}
+          </View>
+
+          {allowNgn && ngnShortfall > 0 ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 16,
+                padding: 12,
+                backgroundColor: "rgba(251,191,36,0.12)",
+                borderWidth: 1,
+                borderColor: "rgba(251,191,36,0.4)",
+              }}
+            >
+              <Text style={{ color: "#FDE68A", fontWeight: "900", fontSize: 12 }}>
+                Insufficient NGN balance. Add NGN {ngnShortfall.toLocaleString(undefined, { maximumFractionDigits: 2 })} to continue.
+              </Text>
+              <Pressable
+                onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
+                style={{
+                  marginTop: 10,
+                  borderRadius: 12,
+                  height: 40,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(45,212,191,0.45)",
+                  backgroundColor: "rgba(45,212,191,0.18)",
+                }}
+              >
+                <Text style={{ color: "#ECFEFF", fontWeight: "900" }}>Fund NGN Wallet</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {allowUsdc && usdcRequired > 0 && usdcShortfall > 0 ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 16,
+                padding: 12,
+                backgroundColor: "rgba(251,191,36,0.12)",
+                borderWidth: 1,
+                borderColor: "rgba(251,191,36,0.4)",
+              }}
+            >
+              <Text style={{ color: "#FDE68A", fontWeight: "900", fontSize: 12 }}>
+                Insufficient USDC on selected network. Add {usdcShortfall.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDC.
+              </Text>
+              <Pressable
+                onPress={() => router.push("/market/wallet" as any)}
+                style={{
+                  marginTop: 10,
+                  borderRadius: 12,
+                  height: 40,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(124,58,237,0.5)",
+                  backgroundColor: "rgba(124,58,237,0.2)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Open Crypto Wallet</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {allowUsdt && usdtRequired > 0 && usdtShortfall > 0 ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 16,
+                padding: 12,
+                backgroundColor: "rgba(251,191,36,0.12)",
+                borderWidth: 1,
+                borderColor: "rgba(251,191,36,0.4)",
+              }}
+            >
+              <Text style={{ color: "#FDE68A", fontWeight: "900", fontSize: 12 }}>
+                Insufficient USDT on selected network. Add {usdtShortfall.toLocaleString(undefined, { maximumFractionDigits: 6 })} USDT.
+              </Text>
+              <Pressable
+                onPress={() => router.push("/market/wallet" as any)}
+                style={{
+                  marginTop: 10,
+                  borderRadius: 12,
+                  height: 40,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(124,58,237,0.5)",
+                  backgroundColor: "rgba(124,58,237,0.2)",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900" }}>Open Crypto Wallet</Text>
+              </Pressable>
+            </View>
           ) : null}
 
           {isNigeria ? (
@@ -749,7 +1079,7 @@ export default function Checkout() {
               title="Pay with NGN wallet"
               subtitle="Instant escrow lock from your in-app balance"
               onPress={payWithWallet}
-              disabled={busy || !allowNgn}
+              disabled={busy || fundingLoading || !allowNgn || ngnShortfall > 0}
             />
           ) : null}
 
@@ -758,7 +1088,7 @@ export default function Checkout() {
             title="Pay with USDC"
             subtitle="Approve + deposit into escrow using your connected wallet"
             onPress={payWithUsdc}
-            disabled={busy || !allowUsdc}
+            disabled={busy || fundingLoading || !allowUsdc || usdcShortfall > 0}
           />
 
           <Pill
@@ -766,7 +1096,7 @@ export default function Checkout() {
             title="Pay with USDT"
             subtitle="Approve + deposit into escrow using your connected wallet"
             onPress={payWithUsdt}
-            disabled={busy || !allowUsdt}
+            disabled={busy || fundingLoading || !allowUsdt || usdtShortfall > 0}
           />
 
           {!allowNgn || !allowUsdc || !allowUsdt ? (

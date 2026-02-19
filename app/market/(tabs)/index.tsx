@@ -182,7 +182,7 @@ export default function MarketHome() {
     setLocatingCountry(true);
     setCountryErr(null);
     try {
-      const c = await resolveUserCountry({ prompt: true, refresh: true });
+      const c = await resolveUserCountry({ prompt: true, refresh: true, ipOnly: true });
       setUserCountry(c);
       if (!c) {
         setCountryErr("Location not detected. Use Global to view all listings.");

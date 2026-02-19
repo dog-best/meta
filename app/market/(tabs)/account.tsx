@@ -2,24 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import * as Clipboard from "expo-clipboard";
-import { createPublicClient, encodeFunctionData, formatUnits, http } from "viem";
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
 
 import AppHeader from "@/components/common/AppHeader";
-import { getPreferredMarketChain, fetchMarketChains, setPreferredMarketChain } from "@/services/market/chainConfig";
-import { getMyWalletForChain, ensureSmartAccount, ensureWalletAddressOnChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
-import { requireLocalAuth } from "@/utils/secureAuth";
+import UnifiedWalletPanel from "@/components/market/wallet/UnifiedWalletPanel";
+import { useUnifiedWallet } from "@/components/market/wallet/useUnifiedWallet";
 import { supabase } from "@/services/supabase";
-import {
-  deriveSmartAccountAddress,
-  getRpcUrlForChain,
-  getStoredPrivateKey,
-  hasWalletBackup,
-  importPrivateKey,
-} from "@/utils/aaWallet";
 import { friendlyMarketError } from "@/utils/marketUx";
-import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 type SellerProfile = {
   user_id: string;
@@ -33,955 +22,340 @@ type SellerProfile = {
   active?: boolean;
 };
 
-const BG0 = "#05040B";
-const BG1 = "#0A0620";
-const PURPLE = "#7C3AED";
-const CARD = "rgba(255,255,255,0.05)";
-const BORDER = "rgba(255,255,255,0.09)";
-const MUTED = "rgba(255,255,255,0.62)";
-const BLUE = "#3B82F6";
-const USDT_BY_CHAIN: Record<string, string | undefined> = {
-  base_sepolia: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA,
-  polygon_amoy: process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON_AMOY,
-  arbitrum_sepolia: process.env.EXPO_PUBLIC_USDT_ADDRESS_ARBITRUM_SEPOLIA,
-  bnb_testnet: process.env.EXPO_PUBLIC_USDT_ADDRESS_BNB_TESTNET,
-  base: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE,
-  arbitrum: process.env.EXPO_PUBLIC_USDT_ADDRESS_ARBITRUM,
-  polygon: process.env.EXPO_PUBLIC_USDT_ADDRESS_POLYGON,
-  optimism: process.env.EXPO_PUBLIC_USDT_ADDRESS_OPTIMISM,
-  ethereum: process.env.EXPO_PUBLIC_USDT_ADDRESS_ETHEREUM,
-  bnb: process.env.EXPO_PUBLIC_USDT_ADDRESS_BNB,
+type StatState = {
+  activeListings: number;
+  allListings: number;
+  orders: number;
 };
 
-const ERC20_ABI = [
-  {
-    type: "function",
-    name: "balanceOf",
-    stateMutability: "view",
-    inputs: [{ name: "owner", type: "address" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "transfer",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-  },
-] as const;
+const BG0 = "#05040B";
+const BG1 = "#101D31";
+const CARD = "rgba(255,255,255,0.06)";
+const BORDER = "rgba(255,255,255,0.11)";
 
 function publicUrl(bucket: string, path?: string | null) {
   if (!path) return null;
   return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
-function getUsdtAddress(chainName?: string | null) {
-  if (!chainName) return "";
-  return USDT_BY_CHAIN[chainName] ?? "";
-}
-
-function isAddress(v?: string | null) {
-  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ""));
-}
-
-function Badge({ text, tone }: { text: string; tone: "purple" | "green" | "gray" }) {
-  const map = {
-    purple: { bg: "rgba(124,58,237,0.18)", bd: "rgba(124,58,237,0.40)", fg: "rgba(221,214,254,0.95)" },
-    green: { bg: "rgba(34,197,94,0.14)", bd: "rgba(34,197,94,0.40)", fg: "rgba(187,247,208,0.95)" },
-    gray: { bg: "rgba(255,255,255,0.06)", bd: "rgba(255,255,255,0.12)", fg: "rgba(255,255,255,0.85)" },
-  }[tone];
-
-  return (
-    <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: map.bg, borderWidth: 1, borderColor: map.bd }}>
-      <Text style={{ color: map.fg, fontWeight: "900", fontSize: 12 }}>{text}</Text>
-    </View>
-  );
-}
-
-function CardBox({ children }: { children: React.ReactNode }) {
-  return (
-    <View style={{ marginTop: 12, borderRadius: 22, padding: 14, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER }}>
-      {children}
-    </View>
-  );
-}
-
-function ActionBtn({
-  label,
+function CommandTile({
   icon,
+  title,
+  subtitle,
   onPress,
-  variant = "outline",
 }: {
-  label: string;
-  icon: any;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
   onPress: () => void;
-  variant?: "solid" | "outline";
 }) {
-  const solid = variant === "solid";
   return (
     <Pressable
       onPress={onPress}
       style={{
-        flex: 1,
-        height: 48,
+        width: "48%",
         borderRadius: 16,
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "row",
-        gap: 8,
-        backgroundColor: solid ? PURPLE : "rgba(255,255,255,0.06)",
+        padding: 12,
+        backgroundColor: CARD,
         borderWidth: 1,
-        borderColor: solid ? "rgba(124,58,237,0.70)" : "rgba(255,255,255,0.12)",
+        borderColor: BORDER,
       }}
     >
-      <Ionicons name={icon} size={18} color="#fff" />
-      <Text style={{ color: "#fff", fontWeight: "900" }}>{label}</Text>
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 12,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "rgba(56,189,248,0.2)",
+          borderWidth: 1,
+          borderColor: "rgba(56,189,248,0.35)",
+        }}
+      >
+        <Ionicons name={icon} size={16} color="#E0F2FE" />
+      </View>
+      <Text style={{ marginTop: 10, color: "#fff", fontWeight: "900", fontSize: 13 }}>{title}</Text>
+      <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 11 }}>{subtitle}</Text>
     </Pressable>
   );
 }
 
 export default function MarketAccountTab() {
-  const [meId, setMeId] = useState<string | null>(null);
+  const wallet = useUnifiedWallet();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<SellerProfile | null>(null);
-  const [chains, setChains] = useState<any[]>([]);
-  const [chain, setChain] = useState<any | null>(null);
-  const [wallet, setWallet] = useState<{ address: string } | null>(null);
-  const [deviceAddress, setDeviceAddress] = useState<string>("");
-  const [walletBusy, setWalletBusy] = useState(false);
-  const [walletErr, setWalletErr] = useState<string | null>(null);
-  const [chainErr, setChainErr] = useState<string | null>(null);
-  const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
-  const [backedUp, setBackedUp] = useState(false);
-  const [backupOpen, setBackupOpen] = useState(false);
-  const [backupSecret, setBackupSecret] = useState("");
-  const [backupType, setBackupType] = useState<"mnemonic" | "privateKey">("privateKey");
-  const [importOpen, setImportOpen] = useState(false);
-  const [importKey, setImportKey] = useState("");
-  const [importErr, setImportErr] = useState<string | null>(null);
-  const [usdcBalance, setUsdcBalance] = useState("0");
-  const [usdtBalance, setUsdtBalance] = useState("0");
-  const [sendOpen, setSendOpen] = useState(false);
-  const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
-  const [sendTo, setSendTo] = useState("");
-  const [sendAmount, setSendAmount] = useState("");
-  const isNigeria = isNigeriaCountry(userCountry?.code || userCountry?.name);
+  const [stats, setStats] = useState<StatState>({ activeListings: 0, allListings: 0, orders: 0 });
+
+  const logo = publicUrl("market-sellers", profile?.logo_path);
+  const banner = publicUrl("market-sellers", profile?.banner_path);
+  const handle = profile?.market_username ? `@${profile.market_username}` : "@new-seller";
+  const storeName = profile?.business_name || profile?.display_name || "Your Store";
+  const verified = Boolean(profile?.is_verified);
+
+  const launchReady = useMemo(() => {
+    return {
+      profile: Boolean(profile),
+      wallet: Boolean(wallet.savedAddress || wallet.connectedAddress),
+      listings: Number(stats.allListings) > 0,
+      verification: verified,
+    };
+  }, [profile, stats.allListings, verified, wallet.connectedAddress, wallet.savedAddress]);
 
   async function load() {
-    setLoading(true);
+    setError(null);
     try {
-      const { data: auth, error: authErr } = await supabase.auth.getUser();
-      if (authErr) throw authErr;
+      const { data: auth } = await supabase.auth.getUser();
       const user = auth?.user;
       if (!user) {
-        setMeId(null);
         setProfile(null);
+        setStats({ activeListings: 0, allListings: 0, orders: 0 });
         return;
       }
-      setMeId(user.id);
 
-      const { data, error } = await supabase
-        .from("market_seller_profiles")
-        .select("user_id,market_username,display_name,business_name,is_verified,logo_path,banner_path,payout_tier,active")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const [profileRes, activeListingsRes, allListingsRes, ordersRes] = await Promise.all([
+        supabase
+          .from("market_seller_profiles")
+          .select("user_id,market_username,display_name,business_name,is_verified,logo_path,banner_path,payout_tier,active")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("market_listings")
+          .select("id", { count: "exact", head: true })
+          .eq("seller_id", user.id)
+          .eq("is_active", true),
+        supabase
+          .from("market_listings")
+          .select("id", { count: "exact", head: true })
+          .eq("seller_id", user.id),
+        supabase
+          .from("market_orders")
+          .select("id", { count: "exact", head: true })
+          .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`),
+      ]);
 
-      setProfile(error ? null : (data as any));
-    } catch {
-      setProfile(null);
+      setProfile((profileRes.data as SellerProfile | null) ?? null);
+      setStats({
+        activeListings: Number(activeListingsRes.count ?? 0),
+        allListings: Number(allListingsRes.count ?? 0),
+        orders: Number(ordersRes.count ?? 0),
+      });
+    } catch (e: any) {
+      setError(friendlyMarketError(e, "Unable to load account."));
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function loadChains() {
-    try {
-      setChainErr(null);
-      const items = await fetchMarketChains();
-      setChains(items);
-      const preferred = await getPreferredMarketChain();
-      setChain(preferred);
-      await refreshWalletMeta(preferred);
-    } catch (e: any) {
-      setChains([]);
-      setChain(null);
-      setWallet(null);
-      setChainErr(e?.message || "Unable to load network settings. Pull to refresh or try again.");
-    }
-  }
-
-  async function refreshWalletMeta(selected?: any | null) {
-    const current = selected ?? chain;
-    const backed = await hasWalletBackup(meId || undefined);
-    setBackedUp(backed);
-    if (!current) {
-      setUsdcBalance("0");
-      setUsdtBalance("0");
-      setDeviceAddress("");
-      return;
-    }
-    const w = await getMyWalletForChain(current.chain);
-    setWallet(w ? { address: w.address } : null);
-    try {
-      const pk = await getStoredPrivateKey(meId || undefined);
-      if (pk) {
-        const derived = await deriveSmartAccountAddress(current, pk);
-        setDeviceAddress(derived);
-        if (w?.address && String(w.address).toLowerCase() !== String(derived).toLowerCase()) {
-          setWalletErr(
-            "Saved wallet mismatch detected. Use 'Use connected wallet' to sync addresses before checkout/trading.",
-          );
-        }
-      } else {
-        setDeviceAddress("");
-      }
-    } catch {
-      setDeviceAddress("");
-    }
-    if (!w?.address) {
-      setUsdcBalance("0");
-      setUsdtBalance("0");
-      return;
-    }
-    const rpcUrl = getRpcUrlForChain(current);
-    if (!rpcUrl) return;
-    const client = createPublicClient({
-      transport: http(rpcUrl),
-    });
-    try {
-      if (!isAddress(current.usdc_address)) throw new Error("USDC contract address is not configured.");
-      const usdcRaw = await client.readContract({
-        address: current.usdc_address as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [w.address as `0x${string}`],
-      });
-      setUsdcBalance(formatUnits(usdcRaw as bigint, 6));
-    } catch (e: any) {
-      setUsdcBalance("0");
-      setWalletErr(friendlyMarketError(e, "Unable to load USDC balance."));
-    }
-
-    const usdt = (current.usdt_address as string) || getUsdtAddress(current.chain);
-    if (!usdt) {
-      setUsdtBalance("0");
-      return;
-    }
-    try {
-      if (!isAddress(usdt)) throw new Error("USDT contract address is not configured.");
-      const usdtRaw = await client.readContract({
-        address: usdt as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [w.address as `0x${string}`],
-      });
-      setUsdtBalance(formatUnits(usdtRaw as bigint, 6));
-    } catch (e: any) {
-      setUsdtBalance("0");
-      setWalletErr(friendlyMarketError(e, "Unable to load USDT balance."));
-    }
-  }
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const c = await resolveUserCountry({ prompt: true });
-        if (mounted) setUserCountry(c);
-      } catch {
-        if (mounted) setUserCountry(null);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  async function onBackupWallet() {
-    setWalletErr(null);
-    Alert.alert(
-      "External wallet backup",
-      "Seed phrase/private key backup is managed by your wallet app. This app never stores your keys.",
-    );
-    setBackedUp(true);
-  }
-
-  async function onConfirmBackupDone() {
-    setBackedUp(true);
-    setBackupOpen(false);
-  }
-
-  async function onImportPrivateKey() {
-    if (!meId) return;
-    setImportErr(null);
-    setWalletErr(null);
-    setWalletBusy(true);
-    try {
-      const auth = await requireLocalAuth("Connect wallet");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      if (!chain) throw new Error("Select a network before connecting.");
-
-      await importPrivateKey(meId || undefined, "");
-      const synced = await replaceSavedWalletWithDevice(chain);
-      setWallet({ address: synced.address });
-      setImportOpen(false);
-      setImportKey("");
-      await refreshWalletMeta(chain);
-      Alert.alert("Wallet connected", "Wallet connected and saved address updated.");
-    } catch (e: any) {
-      setImportErr(String(e?.message || e || "We couldn't connect wallet."));
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  async function onUseDeviceWalletAddress() {
-    if (!chain) return;
-    setWalletErr(null);
-    setWalletBusy(true);
-    try {
-      const auth = await requireLocalAuth("Use connected wallet");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-      const out = await replaceSavedWalletWithDevice(chain);
-      setWallet({ address: out.address });
-      await refreshWalletMeta(chain);
-      Alert.alert("Wallet updated", "Saved wallet address now matches your connected wallet.");
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "Couldn't switch to connected wallet."));
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  async function onGenerateOrRegenerateWallet() {
-    if (!chain) return;
-    setWalletErr(null);
-    setWalletBusy(true);
-    try {
-      const auth = await requireLocalAuth("Connect wallet");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      const res = await ensureWalletAddressOnChain(chain);
-      setWallet({ address: res.address });
-      await refreshWalletMeta(chain);
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "We couldn't connect your wallet right now."));
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  async function onSyncWalletAllNetworks() {
-    if (!chains.length) return;
-    setWalletErr(null);
-    setWalletBusy(true);
-    try {
-      const auth = await requireLocalAuth("Sync wallet to active networks");
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      const activeChains = chains.filter((c) => !!c?.active);
-      if (!activeChains.length) throw new Error("No active networks to sync.");
-
-      let baseAddress = "";
-      for (const c of activeChains) {
-        const res = await ensureWalletAddressOnChain(c);
-        if (!baseAddress) baseAddress = res.address;
-      }
-      if (baseAddress) setWallet({ address: baseAddress });
-      await refreshWalletMeta(chain);
-      Alert.alert("Synced", `Wallet synced to ${activeChains.length} active network(s).`);
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "We couldn't sync wallet to active networks."));
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  async function onSendToken() {
-    if (!chain || !wallet?.address) return;
-    try {
-      const auth = await requireLocalAuth(`Send ${sendToken}`);
-      if (!auth.ok) throw new Error(auth.message || "Authentication required");
-
-      const to = sendTo.trim();
-      const amount = Number(sendAmount);
-      if (!/^0x[a-fA-F0-9]{40}$/.test(to)) throw new Error("Enter a valid wallet address.");
-      if (!Number.isFinite(amount) || amount <= 0) throw new Error("Enter a valid amount.");
-
-      const tokenAddress = sendToken === "USDC" ? chain.usdc_address : getUsdtAddress(chain.chain);
-      if (!tokenAddress) throw new Error(`${sendToken} is not configured for this network.`);
-
-      const amountRaw = BigInt(Math.round(amount * 1_000_000));
-      const { client } = await ensureSmartAccount(chain);
-      const data = encodeFunctionData({
-        abi: ERC20_ABI,
-        functionName: "transfer",
-        args: [to as `0x${string}`, amountRaw],
-      });
-      await client.sendTransactions({
-        account: (client as any).account,
-        requests: [
-          {
-            to: tokenAddress as `0x${string}`,
-            data,
-          },
-        ] as any,
-      });
-      setSendOpen(false);
-      setSendAmount("");
-      setSendTo("");
-      await refreshWalletMeta(chain);
-    } catch (e: any) {
-      setWalletErr(friendlyMarketError(e, "We couldn't send token right now."));
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
     load();
-    loadChains();
   }, []);
 
-  useEffect(() => {
-    if (meId) {
-      refreshWalletMeta().catch(() => undefined);
-    }
-  }, [meId]);
+  async function onRefresh() {
+    setRefreshing(true);
+    await Promise.allSettled([load(), wallet.refreshAll()]);
+    setRefreshing(false);
+  }
 
-  const handle = useMemo(() => (profile?.market_username ? `@${profile.market_username}` : "@yourstore"), [profile?.market_username]);
-
-  const storeName = useMemo(() => {
-    const n = profile?.business_name || profile?.display_name || "Your store";
-    return n;
-  }, [profile?.business_name, profile?.display_name]);
-
-  const logo = publicUrl("market-sellers", profile?.logo_path);
-  const banner = publicUrl("market-sellers", profile?.banner_path);
+  async function onSignOut() {
+    await supabase.auth.signOut().catch(() => undefined);
+    router.replace("/(auth)/login" as any);
+  }
 
   if (loading) {
     return (
       <LinearGradient colors={[BG1, BG0]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
-        <AppHeader title="Market Account" subtitle="Manage your store profile, listings, and marketplace wallet." />
-        <View style={{ marginTop: 70, alignItems: "center" }}>
+        <AppHeader title="Account" subtitle="Seller profile, wallet, and controls" />
+        <View style={{ marginTop: 80, alignItems: "center" }}>
           <ActivityIndicator />
-          <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading...</Text>
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Loading account...</Text>
         </View>
       </LinearGradient>
     );
   }
 
   return (
-    <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
-      <AppHeader title="Market Account" subtitle="Manage your store profile, listings, and marketplace wallet." />
-      <ScrollView contentContainerStyle={{ paddingBottom: 28 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <Text style={{ color: "#fff", fontSize: 24, fontWeight: "900" }}>Market Account</Text>
+    <LinearGradient colors={[BG1, BG0]} start={{ x: 0.15, y: 0 }} end={{ x: 0.9, y: 1 }} style={{ flex: 1 }}>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 34 }}>
+        <AppHeader title="Account Hub" subtitle="Command center for your marketplace operations" />
+
+        <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
           <Pressable
-            onPress={async () => {
-              await load();
-              await loadChains();
+            onPress={onRefresh}
+            style={{
+              flex: 1,
+              borderRadius: 14,
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+              backgroundColor: "rgba(255,255,255,0.07)",
+              borderWidth: 1,
+              borderColor: BORDER,
             }}
-            style={{ width: 44, height: 44, borderRadius: 16, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: "center", justifyContent: "center" }}
           >
-            <Ionicons name="refresh" size={18} color="#fff" />
+            {refreshing ? <ActivityIndicator /> : <Ionicons name="refresh" size={16} color="#fff" />}
+            <Text style={{ color: "#fff", fontWeight: "900" }}>Refresh</Text>
+          </Pressable>
+          <Pressable
+            onPress={onSignOut}
+            style={{
+              flex: 1,
+              borderRadius: 14,
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+              backgroundColor: "rgba(239,68,68,0.2)",
+              borderWidth: 1,
+              borderColor: "rgba(239,68,68,0.35)",
+            }}
+          >
+            <Ionicons name="log-out-outline" size={16} color="#FECACA" />
+            <Text style={{ color: "#FECACA", fontWeight: "900" }}>Sign out</Text>
           </Pressable>
         </View>
-        <Text style={{ marginTop: 6, color: MUTED }}>
-          Manage your store profile, listings, and marketplace wallet.
-        </Text>
-        <Pressable
-          onPress={async () => {
-            await supabase.auth.signOut().catch(() => undefined);
-            router.replace("/(auth)/login" as any);
-          }}
-          style={{
-            marginTop: 10,
-            alignSelf: "flex-start",
-            borderRadius: 12,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            backgroundColor: "rgba(124,58,237,0.20)",
-            borderWidth: 1,
-            borderColor: "rgba(124,58,237,0.45)",
-          }}
-        >
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Sign out</Text>
-        </Pressable>
 
         {!profile ? (
-          <CardBox>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View style={{ width: 46, height: 46, borderRadius: 16, backgroundColor: "rgba(124,58,237,0.18)", borderWidth: 1, borderColor: "rgba(124,58,237,0.35)", alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="storefront-outline" size={22} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>No Market Profile</Text>
-                <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>
-                  Create one to sell and get a public store page.
-                </Text>
-              </View>
-            </View>
-
+          <View
+            style={{
+              marginTop: 12,
+              borderRadius: 20,
+              padding: 16,
+              backgroundColor: CARD,
+              borderWidth: 1,
+              borderColor: BORDER,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Create your seller profile</Text>
+            <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
+              Set up your account to start listing, trading, and receiving orders.
+            </Text>
             <Pressable
               onPress={() => router.push("/market/profile/create" as any)}
-              style={{ marginTop: 12, borderRadius: 18, paddingVertical: 14, alignItems: "center", backgroundColor: PURPLE, borderWidth: 1, borderColor: "rgba(124,58,237,0.8)" }}
+              style={{
+                marginTop: 12,
+                borderRadius: 16,
+                height: 46,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(56,189,248,0.22)",
+                borderWidth: 1,
+                borderColor: "rgba(56,189,248,0.45)",
+              }}
             >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Create Market Profile</Text>
+              <Text style={{ color: "#E0F2FE", fontWeight: "900" }}>Create Profile</Text>
             </Pressable>
-          </CardBox>
+          </View>
         ) : (
-          <View style={{ marginTop: 12, borderRadius: 22, overflow: "hidden", borderWidth: 1, borderColor: BORDER, backgroundColor: CARD }}>
-            <View style={{ height: 150 }}>
-              {banner ? (
-                <Image source={{ uri: banner }} style={{ width: "100%", height: "100%" }} />
-              ) : (
-                <LinearGradient colors={["rgba(124,58,237,0.35)", "rgba(255,255,255,0.04)"]} style={{ width: "100%", height: "100%" }} />
-              )}
-
-              <LinearGradient
-                colors={["rgba(0,0,0,0.0)", "rgba(5,4,11,0.85)"]}
-                style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 90 }}
-              />
+          <View
+            style={{
+              marginTop: 12,
+              borderRadius: 22,
+              overflow: "hidden",
+              borderWidth: 1,
+              borderColor: BORDER,
+              backgroundColor: CARD,
+            }}
+          >
+            <View style={{ height: 156, backgroundColor: "rgba(255,255,255,0.08)" }}>
+              {banner ? <Image source={{ uri: banner }} style={{ width: "100%", height: "100%" }} /> : null}
             </View>
-
-            <View style={{ padding: 14, marginTop: -34, flexDirection: "row", alignItems: "flex-end", gap: 12 }}>
-              <View style={{ width: 78, height: 78, borderRadius: 26, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", backgroundColor: "rgba(255,255,255,0.06)", alignItems: "center", justifyContent: "center" }}>
-                {logo ? <Image source={{ uri: logo }} style={{ width: 78, height: 78 }} /> : <Ionicons name="person-outline" size={26} color="rgba(255,255,255,0.8)" />}
+            <View style={{ padding: 14, marginTop: -34, flexDirection: "row", gap: 12 }}>
+              <View
+                style={{
+                  width: 78,
+                  height: 78,
+                  borderRadius: 22,
+                  overflow: "hidden",
+                  borderWidth: 2,
+                  borderColor: "rgba(255,255,255,0.25)",
+                  backgroundColor: "rgba(255,255,255,0.08)",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {logo ? <Image source={{ uri: logo }} style={{ width: 78, height: 78 }} /> : <Ionicons name="person-outline" size={26} color="#fff" />}
               </View>
-
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 18 }}>{handle}</Text>
-                  {profile.is_verified ? (
-                    <View style={{ paddingHorizontal: 6, paddingVertical: 6, borderRadius: 999, backgroundColor: "rgba(59,130,246,0.15)", borderWidth: 1, borderColor: "rgba(59,130,246,0.35)" }}>
-                      <Ionicons name="checkmark-circle" size={14} color={BLUE} />
-                    </View>
-                  ) : null}
-                  <Badge text={profile.payout_tier === "fast" ? "Fast payouts" : "Standard payouts"} tone="purple" />
+                  {verified ? <Ionicons name="checkmark-circle" size={16} color="#60A5FA" /> : null}
+                  <View style={{ borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: "rgba(56,189,248,0.2)", borderWidth: 1, borderColor: "rgba(56,189,248,0.35)" }}>
+                    <Text style={{ color: "#E0F2FE", fontWeight: "900", fontSize: 11 }}>
+                      {profile.payout_tier === "fast" ? "Fast payouts" : "Standard payouts"}
+                    </Text>
+                  </View>
                 </View>
+                <Text style={{ marginTop: 5, color: "rgba(255,255,255,0.75)", fontWeight: "800" }}>{storeName}</Text>
 
-                <Text style={{ marginTop: 6, color: MUTED, fontWeight: "800" }}>{storeName}</Text>
-              </View>
-            </View>
-
-            <View style={{ padding: 14, paddingTop: 2 }}>
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <ActionBtn label="Edit" icon="create-outline" onPress={() => router.push("/market/profile/edit" as any)} variant="outline" />
-                <ActionBtn
-                  label="View"
-                  icon="eye-outline"
-                  onPress={() => router.push(`/market/profile/${profile.market_username}` as any)}
-                  variant="solid"
-                />
-              </View>
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-                <ActionBtn
-                  label="My listings"
-                  icon="albums-outline"
-                  onPress={() => router.push("/market/listings?mine=1" as any)}
-                  variant="outline"
-                />
-
-                <ActionBtn label="Wallet" icon="wallet-outline" onPress={() => router.push("/market/wallet" as any)} variant="outline" />
-              </View>
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-                <ActionBtn
-                  label="Messages"
-                  icon="chatbubble-ellipses-outline"
-                  onPress={() => router.push("/market/(tabs)/messages" as any)}
-                  variant="outline"
-                />
-                <ActionBtn
-                  label="Menu"
-                  icon="menu-outline"
-                  onPress={() => router.push("/market/menu" as any)}
-                  variant="outline"
-                />
+                <View style={{ marginTop: 9, flexDirection: "row", gap: 8 }}>
+                  <View style={{ borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: BORDER }}>
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>{stats.activeListings} active</Text>
+                  </View>
+                  <View style={{ borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: BORDER }}>
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>{stats.orders} orders</Text>
+                  </View>
+                </View>
               </View>
             </View>
           </View>
         )}
 
-        {isNigeria ? (
-          <CardBox>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Utility</Text>
-            <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-              Fund, Withdraw, Receive, and pay bills with NGN
-            </Text>
+        <View style={{ marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 10, justifyContent: "space-between" }}>
+          <CommandTile icon="create-outline" title="Edit Profile" subtitle="Update store identity" onPress={() => router.push("/market/profile/edit" as any)} />
+          <CommandTile icon="eye-outline" title="Public Store" subtitle="View live seller page" onPress={() => router.push(profile?.market_username ? `/market/profile/${profile.market_username}` as any : "/market/profile/create" as any)} />
+          <CommandTile icon="albums-outline" title="My Listings" subtitle="Manage products & services" onPress={() => router.push("/market/listings?mine=1" as any)} />
+          <CommandTile icon="receipt-outline" title="Orders" subtitle="Track incoming/outgoing orders" onPress={() => router.push("/market/(tabs)/orders" as any)} />
+          <CommandTile icon="shield-checkmark-outline" title="Verification" subtitle="Apply or check status" onPress={() => router.push("/market/verification/status" as any)} />
+          <CommandTile icon="menu-outline" title="More Menu" subtitle="Open extended navigation" onPress={() => router.push("/market/menu" as any)} />
+        </View>
 
-            <Pressable
-              onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
-              style={{
-                marginTop: 12,
-                borderRadius: 18,
-                paddingVertical: 14,
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.12)",
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Open Utility section</Text>
-            </Pressable>
-          </CardBox>
+        <View style={{ marginTop: 12 }}>
+          <UnifiedWalletPanel
+            wallet={wallet}
+            compact
+            onOpenNgnWallet={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
+            onOpenCryptoWallet={() => router.push("/market/wallet" as any)}
+          />
+        </View>
+
+        <View
+          style={{
+            marginTop: 12,
+            borderRadius: 20,
+            padding: 14,
+            backgroundColor: CARD,
+            borderWidth: 1,
+            borderColor: BORDER,
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 15 }}>Launch Readiness</Text>
+          <View style={{ marginTop: 10, gap: 7 }}>
+            <Text style={{ color: launchReady.profile ? "#86EFAC" : "rgba(255,255,255,0.72)", fontWeight: "800", fontSize: 12 }}>
+              {launchReady.profile ? "DONE" : "TODO"} Seller profile setup
+            </Text>
+            <Text style={{ color: launchReady.wallet ? "#86EFAC" : "rgba(255,255,255,0.72)", fontWeight: "800", fontSize: 12 }}>
+              {launchReady.wallet ? "DONE" : "TODO"} Wallet connected and synced
+            </Text>
+            <Text style={{ color: launchReady.listings ? "#86EFAC" : "rgba(255,255,255,0.72)", fontWeight: "800", fontSize: 12 }}>
+              {launchReady.listings ? "DONE" : "TODO"} At least one listing published
+            </Text>
+            <Text style={{ color: launchReady.verification ? "#86EFAC" : "rgba(255,255,255,0.72)", fontWeight: "800", fontSize: 12 }}>
+              {launchReady.verification ? "DONE" : "OPTIONAL"} Seller verification
+            </Text>
+          </View>
+        </View>
+
+        {!!error ? (
+          <Text style={{ marginTop: 12, color: "#FCA5A5", fontWeight: "800" }}>{error}</Text>
         ) : null}
-
-        <CardBox>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>USDC Wallet (non-custodial)</Text>
-          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Connect with WalletConnect. Private keys stay in your external wallet.
-          </Text>
-          {!!chainErr ? (
-            <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{chainErr}</Text>
-          ) : null}
-          {chains.length === 0 ? (
-            <View style={{ marginTop: 12 }}>
-              <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
-                No networks available yet.
-              </Text>
-              <Pressable
-                onPress={loadChains}
-                style={{
-                  marginTop: 10,
-                  borderRadius: 16,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                  backgroundColor: "rgba(255,255,255,0.06)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.12)",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Reload networks</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={{ marginTop: 12, flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {chains.map((c) => {
-                const active = c.active;
-                const selected = chain?.chain === c.chain;
-                return (
-                  <Pressable
-                    key={c.chain}
-                    disabled={!active}
-                    onPress={async () => {
-                      setChain(c);
-                      await setPreferredMarketChain(c.chain);
-                      await refreshWalletMeta(c);
-                    }}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 8,
-                      borderRadius: 999,
-                      backgroundColor: selected ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.06)",
-                      borderWidth: 1,
-                      borderColor: selected ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
-                      opacity: active ? 1 : 0.45,
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                      {String(c.chain).toUpperCase().replace("_", " ")}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
-
-          <View style={{ marginTop: 10 }}>
-            <Text style={{ color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
-              {chain?.active ? "Active network" : "Network not active yet"}
-            </Text>
-            <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900" }}>
-              {wallet?.address ? wallet.address : "No wallet address generated"}
-            </Text>
-            {deviceAddress ? (
-              <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", fontWeight: "800", fontSize: 12 }}>
-                Connected wallet: {deviceAddress}
-              </Text>
-            ) : null}
-            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              Backup status: {backedUp ? "Backed up" : "Not backed up"}
-            </Text>
-            <Text style={{ marginTop: 8, color: "#fff", fontWeight: "900", fontSize: 13 }}>
-              USDC: {Number(usdcBalance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
-            </Text>
-            <Text style={{ marginTop: 4, color: "#fff", fontWeight: "900", fontSize: 13 }}>
-              USDT: {Number(usdtBalance || "0").toLocaleString(undefined, { maximumFractionDigits: 6 })}
-            </Text>
-          </View>
-
-          {walletErr ? (
-            <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{walletErr}</Text>
-          ) : null}
-
-          <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
-            <Pressable
-              disabled={!wallet?.address}
-              onPress={onBackupWallet}
-              style={{
-                flex: 1,
-                borderRadius: 14,
-                paddingVertical: 12,
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.12)",
-                opacity: wallet?.address ? 1 : 0.6,
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Backup</Text>
-            </Pressable>
-            <Pressable
-              disabled={!wallet?.address}
-              onPress={async () => {
-                if (!wallet?.address) return;
-                await Clipboard.setStringAsync(wallet.address);
-                Alert.alert("Copied", "Wallet address copied to clipboard.");
-              }}
-              style={{
-                flex: 1,
-                borderRadius: 14,
-                paddingVertical: 12,
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.12)",
-                opacity: wallet?.address ? 1 : 0.6,
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Receive</Text>
-            </Pressable>
-            <Pressable
-              disabled={!wallet?.address}
-              onPress={() => setSendOpen(true)}
-              style={{
-                flex: 1,
-                borderRadius: 14,
-                paddingVertical: 12,
-                alignItems: "center",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.12)",
-                opacity: wallet?.address ? 1 : 0.6,
-              }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "900" }}>Send</Text>
-            </Pressable>
-          </View>
-
-          <Pressable
-            onPress={() => setImportOpen(true)}
-            style={{
-              marginTop: 10,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>
-              Connect wallet / Change saved address
-            </Text>
-          </Pressable>
-
-          <Pressable
-            disabled={!chain?.active || walletBusy || !deviceAddress}
-            onPress={onUseDeviceWalletAddress}
-            style={{
-              marginTop: 10,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(59,130,246,0.22)",
-              borderWidth: 1,
-              borderColor: "rgba(59,130,246,0.35)",
-              opacity: !chain?.active || walletBusy || !deviceAddress ? 0.6 : 1,
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Use connected wallet</Text>
-          </Pressable>
-
-          <Pressable
-            disabled={!chain?.active || walletBusy}
-            onPress={onGenerateOrRegenerateWallet}
-            style={{
-              marginTop: 12,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: chain?.active ? "rgba(59,130,246,0.22)" : "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: chain?.active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.12)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>
-              {walletBusy ? "Working..." : wallet?.address ? "Reconnect wallet" : "Connect wallet"}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            disabled={walletBusy || !chains.some((c) => !!c?.active)}
-            onPress={onSyncWalletAllNetworks}
-            style={{
-              marginTop: 10,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-              opacity: walletBusy ? 0.7 : 1,
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Sync wallet to all active networks</Text>
-          </Pressable>
-        </CardBox>
-
-        <CardBox>
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Seller verification</Text>
-          <Text style={{ marginTop: 6, color: MUTED, fontSize: 12 }}>
-            Apply for a badge and higher trust ranking.
-          </Text>
-
-          <Pressable
-            onPress={() => router.push("/market/verification/apply" as any)}
-            style={{
-              marginTop: 12,
-              borderRadius: 18,
-              paddingVertical: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(255,255,255,0.06)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Apply / Check status</Text>
-          </Pressable>
-        </CardBox>
       </ScrollView>
-
-      <Modal visible={backupOpen} transparent animationType="slide" onRequestClose={() => setBackupOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
-          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Backup Private Key</Text>
-            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              Store this offline. Anyone with this can access your wallet.
-            </Text>
-            <Text selectable style={{ marginTop: 12, color: "#fff", fontWeight: "800", lineHeight: 22 }}>
-              {backupSecret}
-            </Text>
-            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
-              <Pressable
-                onPress={async () => {
-                  await Clipboard.setStringAsync(backupSecret);
-                  Alert.alert("Copied", "Backup secret copied.");
-                }}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Copy</Text>
-              </Pressable>
-              <Pressable
-                onPress={onConfirmBackupDone}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>I backed it up</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={importOpen} transparent animationType="slide" onRequestClose={() => setImportOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
-          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-              Connect wallet
-            </Text>
-            <Text style={{ marginTop: 8, color: MUTED, fontSize: 12 }}>
-              Connect with WalletConnect. Private keys are managed by your wallet app and never stored here.
-            </Text>
-            {importErr ? <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800" }}>{importErr}</Text> : null}
-            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
-              <Pressable
-                onPress={() => setImportOpen(false)}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={onImportPrivateKey}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Connect</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={sendOpen} transparent animationType="slide" onRequestClose={() => setSendOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", padding: 20 }}>
-          <View style={{ borderRadius: 20, padding: 16, backgroundColor: "#0F0B1D", borderWidth: 1, borderColor: BORDER }}>
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Send Token</Text>
-            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
-              {(["USDC", "USDT"] as const).map((t) => (
-                <Pressable
-                  key={t}
-                  onPress={() => setSendToken(t)}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    borderRadius: 999,
-                    backgroundColor: sendToken === t ? "rgba(59,130,246,0.30)" : "rgba(255,255,255,0.08)",
-                    borderWidth: 1,
-                    borderColor: sendToken === t ? "rgba(59,130,246,0.45)" : "rgba(255,255,255,0.12)",
-                  }}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "900" }}>{t}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <TextInput
-              value={sendTo}
-              onChangeText={setSendTo}
-              placeholder="Recipient address (0x...)"
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              style={{ marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
-            />
-            <TextInput
-              value={sendAmount}
-              onChangeText={setSendAmount}
-              placeholder={`Amount (${sendToken})`}
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              keyboardType="decimal-pad"
-              style={{ marginTop: 10, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", color: "#fff", paddingHorizontal: 12, paddingVertical: 10 }}
-            />
-            <View style={{ marginTop: 14, flexDirection: "row", gap: 10 }}>
-              <Pressable
-                onPress={() => setSendOpen(false)}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(255,255,255,0.08)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={onSendToken}
-                style={{ flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: "center", backgroundColor: "rgba(59,130,246,0.30)" }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "900" }}>Send</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </LinearGradient>
   );
 }
-
-

@@ -34,6 +34,7 @@ export type DeliveryGeo = {
 type GeocodeOptions = {
   preferIpOnWeb?: boolean;
   preferIp?: boolean;
+  ipOnly?: boolean;
 };
 
 type IpLookupResult = {
@@ -196,9 +197,17 @@ async function fetchIpLocation(): Promise<IpLookupResult | null> {
 
 export async function getCurrentLocationWithGeocode(opts?: GeocodeOptions) {
   const preferIpFirst = Boolean(opts?.preferIp) || (Platform.OS === "web" && Boolean(opts?.preferIpOnWeb));
+  const ipOnly = Boolean(opts?.ipOnly);
   if (preferIpFirst) {
     const ipFirst = await fetchIpLocation();
     if (ipFirst) return ipFirst;
+    if (ipOnly) {
+      throw new Error("IP location lookup failed.");
+    }
+  }
+
+  if (ipOnly) {
+    throw new Error("IP location lookup failed.");
   }
 
   try {

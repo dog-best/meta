@@ -21,7 +21,7 @@ import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const ROUTES = {
-  crypto: "/crypto",
+  crypto: "/market/wallet",
   market: "/market",
   airtime: "./airtime",
   data: "./data",
@@ -446,12 +446,12 @@ export default function Dashboard() {
         </View>
 
         {/* Explore */}
-        <SectionHeader title="Explore" hint="Crypto and marketplace" />
+        <SectionHeader title="Explore" hint="Wallet and marketplace" />
 
         <View style={styles.bigRow}>
           <BigCard
             title="Crypto"
-            sub="Receive - Convert"
+            sub="WalletConnect - USDC/USDT"
             onPress={onGoCrypto}
             icon={<MaterialCommunityIcons name="bitcoin" size={34} color="#fff" />}
           />
