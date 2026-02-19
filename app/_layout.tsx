@@ -172,7 +172,7 @@ export default function RootLayout() {
   };
 
   /* ---------------- GLOBAL BLOCK ---------------- */
-  if (booting || loading) {
+  if ((booting || loading) && !bootError) {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color="#8B5CF6" />

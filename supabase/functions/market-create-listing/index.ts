@@ -15,7 +15,7 @@ function assertCategoryRules(category: ListingCategory, delivery_type: DeliveryT
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();

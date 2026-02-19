@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, Linking, Alert, Modal } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -253,6 +253,7 @@ export default function OrderDetails() {
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [reindexOpen, setReindexOpen] = useState(false);
   const [reindexTx, setReindexTx] = useState("");
+  const autoReindexKeyRef = useRef<string>("");
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
@@ -415,6 +416,21 @@ export default function OrderDetails() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oid]);
 
+  useEffect(() => {
+    if (!awaitingConfirmations) return;
+    if (!defaultDepositTx) return;
+
+    const key = `${order?.id || ""}:${defaultDepositTx}`;
+    if (autoReindexKeyRef.current === key) return;
+    autoReindexKeyRef.current = key;
+
+    const timer = setTimeout(() => {
+      void reindexDeposit();
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [awaitingConfirmations, defaultDepositTx, order?.id]);
+
   // Buttons conditions (your existing logic)
   const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
   const canCancel = !!order && order.status === "CREATED" && isBuyer && !hasSubmittedCryptoDeposit;
@@ -564,7 +580,7 @@ async function releaseFunds() {
   }
 
   async function reindexDeposit() {
-    if (!order) return;
+    if (!order || busy) return;
     setBusy(true);
     setErr(null);
     try {

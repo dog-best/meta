@@ -7,7 +7,7 @@ async function sha256Hex(s: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();

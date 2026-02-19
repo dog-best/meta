@@ -74,7 +74,7 @@ async function resolveUserOpSender(rpcUrl: string, userOpHash: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const userClient = supabaseUserClient(req);
   const admin = supabaseAdminClient();

@@ -328,7 +328,7 @@ export default function CreateStockIdentityScreen() {
             <Text style={{ marginTop: 8, color: "#E2E8F0", fontWeight: "800", fontSize: 12 }}>
               This will execute on-chain and charge $50 USDC from your wallet.
             </Text>
-            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>$45 -> liquidity, $5 -> platform fee receiver</Text>
+            <Text style={{ marginTop: 4, color: MUTED, fontSize: 12 }}>$45 {"->"} liquidity, $5 {"->"} platform fee receiver</Text>
 
             <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
               <Pressable

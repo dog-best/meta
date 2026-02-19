@@ -14,7 +14,7 @@ function normalizeOrder(order: any) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "GET") return methodNotAllowed();
+  if (req.method !== "GET") return methodNotAllowed(req);
 
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();

@@ -2,7 +2,7 @@ import { getAnonKey, getServiceKey, getSupabaseUrl } from "../_shared/market/env
 import { methodNotAllowed, ok } from "../_shared/market/http.ts";
 
 Deno.serve(async (req) => {
-  if (req.method !== "GET") return methodNotAllowed();
+  if (req.method !== "GET") return methodNotAllowed(req);
 
   // We do NOT reveal secrets; only whether they exist.
   const checks = {

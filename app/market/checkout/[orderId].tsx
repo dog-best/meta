@@ -623,7 +623,10 @@ export default function Checkout() {
         `Your ${symbol} deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
         [
           { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
-          { text: "Continue", onPress: () => router.replace(`/market/order/${oid}` as any) },
+          {
+            text: "Continue",
+            onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(userOpHash)}` as any) as any),
+          },
         ],
       );
       return;

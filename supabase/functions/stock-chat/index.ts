@@ -9,7 +9,7 @@ function toInt(input: unknown, fallback: number, min: number, max: number) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const admin = supabaseAdminClient();
   const userClient = supabaseUserClient(req);

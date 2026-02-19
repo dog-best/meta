@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Image,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -21,6 +22,7 @@ import {
   getSupabaseFunctionsBaseUrl,
   getSupabaseJwtOrThrow,
 } from "@/services/net";
+import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
 
 const BG0 = "#05040B";
@@ -53,6 +55,164 @@ type FnResponse = {
   limit: number;
   offset: number;
 };
+
+type RoleParam = "all" | "buyer" | "seller";
+
+type OrderRow = {
+  id: string;
+  buyer_id: string;
+  seller_id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  listing_id: string | null;
+};
+
+type ListingRow = {
+  id: string;
+  title: string | null;
+  category: string | null;
+  sub_category: string | null;
+  delivery_type: string | null;
+  cover_image_id: string | null;
+};
+
+type CoverRow = {
+  id: string;
+  public_url: string | null;
+};
+
+function canFallbackToDirectOrders(error: unknown) {
+  const msg = String((error as any)?.message || error || "").toLowerCase();
+  if (!msg) return false;
+  if (msg.includes("jwt") || msg.includes("session") || msg.includes("not authenticated")) {
+    return false;
+  }
+  return (
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("load failed") ||
+    msg.includes("cors") ||
+    msg.includes("preflight") ||
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("abort") ||
+    msg.includes("edge function") ||
+    msg.includes("405") ||
+    msg.includes("method not allowed")
+  );
+}
+
+async function fetchOrdersFallback(roleParam: RoleParam): Promise<FnItem[]> {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  const me = auth?.user?.id;
+  if (!me) throw new Error("No session. Please sign in again.");
+
+  let q = supabase
+    .from("market_orders")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (roleParam === "buyer") q = q.eq("buyer_id", me);
+  else if (roleParam === "seller") q = q.eq("seller_id", me);
+  else q = q.or(`buyer_id.eq.${me},seller_id.eq.${me}`);
+
+  const { data: orders, error: ordersErr } = await q;
+  if (ordersErr) throw new Error(ordersErr.message);
+
+  const orderRows = ((orders ?? []) as any[]).map((row: any) => {
+    const qty = Number(row.quantity ?? 1);
+    const unit = Number(row.unit_price ?? 0);
+    const amount =
+      Number(row.amount ?? NaN) ||
+      Number(row.amount_ngn ?? NaN) ||
+      (Number.isFinite(unit) && Number.isFinite(qty) ? unit * qty : 0);
+
+    return {
+      id: String(row.id),
+      buyer_id: String(row.buyer_id),
+      seller_id: String(row.seller_id),
+      amount: Number.isFinite(amount) ? amount : 0,
+      currency: String(row.currency ?? (row.amount_ngn != null ? "NGN" : "")),
+      status: String(row.status ?? ""),
+      created_at: String(row.created_at ?? ""),
+      listing_id: row.listing_id ? String(row.listing_id) : null,
+    };
+  }) as OrderRow[];
+
+  const listingIds = Array.from(new Set(orderRows.map((row) => row.listing_id).filter(Boolean))) as string[];
+
+  let listingMap = new Map<string, ListingRow>();
+  let coverMap = new Map<string, CoverRow>();
+
+  if (listingIds.length) {
+    const { data: listings, error: listingsErr } = await supabase
+      .from("market_listings")
+      .select("*")
+      .in("id", listingIds);
+    if (listingsErr) throw new Error(listingsErr.message);
+
+    const listingRows = ((listings ?? []) as any[]).map((row: any) => ({
+      id: String(row.id),
+      title: row.title == null ? null : String(row.title),
+      category: row.category == null ? null : String(row.category),
+      sub_category: row.sub_category == null ? null : String(row.sub_category),
+      delivery_type: row.delivery_type == null ? null : String(row.delivery_type),
+      cover_image_id:
+        row.cover_image_id == null
+          ? row.image_id == null
+            ? null
+            : String(row.image_id)
+          : String(row.cover_image_id),
+    })) as ListingRow[];
+    listingMap = new Map<string, ListingRow>(listingRows.map((row) => [row.id, row]));
+
+    const coverIds = Array.from(
+      new Set(listingRows.map((row) => row.cover_image_id).filter(Boolean)),
+    ) as string[];
+    if (coverIds.length) {
+      const { data: covers, error: coversErr } = await supabase
+        .from("market_listing_images")
+        .select("*")
+        .in("id", coverIds);
+      if (coversErr) throw new Error(coversErr.message);
+
+      const coverRows = ((covers ?? []) as any[]).map((row: any) => ({
+        id: String(row.id),
+        public_url: row.public_url == null ? null : String(row.public_url),
+      })) as CoverRow[];
+      coverMap = new Map<string, CoverRow>(coverRows.map((row) => [row.id, row]));
+    }
+  }
+
+  return orderRows.map((row) => {
+    const listing = row.listing_id ? listingMap.get(row.listing_id) ?? null : null;
+    const cover = listing?.cover_image_id ? coverMap.get(listing.cover_image_id) ?? null : null;
+
+    return {
+      id: row.id,
+      buyer_id: row.buyer_id,
+      seller_id: row.seller_id,
+      amount: Number(row.amount ?? 0),
+      currency: row.currency || "USD",
+      status: row.status || "CREATED",
+      created_at: row.created_at,
+      listing: listing
+        ? {
+            id: listing.id,
+            title: listing.title,
+            category: listing.category,
+            sub_category: listing.sub_category,
+            delivery_type: listing.delivery_type,
+          }
+        : null,
+      cover_image: cover ? { public_url: cover.public_url ?? null } : null,
+    };
+  });
+}
 
 function money(currency: string | null, amt: any) {
   const n = Number(amt ?? 0);
@@ -251,7 +411,7 @@ export default function MarketOrdersTab() {
     };
   }, []);
 
-  const roleParam = useMemo(() => {
+  const roleParam = useMemo<RoleParam>(() => {
     if (mode === "buying") return "buyer";
     if (mode === "selling") return "seller";
     return "all";
@@ -268,6 +428,25 @@ export default function MarketOrdersTab() {
 
       try {
         console.log("[MarketOrdersTab] load start", { role: roleParam, silent });
+
+        const applyDirectFallback = async () => {
+          const nextItems = await fetchOrdersFallback(roleParam);
+          if (!aliveRef.current) return true;
+          setItems(nextItems);
+          setErr(null);
+          console.log("[MarketOrdersTab] direct fallback -> ok", { count: nextItems.length });
+          return true;
+        };
+
+        if (Platform.OS === "web") {
+          try {
+            const done = await applyDirectFallback();
+            if (done) return;
+          } catch (fallbackErr) {
+            console.log("[MarketOrdersTab] direct fallback -> failed", String((fallbackErr as any)?.message || fallbackErr));
+          }
+        }
+
         const maxAttempts = 2;
         let lastError: unknown = null;
 
@@ -334,6 +513,15 @@ export default function MarketOrdersTab() {
               continue;
             }
             break;
+          }
+        }
+
+        if (canFallbackToDirectOrders(lastError)) {
+          try {
+            const done = await applyDirectFallback();
+            if (done) return;
+          } catch (fallbackErr) {
+            lastError = fallbackErr;
           }
         }
 
@@ -452,12 +640,12 @@ export default function MarketOrdersTab() {
           <SegButton label="Cancelled" active={statusFilter === "cancelled"} onPress={() => setStatusFilter("cancelled")} />
         </View>
 
-        {!!err ? <ErrorCard title="Couldn’t load orders" message={err} onRetry={() => load()} /> : null}
+        {!!err ? <ErrorCard title="Couldn't load orders" message={err} onRetry={() => load()} /> : null}
 
         {loading ? (
           <View style={{ marginTop: 44, alignItems: "center" }}>
             <ActivityIndicator />
-            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading…</Text>
+            <Text style={{ marginTop: 10, color: "rgba(255,255,255,0.7)" }}>Loading...</Text>
           </View>
         ) : visibleItems.length === 0 ? (
           <EmptyState onGoMarket={() => router.push("/market/(tabs)" as any)} />
@@ -465,7 +653,7 @@ export default function MarketOrdersTab() {
           <View style={{ marginTop: 12, gap: 10 }}>
             {visibleItems.map((o) => {
               const title = o.listing?.title ?? "Order";
-              const meta = `${o.listing?.category ?? "—"} • ${o.listing?.delivery_type ?? "—"}`;
+              const meta = `${o.listing?.category ?? "-"} - ${o.listing?.delivery_type ?? "-"}`;
               const img = o.cover_image?.public_url ?? null;
 
               return (

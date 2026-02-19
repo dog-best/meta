@@ -176,6 +176,76 @@ async function runReindexFallback(orderId: string, txHash?: string | null) {
   }
 }
 
+async function readLatestDepositIntent(orderId: string) {
+  const { data, error } = await supabase
+    .from("market_crypto_intents")
+    .select("tx_hash,client_reference,chain,status,created_at")
+    .eq("order_id", orderId)
+    .eq("intent_type", "DEPOSIT")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+
+  const txHash = String((data as any)?.tx_hash || "").trim();
+  const userOpHash = String((data as any)?.client_reference || "").trim();
+  return {
+    txHash: txHash.startsWith("0x") ? txHash : "",
+    userOpHash: userOpHash.startsWith("0x") ? userOpHash : "",
+    chain: String((data as any)?.chain || "").trim(),
+    status: String((data as any)?.status || "").trim(),
+  };
+}
+
+async function ensureDepositSettled(
+  orderId: string,
+  chain: MarketChainConfig,
+  txHash: string,
+  userOpHash: string,
+) {
+  let resolvedTxHash = String(txHash || "").trim();
+  let resolvedUserOpHash = String(userOpHash || "").trim();
+  let recoveredFinalizeAttempted = false;
+
+  if (!resolvedTxHash && resolvedUserOpHash) {
+    resolvedTxHash = await resolveUserOpToTxHash(chain, resolvedUserOpHash, 50, 3000);
+  }
+
+  if (resolvedTxHash) {
+    const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "DEPOSIT", 24, 4000);
+    if (settled) return { settled: true, txHash: resolvedTxHash };
+  }
+
+  for (let i = 0; i < 12; i++) {
+    await runReindexFallback(orderId, resolvedTxHash || null);
+
+    const status = await readOrderStatus(orderId);
+    if (status === "IN_ESCROW") {
+      return { settled: true, txHash: resolvedTxHash || "" };
+    }
+
+    if (!resolvedTxHash) {
+      const latest = await readLatestDepositIntent(orderId);
+      if (latest?.txHash) {
+        resolvedTxHash = latest.txHash;
+      } else if (latest?.userOpHash) {
+        resolvedUserOpHash = latest.userOpHash;
+        resolvedTxHash = await resolveUserOpToTxHash(chain, resolvedUserOpHash, 6, 4000);
+      }
+
+      if (resolvedTxHash && !recoveredFinalizeAttempted) {
+        recoveredFinalizeAttempted = true;
+        const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "DEPOSIT", 6, 3000);
+        if (settled) return { settled: true, txHash: resolvedTxHash };
+      }
+    }
+
+    await sleep(5000);
+  }
+
+  return { settled: false, txHash: resolvedTxHash || "" };
+}
+
 const ESCROW_ABI = [
   {
     type: "function",
@@ -571,25 +641,16 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     console.log("[Checkout] deposit intent update blocked", intentUpdErr.message);
   }
 
-  if (resolvedTxHash) {
-    // Keep finalizing until status reaches IN_ESCROW (or timeout), rather than a single early attempt.
-    const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "DEPOSIT", 36, 5000);
-    if (!settled) {
-      // Fallback reindex path if webhook/poller lags.
-      await runReindexFallback(orderId, resolvedTxHash);
-    }
-  } else {
-    // Fallback: resolve from logs by order key even when tx hash is delayed/not returned.
-    console.log("[Checkout] deposit finalize waiting for event (no tx hash yet)", {
+  const settle = await ensureDepositSettled(orderId, chain, resolvedTxHash, userOpHash);
+  if (settle.txHash && !resolvedTxHash) {
+    resolvedTxHash = settle.txHash;
+  }
+  if (!settle.settled) {
+    console.log("[Checkout] deposit not settled within wait window", {
       order_id: orderId,
+      tx_hash: resolvedTxHash || null,
       user_op_hash: userOpHash || null,
     });
-    for (let i = 0; i < 24; i++) {
-      await runReindexFallback(orderId, null);
-      const status = await readOrderStatus(orderId);
-      if (status === "IN_ESCROW") break;
-      await sleep(5000);
-    }
   }
 
   return { ...intent, token_symbol: symbol, token_address: tokenAddress, tx_hash: resolvedTxHash || null, user_op_hash: userOpHash || null };

@@ -3,7 +3,7 @@ import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supab
 import { orderKeyKeccak } from "../_shared/market/crypto.ts";
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();

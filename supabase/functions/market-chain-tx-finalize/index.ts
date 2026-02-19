@@ -22,7 +22,7 @@ function toNum(hexOrNum: string | number | null | undefined): number {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const supabase = supabaseUserClient(req);
   const admin = supabaseAdminClient();

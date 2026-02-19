@@ -12,7 +12,7 @@ import {
 } from "../_shared/market/stock.ts";
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const userClient = supabaseUserClient(req);
   const admin = supabaseAdminClient();

@@ -81,6 +81,38 @@ function CommandTile({
   );
 }
 
+function EnginePill({
+  icon,
+  label,
+  active,
+  accent,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  active: boolean;
+  accent: string;
+}) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderRadius: 12,
+        height: 40,
+        borderWidth: 1,
+        borderColor: active ? accent : "rgba(255,255,255,0.14)",
+        backgroundColor: active ? `${accent}33` : "rgba(255,255,255,0.05)",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+      }}
+    >
+      <Ionicons name={icon} size={13} color={active ? accent : "#fff"} />
+      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>{label}</Text>
+    </View>
+  );
+}
+
 export default function MarketAccountTab() {
   const wallet = useUnifiedWallet();
   const [loading, setLoading] = useState(true);
@@ -323,6 +355,33 @@ export default function MarketAccountTab() {
             onOpenNgnWallet={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
             onOpenCryptoWallet={() => router.push("/market/wallet" as any)}
           />
+        </View>
+
+        <View
+          style={{
+            marginTop: 10,
+            borderRadius: 16,
+            padding: 12,
+            backgroundColor: CARD,
+            borderWidth: 1,
+            borderColor: BORDER,
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>Wallet Engine</Text>
+          <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
+            <EnginePill
+              icon="link-outline"
+              label="WalletConnect"
+              active={wallet.walletMode === "walletconnect"}
+              accent="#60A5FA"
+            />
+            <EnginePill
+              icon="sparkles-outline"
+              label="Smart Wallet"
+              active={wallet.walletMode === "base_smart"}
+              accent="#2DD4BF"
+            />
+          </View>
         </View>
 
         <View

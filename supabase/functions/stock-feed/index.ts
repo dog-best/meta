@@ -17,7 +17,7 @@ function toInt(input: unknown, fallback: number, min: number, max: number) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const admin = supabaseAdminClient();
   const userClient = supabaseUserClient(req);
@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
     const { data: identities, error: listErr } = await admin
       .from("market_stock_identities")
       .select("id,store_id,slug,name,symbol,chain,active,launch_guard_until,trading_paused_until,launched_at,created_at")
-      .eq("active", true)
+      .neq("active", false)
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
     if (listErr) return bad(listErr.message);

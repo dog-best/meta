@@ -2,7 +2,7 @@ import { bad, methodNotAllowed, ok } from "../_shared/market/http.ts";
 import { supabaseAdminClient } from "../_shared/market/supabase.ts";
 
 Deno.serve(async (req) => {
-  if (req.method !== "GET") return methodNotAllowed();
+  if (req.method !== "GET") return methodNotAllowed(req);
 
   const admin = supabaseAdminClient();
   const url = new URL(req.url);

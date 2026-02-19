@@ -104,7 +104,7 @@ async function resolveUniqueSlug(admin: ReturnType<typeof supabaseAdminClient>, 
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return methodNotAllowed();
+  if (req.method !== "POST") return methodNotAllowed(req);
 
   const userClient = supabaseUserClient(req);
   const admin = supabaseAdminClient();
@@ -170,7 +170,7 @@ Deno.serve(async (req) => {
 
   const { data: existingByStore, error: existingErr } = await admin
     .from("market_stock_identities")
-    .select("id,slug,name,symbol,chain")
+    .select("id,slug,name,symbol,chain,active")
     .eq("store_id", user.id)
     .maybeSingle();
   if (existingErr) return bad(existingErr.message);
@@ -306,6 +306,7 @@ Deno.serve(async (req) => {
       symbol,
       token_address: decoded.token,
       pool_address: decoded.pool,
+      active: true,
       launch_guard_until: launchGuardUntil,
       launched_at: now.toISOString(),
     })

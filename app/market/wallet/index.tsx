@@ -264,6 +264,11 @@ export default function MarketWallet() {
   }
 
   const total = useMemo(() => Number(usdc || 0) + Number(usdt || 0), [usdc, usdt]);
+  const copyAddress = useMemo(() => {
+    if (isAddress(walletAddr)) return walletAddr;
+    if (isAddress(connectedAddr)) return connectedAddr;
+    return "";
+  }, [walletAddr, connectedAddr]);
   const locationText = useMemo(() => {
     if (!country) return "Location unavailable";
     return [country.city, country.region, formatCountryLabel(country.name, country.code)].filter(Boolean).join(", ");
@@ -316,7 +321,10 @@ export default function MarketWallet() {
                 walletMode === "walletconnect" ? s.engineBtnActivePurple : undefined,
               ]}
             >
-              <Text style={s.engineText}>WalletConnect</Text>
+              <View style={s.engineInner}>
+                <Ionicons name="link-outline" size={14} color="#60A5FA" />
+                <Text style={s.engineText}>WalletConnect</Text>
+              </View>
             </Pressable>
             <Pressable
               onPress={async () => {
@@ -334,7 +342,10 @@ export default function MarketWallet() {
                 !isBaseSmartSupported() ? s.dimmed : undefined,
               ]}
             >
-              <Text style={s.engineText}>Base Smart</Text>
+              <View style={s.engineInner}>
+                <Ionicons name="sparkles-outline" size={14} color="#2DD4BF" />
+                <Text style={s.engineText}>Smart Wallet</Text>
+              </View>
             </Pressable>
           </View>
           {!isBaseSmartSupported() ? (
@@ -390,11 +401,15 @@ export default function MarketWallet() {
                 <View style={s.row}>
                   <Pressable
                     style={s.btnSmall}
-                    disabled={!walletAddr}
+                    disabled={!copyAddress}
                     onPress={async () => {
-                      if (!walletAddr) return;
-                      await Clipboard.setStringAsync(walletAddr);
-                      Alert.alert("Copied", "Wallet address copied.");
+                      if (!copyAddress) return;
+                      try {
+                        await Clipboard.setStringAsync(copyAddress);
+                        Alert.alert("Copied", "Wallet address copied.");
+                      } catch {
+                        Alert.alert("Copy failed", "Unable to copy wallet address right now.");
+                      }
                     }}
                   >
                     <Text style={s.btnText}>Copy Address</Text>
@@ -530,6 +545,7 @@ const s = StyleSheet.create({
     borderColor: "rgba(45,212,191,0.55)",
     backgroundColor: "rgba(45,212,191,0.22)",
   },
+  engineInner: { flexDirection: "row", alignItems: "center", gap: 6 },
   engineText: { color: "#fff", fontWeight: "900", fontSize: 12 },
   grid: { marginTop: 12, gap: 12 },
   gridWide: { flexDirection: "row", alignItems: "flex-start" },

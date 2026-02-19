@@ -1,7 +1,17 @@
+export const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+};
+
+function withCors(extra?: Record<string, string>) {
+  return { ...CORS_HEADERS, ...(extra || {}) };
+}
+
 export function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: withCors({ "Content-Type": "application/json" }),
   });
 }
 
@@ -17,8 +27,11 @@ export function unauth() {
   return json(401, { error: "Unauthorized" });
 }
 
-export function methodNotAllowed() {
-  return new Response("Method not allowed", { status: 405 });
+export function methodNotAllowed(req?: Request) {
+  if (req?.method === "OPTIONS") {
+    return new Response("ok", { status: 200, headers: withCors() });
+  }
+  return new Response("Method not allowed", { status: 405, headers: withCors() });
 }
 
 export function requireFields(obj: any, fields: string[]) {

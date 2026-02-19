@@ -28,8 +28,16 @@ function chainLabel(v?: string | null) {
   return String(v || "").toUpperCase().replace(/_/g, " ");
 }
 
+function firstValidAddress(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    if (isAddress(value)) return String(value);
+  }
+  return "";
+}
+
 export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnWallet, onOpenCryptoWallet }: Props) {
   const portfolio = wallet.portfolioPositions.slice(0, compact ? 3 : 5);
+  const copyAddress = firstValidAddress(wallet.savedAddress, wallet.connectedAddress);
 
   return (
     <View
@@ -146,7 +154,10 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
               backgroundColor: wallet.walletMode === "walletconnect" ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.05)",
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>WalletConnect</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Ionicons name="link-outline" size={14} color="#60A5FA" />
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>WalletConnect</Text>
+            </View>
           </Pressable>
           <Pressable
             onPress={() => wallet.setWalletMode("base_smart")}
@@ -163,7 +174,10 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
               opacity: wallet.baseSmartSupported ? 1 : 0.55,
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Base Smart</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Ionicons name="sparkles-outline" size={14} color="#2DD4BF" />
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>Smart Wallet</Text>
+            </View>
           </Pressable>
         </View>
         {!wallet.baseSmartSupported ? (
@@ -243,11 +257,15 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
       <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
         <Pressable
           onPress={async () => {
-            if (!isAddress(wallet.savedAddress)) return;
-            await Clipboard.setStringAsync(wallet.savedAddress);
-            Alert.alert("Copied", "Wallet address copied.");
+            if (!copyAddress) return;
+            try {
+              await Clipboard.setStringAsync(copyAddress);
+              Alert.alert("Copied", "Wallet address copied.");
+            } catch {
+              Alert.alert("Copy failed", "Unable to copy wallet address right now.");
+            }
           }}
-          disabled={!isAddress(wallet.savedAddress)}
+          disabled={!copyAddress}
           style={{
             flex: 1,
             borderRadius: 12,
@@ -257,7 +275,7 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
             backgroundColor: "rgba(255,255,255,0.06)",
             borderWidth: 1,
             borderColor: "rgba(255,255,255,0.1)",
-            opacity: isAddress(wallet.savedAddress) ? 1 : 0.6,
+            opacity: copyAddress ? 1 : 0.6,
           }}
         >
           <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>Copy Address</Text>

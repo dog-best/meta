@@ -83,7 +83,19 @@ function VerifiedTick({ verified }: { verified?: boolean | null }) {
   return <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />;
 }
 
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function Chip({
+  label,
+  active,
+  onPress,
+  icon,
+  iconColor,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+  iconColor?: string;
+}) {
   return (
     <Pressable
       onPress={onPress}
@@ -96,7 +108,10 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
         borderColor: active ? PURPLE : BORDER,
       }}
     >
-      <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        {icon ? <Ionicons name={icon} size={13} color={iconColor || "#fff"} /> : null}
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>{label}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -604,9 +619,26 @@ export default function MarketHome() {
                 </View>
 
                 <View style={{ marginTop: 12, flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-                  <Chip label="Listings" active={directoryMode === "listings"} onPress={() => setDirectoryMode("listings")} />
-                  <Chip label="Featured Accounts" active={directoryMode === "featured"} onPress={() => setDirectoryMode("featured")} />
-                  <Chip label="Verified Accounts" active={directoryMode === "verified"} onPress={() => setDirectoryMode("verified")} />
+                  <Chip
+                    label="Listings"
+                    icon="grid-outline"
+                    active={directoryMode === "listings"}
+                    onPress={() => setDirectoryMode("listings")}
+                  />
+                  <Chip
+                    label="🔥 Featured Accounts"
+                    icon="flame"
+                    iconColor="#FDBA74"
+                    active={directoryMode === "featured"}
+                    onPress={() => setDirectoryMode("featured")}
+                  />
+                  <Chip
+                    label="Verified Accounts"
+                    icon="checkmark-circle"
+                    iconColor="#60A5FA"
+                    active={directoryMode === "verified"}
+                    onPress={() => setDirectoryMode("verified")}
+                  />
                 </View>
 
                 {directoryMode === "listings" ? (

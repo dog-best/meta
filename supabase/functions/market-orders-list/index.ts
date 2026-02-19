@@ -9,7 +9,7 @@ function extractBearerToken(req: Request): string | null {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "GET") return methodNotAllowed();
+  if (req.method !== "GET") return methodNotAllowed(req);
 
   const token = extractBearerToken(req);
   if (!token) return unauth();
