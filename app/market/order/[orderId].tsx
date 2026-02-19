@@ -37,6 +37,7 @@ const RPC_OTP_VERIFY = "market_otp_verify_rpc";
 const RPC_RELEASE_ESCROW = "market_release_escrow_rpc";
 const RPC_OPEN_DISPUTE = "market_open_dispute_rpc";
 const RPC_BUYER_CANCEL = "market_buyer_cancel_order_rpc";
+const RPC_CHAIN_TX_FINALIZE = "market_chain_tx_finalize_rpc";
 // Tables
 const ORDERS_TABLE = "market_orders";
 const LISTINGS_TABLE = "market_listings";
@@ -259,6 +260,7 @@ export default function OrderDetails() {
   const [reindexOpen, setReindexOpen] = useState(false);
   const [reindexTx, setReindexTx] = useState("");
   const autoReindexKeyRef = useRef<string>("");
+  const autoSyncBusyRef = useRef(false);
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
@@ -268,6 +270,11 @@ export default function OrderDetails() {
     const dep = intents.filter((i) => String(i.intent_type || "").toUpperCase() === "DEPOSIT");
     if (!dep.length) return null;
     return dep.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
+  }, [intents]);
+  const latestReleaseIntent = useMemo(() => {
+    const rel = intents.filter((i) => String(i.intent_type || "").toUpperCase() === "RELEASE");
+    if (!rel.length) return null;
+    return rel.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
   }, [intents]);
   const isStableOrder = useMemo(
     () => ["USDC", "USDT"].includes(String(order?.currency || "").toUpperCase()),
@@ -438,8 +445,80 @@ export default function OrderDetails() {
     return () => clearTimeout(timer);
   }, [awaitingConfirmations, defaultDepositHash, order?.id]);
 
+  useEffect(() => {
+    if (!awaitingConfirmations || !order?.id) return;
+
+    let alive = true;
+    const run = async () => {
+      if (!alive || autoSyncBusyRef.current) return;
+      autoSyncBusyRef.current = true;
+      try {
+        const body: Record<string, unknown> = { order_id: order.id };
+        if (isHexHash(defaultDepositHash)) body.tx_hash = defaultDepositHash;
+        await supabase.functions.invoke("market-escrow-reindex", { body }).catch(() => null);
+        await load();
+      } finally {
+        autoSyncBusyRef.current = false;
+      }
+    };
+
+    void run();
+    const timer = setInterval(() => {
+      void run();
+    }, 15000);
+
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [awaitingConfirmations, order?.id, defaultDepositHash]);
+
+  useEffect(() => {
+    if (!order?.id) return;
+    if (!isStableOrder) return;
+    if (String(order.status || "").toUpperCase() === "RELEASED") return;
+    if (String(order.status || "").toUpperCase() === "REFUNDED") return;
+
+    const releaseStatus = String(latestReleaseIntent?.status || "").toUpperCase();
+    const releaseTx = String(latestReleaseIntent?.tx_hash || "").trim();
+    const releaseChain = String(latestReleaseIntent?.chain || "").trim();
+    if (!["SUBMITTED", "CONFIRMED", "PROCESSING", "CREATED"].includes(releaseStatus)) return;
+    if (!isHexHash(releaseTx) || !releaseChain) return;
+
+    let alive = true;
+    const run = async () => {
+      if (!alive || autoSyncBusyRef.current) return;
+      autoSyncBusyRef.current = true;
+      try {
+        try {
+          await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
+            p_order_id: order.id,
+            p_chain: releaseChain,
+            p_tx_hash: releaseTx,
+            p_event_type: "RELEASE",
+          });
+        } catch {
+          // ignore; next loop/poller can settle
+        }
+        await load();
+      } finally {
+        autoSyncBusyRef.current = false;
+      }
+    };
+
+    void run();
+    const timer = setInterval(() => {
+      void run();
+    }, 15000);
+
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [order?.id, order?.status, isStableOrder, latestReleaseIntent?.status, latestReleaseIntent?.tx_hash, latestReleaseIntent?.chain]);
+
   // Buttons conditions (your existing logic)
-  const canGoCheckout = !!order && order.status === "CREATED" && isBuyer;
+  const canGoCheckout = !!order && order.status === "CREATED" && isBuyer && !hasSubmittedCryptoDeposit;
   const canCancel = !!order && order.status === "CREATED" && isBuyer && !hasSubmittedCryptoDeposit;
 
   const canOutForDelivery = !!order && isSeller && order.status === "IN_ESCROW";
@@ -812,35 +891,48 @@ async function pickAndUpload(access: "preview" | "final") {
     const path = `orders/${order.id}/${access}/${Date.now()}-${safeName}`;
 
     // ✅ Upload (no expo-file-system EncodingType / bytes here)
-    const uploaded = await uploadToSupabaseStorage({
-      bucket,
-      path,
-      localUri: asset.uri,
-      contentType: mime ?? "application/octet-stream",
-      upsert: false,
-    });
+    let uploaded: { publicUrl: string | null; storagePath: string };
+    try {
+      uploaded = await uploadToSupabaseStorage({
+        bucket,
+        path,
+        localUri: asset.uri,
+        contentType: mime ?? "application/octet-stream",
+        upsert: false,
+      });
+    } catch (storageErr: any) {
+      throw new Error(`[storage] ${String(storageErr?.message || storageErr)}`);
+    }
 
     // ✅ Save DB row
-    await insertFileDeliverable({
-      orderId: order.id,
-      access, // "preview" | "final" (matches your current UI & filters)
-      kind,
-      title: access === "preview" ? `Preview: ${name}` : `Full: ${name}`,
-      sortOrder: access === "preview" ? previewItems.length : finalItems.length,
-      bucket,
-      storagePath: uploaded.storagePath,
-      mimeType: mime,
-      meta: {
-        note: access === "preview" ? "Low quality / watermarked recommended" : "Full quality",
-        originalName: name,
-        size: asset.size ?? null,
-      },
-    });
+    try {
+      await insertFileDeliverable({
+        orderId: order.id,
+        access, // "preview" | "final" (matches your current UI & filters)
+        kind,
+        title: access === "preview" ? `Preview: ${name}` : `Full: ${name}`,
+        sortOrder: access === "preview" ? previewItems.length : finalItems.length,
+        bucket,
+        storagePath: uploaded.storagePath,
+        mimeType: mime,
+        meta: {
+          note: access === "preview" ? "Low quality / watermarked recommended" : "Full quality",
+          originalName: name,
+          size: asset.size ?? null,
+        },
+      });
+    } catch (dbErr: any) {
+      throw new Error(`[db] ${String(dbErr?.message || dbErr)}`);
+    }
 
     await load();
   } catch (e: any) {
     const msg = String(e?.message || "Upload failed");
-    if (msg.toLowerCase().includes("row-level security")) {
+    if (msg.toLowerCase().includes("[storage]")) {
+      setUploadErr(`Storage upload failed: ${msg.replace(/^\[storage\]\s*/i, "")}`);
+    } else if (msg.toLowerCase().includes("[db]")) {
+      setUploadErr(`Deliverable save failed: ${msg.replace(/^\[db\]\s*/i, "")}`);
+    } else if (msg.toLowerCase().includes("row-level security")) {
       setUploadErr(
         "Upload blocked by RLS policy. Apply the latest market deliverables RLS migration, then retry.",
       );

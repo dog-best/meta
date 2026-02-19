@@ -20,6 +20,23 @@ export type OrderDeliverable = {
   created_at: string;
 };
 
+function looksLikeHttpUrl(input?: string | null) {
+  return /^https?:\/\//i.test(String(input || "").trim());
+}
+
+function normalizeStoragePath(bucket: string, rawPath: string) {
+  const p = String(rawPath || "").trim();
+  if (!p) return "";
+  if (looksLikeHttpUrl(p)) return p;
+
+  let out = p.replace(/^\/+/, "");
+  const prefixA = `${bucket}/`;
+  const prefixB = `public/${bucket}/`;
+  if (out.startsWith(prefixB)) out = out.slice(prefixB.length);
+  if (out.startsWith(prefixA)) out = out.slice(prefixA.length);
+  return out;
+}
+
 export async function listOrderDeliverables(orderId: string) {
   const { data, error } = await supabase
     .from("market_order_deliverables")
@@ -35,8 +52,22 @@ export async function listOrderDeliverables(orderId: string) {
 }
 
 export async function signedUrl(bucket: string, path: string, expiresSec = 900) {
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresSec);
-  if (error) throw new Error(error.message);
+  const normalizedPath = normalizeStoragePath(bucket, path);
+  if (!normalizedPath) return null;
+  if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;
+
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalizedPath, expiresSec);
+  if (error) {
+    const msg = String(error.message || "");
+    const code = String((error as any)?.code || "");
+    // Some Storage RLS policy SQL expressions can throw 22P02 on signed URL queries.
+    // Fall back to public URL when possible so previews still render.
+    if (code === "22P02" || msg.includes("22P02") || /invalid input syntax/i.test(msg)) {
+      const pub = supabase.storage.from(bucket).getPublicUrl(normalizedPath)?.data?.publicUrl || null;
+      if (pub) return pub;
+    }
+    throw new Error(code ? `${msg} (code: ${code})` : msg);
+  }
   return data?.signedUrl ?? null;
 }
 

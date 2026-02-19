@@ -78,8 +78,11 @@ async function resolveSubmittedHashes(chain: MarketChainConfig, sendResult: any)
   if (!txHash && hashCandidate) {
     if (await hashLooksLikeOnchainTx(chain, hashCandidate)) {
       txHash = hashCandidate;
-    } else if (!userOpHash) {
-      userOpHash = hashCandidate;
+    } else {
+      // `hash` from AA providers may be either tx hash or userOp hash.
+      // Keep both paths available; later settling logic will resolve correctly.
+      txHash = hashCandidate;
+      if (!userOpHash) userOpHash = hashCandidate;
     }
   }
 
@@ -243,11 +246,15 @@ async function runReindexFallback(orderId: string, txHash?: string | null) {
 }
 
 async function readLatestDepositIntent(orderId: string) {
+  return readLatestIntent(orderId, "DEPOSIT");
+}
+
+async function readLatestIntent(orderId: string, intentType: ChainFinalizeEvent) {
   const { data, error } = await supabase
     .from("market_crypto_intents")
     .select("tx_hash,client_reference,chain,status,created_at")
     .eq("order_id", orderId)
-    .eq("intent_type", "DEPOSIT")
+    .eq("intent_type", intentType)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -312,6 +319,63 @@ async function ensureDepositSettled(
         const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "DEPOSIT", 6, 3000);
         if (settled) return { settled: true, txHash: resolvedTxHash };
       }
+    }
+
+    await sleep(5000);
+  }
+
+  return { settled: false, txHash: resolvedTxHash || "" };
+}
+
+async function ensureReleaseSettled(
+  orderId: string,
+  chain: MarketChainConfig,
+  txHash: string,
+  userOpHash: string,
+) {
+  let resolvedTxHash = normalizeHexHash(txHash);
+  let resolvedUserOpHash = normalizeHexHash(userOpHash);
+  let recoveredFinalizeAttempted = false;
+
+  if (resolvedTxHash && !resolvedUserOpHash) {
+    const maybeResolved = await resolveUserOpToTxHash(chain, resolvedTxHash, 6, 2000);
+    if (isHexHash(maybeResolved)) {
+      resolvedUserOpHash = resolvedTxHash;
+      resolvedTxHash = maybeResolved;
+    }
+  }
+
+  if (!resolvedTxHash && resolvedUserOpHash) {
+    resolvedTxHash = await resolveUserOpToTxHash(chain, resolvedUserOpHash, 40, 3000);
+  }
+
+  if (resolvedTxHash) {
+    const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "RELEASE", 24, 4000);
+    if (settled) return { settled: true, txHash: resolvedTxHash };
+  }
+
+  for (let i = 0; i < 12; i++) {
+    const status = await readOrderStatus(orderId);
+    if (status === "RELEASED") {
+      return { settled: true, txHash: resolvedTxHash || "" };
+    }
+
+    const latest = await readLatestIntent(orderId, "RELEASE");
+    if (latest?.txHash && !resolvedTxHash) {
+      resolvedTxHash = latest.txHash;
+    }
+    if (latest?.userOpHash && !resolvedUserOpHash) {
+      resolvedUserOpHash = latest.userOpHash;
+    }
+
+    if (!resolvedTxHash && resolvedUserOpHash) {
+      resolvedTxHash = await resolveUserOpToTxHash(chain, resolvedUserOpHash, 6, 4000);
+    }
+
+    if (resolvedTxHash && !recoveredFinalizeAttempted) {
+      recoveredFinalizeAttempted = true;
+      const settled = await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "RELEASE", 8, 3000);
+      if (settled) return { settled: true, txHash: resolvedTxHash };
     }
 
     await sleep(5000);
@@ -776,11 +840,22 @@ export async function releaseUsdcForOrder(orderId: string) {
     data,
   });
 
+  const txHash = normalizeHexHash(String((sendResult as any)?.transactionHash ?? ""));
   const userOpHash = normalizeHexHash(String((sendResult as any)?.userOpHash ?? (sendResult as any)?.userOperationHash ?? ""));
   const rawHash = normalizeHexHash(String((sendResult as any)?.hash ?? ""));
+  console.log("[Checkout] release send result", {
+    tx_hash: txHash || rawHash || null,
+    user_op_hash: userOpHash || null,
+    chain: chain.chain,
+  });
+
   const resolvedHashes = await resolveSubmittedHashes(chain, sendResult);
   let resolvedTxHash = resolvedHashes.txHash;
   const resolvedUserOpHash = resolvedHashes.userOpHash || userOpHash || (resolvedTxHash ? "" : rawHash);
+  console.log("[Checkout] release resolved tx", {
+    resolved_tx_hash: resolvedTxHash || null,
+    user_op_hash: resolvedUserOpHash || null,
+  });
 
   const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
     p_order_id: orderId,
@@ -802,8 +877,16 @@ export async function releaseUsdcForOrder(orderId: string) {
     console.log("[Checkout] release intent update blocked", intentUpdErr.message);
   }
 
-  if (resolvedTxHash) {
-    await settleOrderFromTx(orderId, chain.chain, resolvedTxHash, "RELEASE", 36, 5000);
+  const settle = await ensureReleaseSettled(orderId, chain, resolvedTxHash, resolvedUserOpHash);
+  if (settle.txHash && !resolvedTxHash) {
+    resolvedTxHash = settle.txHash;
+  }
+  if (!settle.settled) {
+    console.log("[Checkout] release not settled within wait window", {
+      order_id: orderId,
+      tx_hash: resolvedTxHash || null,
+      user_op_hash: resolvedUserOpHash || null,
+    });
   }
 
   return { ...intent, tx_hash: resolvedTxHash || null, user_op_hash: resolvedUserOpHash || null };
