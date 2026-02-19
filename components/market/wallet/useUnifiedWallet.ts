@@ -63,11 +63,11 @@ export function useUnifiedWallet() {
     try {
       setCountryErr(null);
       const c = await resolveUserCountry({ prompt: true, refresh: true });
-      setCountry(c);
-      if (!c) setCountryErr("Location not detected.");
+      setCountry((prev) => c ?? prev ?? null);
+      if (!c) setCountryErr("Live location not detected. Showing last known country.");
       return c;
     } catch (e: any) {
-      setCountry(null);
+      setCountry((prev) => prev ?? null);
       setCountryErr(String(e?.message || "Could not read location."));
       return null;
     }

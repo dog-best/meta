@@ -116,9 +116,13 @@ export default function MarketWallet() {
     (async () => {
       try {
         const c = await resolveUserCountry({ prompt: true, refresh: true });
-        if (mounted) setCountry(c);
+        if (mounted) {
+          setCountry((prev) => c ?? prev ?? null);
+        }
       } catch {
-        if (mounted) setCountry(null);
+        if (mounted) {
+          setCountry((prev) => prev ?? null);
+        }
       }
     })();
 

@@ -20,7 +20,7 @@ import SocialFeed from "@/components/market/SocialFeed";
 import { CategoryItem, getCategoriesByMain, MarketMainCategory } from "@/services/market/categories";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
-import { isNigeriaCountry, listingMatchesCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
+import { getCachedCountry, isNigeriaCountry, listingMatchesCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 import { listingAllowsCrypto } from "@/utils/marketVisibility";
 import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 
@@ -183,12 +183,28 @@ export default function MarketHome() {
     setCountryErr(null);
     try {
       const c = await resolveUserCountry({ prompt: true, refresh: true, ipOnly: true });
-      setUserCountry(c);
-      if (!c) {
-        setCountryErr("Location not detected. Use Global to view all listings.");
+      if (c) {
+        setUserCountry(c);
+        return c;
       }
-      return c;
+
+      const cached = await getCachedCountry();
+      if (cached) {
+        setUserCountry(cached);
+        setCountryErr("Live IP location not detected. Showing last known location.");
+        return cached;
+      }
+
+      setCountryErr("Location not detected. Use Global to view all listings.");
+      return null;
     } catch (e: any) {
+      const cached = await getCachedCountry();
+      if (cached) {
+        setUserCountry(cached);
+        setCountryErr("Could not refresh live location. Showing last known location.");
+        return cached;
+      }
+
       setUserCountry(null);
       setCountryErr(String(e?.message || "We couldn't read your location."));
       return null;

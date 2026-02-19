@@ -25,6 +25,7 @@ let state: WalletConnectSession = {
 };
 
 const listeners = new Set<(next: WalletConnectSession) => void>();
+const walletConnectProjectId = String(process.env.EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID || "").trim();
 
 function isAddress(value: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(value || ""));
@@ -144,6 +145,9 @@ export async function connectWalletConnectEvm(timeoutMs = 60_000, opts?: Connect
   }
 
   if (!openModal) {
+    if (!walletConnectProjectId) {
+      throw new Error("WalletConnect is not configured. Set EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID in this app and restart.");
+    }
     throw new Error("WalletConnect is still initializing. Retry in a moment.");
   }
 
