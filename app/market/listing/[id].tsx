@@ -130,6 +130,7 @@ export default function ListingDetails() {
   const [deliveryGeo, setDeliveryGeo] = useState<DeliveryGeo | null>(null);
   const [deliveryLabel, setDeliveryLabel] = useState("");
   const [locatingDelivery, setLocatingDelivery] = useState(false);
+  const [buyBusy, setBuyBusy] = useState(false);
   const [meId, setMeId] = useState<string | null>(null);
 
   const [likes, setLikes] = useState(0);
@@ -378,6 +379,8 @@ export default function ListingDetails() {
   }
 
   async function buyNow() {
+    if (buyBusy) return;
+    setBuyBusy(true);
     try {
       const { data: auth } = await supabase.auth.getUser();
       const user = auth?.user;
@@ -391,12 +394,11 @@ export default function ListingDetails() {
         Alert.alert("Out of stock", "This listing is sold out. The seller needs to restock or relist.");
         return;
       }
-      let effectiveCountry = userCountry;
-      if (effectiveCountry === undefined) {
-        effectiveCountry = await resolveUserCountry({ prompt: true }).catch(() => null);
-        setUserCountry(effectiveCountry);
-      }
-      const effectiveIsNigeria = isNigeriaCountry(effectiveCountry?.code || effectiveCountry?.name);
+      const effectiveCountry = userCountry === undefined ? null : userCountry;
+      const shouldApplyRegionRestriction = effectiveCountry !== null;
+      const effectiveIsNigeria = shouldApplyRegionRestriction
+        ? isNigeriaCountry(effectiveCountry?.code || effectiveCountry?.name)
+        : true;
       const paymentOptions = (listing.payment_options ?? {}) as any;
       const hasExplicitRoutes =
         typeof paymentOptions?.allow_ngn === "boolean" ||
@@ -409,20 +411,15 @@ export default function ListingDetails() {
       const allowUsdt = hasExplicitRoutes
         ? paymentOptions?.allow_usdt === true
         : listingCurrency === "USDT";
-      if (!effectiveIsNigeria && !allowUsdc && !allowUsdt) {
+      if (shouldApplyRegionRestriction && !effectiveIsNigeria && !allowUsdc && !allowUsdt) {
         Alert.alert("Crypto only", "This listing does not support USDC/USDT checkout for your region.");
         return;
       }
 
-      const needsLocation = String(listing.delivery_type ?? "").toLowerCase() !== "digital";
       const finalDeliveryGeo =
         deliveryGeo
           ? { ...deliveryGeo, label: deliveryLabel.trim() || deliveryGeo.label }
           : null;
-      if (needsLocation && !finalDeliveryGeo) {
-        Alert.alert("Add delivery location", "Use your current location to set delivery/service address before buying.");
-        return;
-      }
 
       const qty = 1;
       const out = await callFn<{ order?: { id?: string } }>("market-create-order", {
@@ -436,6 +433,8 @@ export default function ListingDetails() {
       router.push(`/market/checkout/${nextOrderId}` as any);
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't start checkout for this listing."));
+    } finally {
+      setBuyBusy(false);
     }
   }
 
@@ -1064,7 +1063,7 @@ export default function ListingDetails() {
       >
         <Pressable
           onPress={buyNow}
-          disabled={isOutOfStock}
+          disabled={isOutOfStock || buyBusy}
           style={{
             borderRadius: 22,
             paddingVertical: 16,
@@ -1072,15 +1071,26 @@ export default function ListingDetails() {
             backgroundColor: isOutOfStock ? "rgba(255,255,255,0.2)" : PURPLE,
             borderWidth: 1,
             borderColor: isOutOfStock ? "rgba(255,255,255,0.28)" : PURPLE,
-            opacity: isOutOfStock ? 0.85 : 1,
+            opacity: isOutOfStock || buyBusy ? 0.85 : 1,
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-            {isOutOfStock ? "Out of stock" : "Buy now"}
-          </Text>
-          <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-            {isOutOfStock ? "Seller must restock before new orders." : "Escrow protected - choose NGN or USDC next"}
-          </Text>
+          {buyBusy ? (
+            <>
+              <ActivityIndicator color="#fff" />
+              <Text style={{ marginTop: 6, color: "#fff", fontWeight: "900", fontSize: 16 }}>
+                Starting checkout...
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+                {isOutOfStock ? "Out of stock" : "Buy now"}
+              </Text>
+              <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
+                {isOutOfStock ? "Seller must restock before new orders." : "Escrow protected - choose NGN or USDC next"}
+              </Text>
+            </>
+          )}
         </Pressable>
       </View>
 
