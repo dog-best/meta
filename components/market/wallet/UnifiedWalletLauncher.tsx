@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, usePathname } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Animated, PanResponder, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 
 import UnifiedWalletSheet from "@/components/market/wallet/UnifiedWalletSheet";
 import { useUnifiedWallet } from "@/components/market/wallet/useUnifiedWallet";
@@ -10,6 +10,10 @@ export default function UnifiedWalletLauncher() {
   const pathname = usePathname();
   const wallet = useUnifiedWallet();
   const [open, setOpen] = useState(false);
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const drag = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const draggedRef = useRef(false);
 
   const hidden = useMemo(() => {
     const p = String(pathname || "");
@@ -24,25 +28,106 @@ export default function UnifiedWalletLauncher() {
     return p.includes("/market/orders") || p.includes("/market/stock");
   }, [pathname]);
 
+  const inListing = useMemo(() => {
+    const p = String(pathname || "");
+    return p.includes("/market/listing/");
+  }, [pathname]);
+
   const bottomPad = useMemo(() => {
     const base = Platform.OS === "ios" ? 96 : 82;
+    if (inListing) return base + 94;
     return compact ? base + 26 : base;
-  }, [compact]);
+  }, [compact, inListing]);
+
+  const chipWidth = compact ? 120 : 146;
+  const chipHeight = compact ? 48 : 54;
+
+  const clampDrag = useCallback(
+    (x: number, y: number) => {
+      const maxRight = 8;
+      const maxLeft = -(viewportWidth - chipWidth - 24);
+      const topSafe = Platform.OS === "ios" ? 74 : 58;
+      const upTravel = viewportHeight - topSafe - bottomPad - chipHeight - 16;
+      const maxUp = Math.min(0, -upTravel);
+      return {
+        x: Math.max(maxLeft, Math.min(maxRight, x)),
+        y: Math.max(maxUp, Math.min(0, y)),
+      };
+    },
+    [bottomPad, chipHeight, chipWidth, viewportHeight, viewportWidth]
+  );
+
+  useEffect(() => {
+    const clamped = clampDrag(dragOffsetRef.current.x, dragOffsetRef.current.y);
+    dragOffsetRef.current = clamped;
+    drag.setValue(clamped);
+  }, [clampDrag, drag]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 6 || Math.abs(g.dy) > 6,
+        onPanResponderGrant: () => {
+          draggedRef.current = false;
+          drag.setOffset(dragOffsetRef.current);
+          drag.setValue({ x: 0, y: 0 });
+        },
+        onPanResponderMove: (_evt, g) => {
+          if (Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4) draggedRef.current = true;
+          Animated.event([null, { dx: drag.x, dy: drag.y }], { useNativeDriver: false })(_evt, g);
+        },
+        onPanResponderRelease: (_evt, g) => {
+          drag.flattenOffset();
+          const raw = {
+            x: dragOffsetRef.current.x + g.dx,
+            y: dragOffsetRef.current.y + g.dy,
+          };
+          const clamped = clampDrag(raw.x, raw.y);
+          dragOffsetRef.current = clamped;
+          Animated.spring(drag, {
+            toValue: clamped,
+            useNativeDriver: false,
+            bounciness: 0,
+            speed: 18,
+          }).start();
+        },
+        onPanResponderTerminate: (_evt, g) => {
+          drag.flattenOffset();
+          const raw = {
+            x: dragOffsetRef.current.x + g.dx,
+            y: dragOffsetRef.current.y + g.dy,
+          };
+          const clamped = clampDrag(raw.x, raw.y);
+          dragOffsetRef.current = clamped;
+          drag.setValue(clamped);
+        },
+      }),
+    [clampDrag, drag]
+  );
 
   if (hidden) return null;
 
   return (
-    <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
-      <View
-        pointerEvents="box-none"
+    <View pointerEvents="box-none" style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}>
+      <Animated.View
+        {...panResponder.panHandlers}
         style={{
-          alignItems: "flex-end",
-          paddingHorizontal: compact ? 12 : 16,
-          paddingBottom: bottomPad,
+          position: "absolute",
+          right: compact ? 12 : 16,
+          bottom: bottomPad,
+          zIndex: 40,
+          transform: drag.getTranslateTransform(),
         }}
       >
         <Pressable
-          onPress={() => setOpen(true)}
+          onPress={() => {
+            if (draggedRef.current) {
+              draggedRef.current = false;
+              return;
+            }
+            setOpen(true);
+          }}
           style={{
             minWidth: compact ? 120 : 146,
             height: compact ? 48 : 54,
@@ -83,7 +168,7 @@ export default function UnifiedWalletLauncher() {
           </View>
           <Ionicons name="chevron-up" size={compact ? 14 : 16} color="#fff" />
         </Pressable>
-      </View>
+      </Animated.View>
 
       <UnifiedWalletSheet
         visible={open}
