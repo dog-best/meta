@@ -609,10 +609,14 @@ export default function Checkout() {
     const userOpHash = String(res?.user_op_hash || "").trim();
     if (isHexHash(txHash)) {
       Alert.alert(
-        "Deposit submitted",
-        `Your ${symbol} deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction:\n${txHash}`,
+        "Transaction successful",
+        `Your ${symbol} deposit was sent on-chain. We'll move the order into escrow after confirmations.\n\nTransaction hash:\n${txHash}`,
         [
           { text: "Copy tx hash", onPress: () => Clipboard.setStringAsync(txHash) },
+          {
+            text: "View history",
+            onPress: () => router.push((`/market/history?q=${encodeURIComponent(txHash)}` as any) as any),
+          },
           {
             text: "Continue",
             onPress: () => router.replace((`/market/order/${oid}?tx=${encodeURIComponent(txHash)}` as any) as any),
@@ -623,10 +627,14 @@ export default function Checkout() {
     }
     if (isHexHash(userOpHash)) {
       Alert.alert(
-        "Deposit submitted",
+        "Transaction submitted",
         `Your ${symbol} deposit was submitted. Confirmation may take a few minutes.\n\nUserOp:\n${userOpHash}\n\nWe'll move the order into escrow after confirmations.`,
         [
           { text: "Copy UserOp", onPress: () => Clipboard.setStringAsync(userOpHash) },
+          {
+            text: "View history",
+            onPress: () => router.push((`/market/history?q=${encodeURIComponent(userOpHash)}` as any) as any),
+          },
           {
             text: "Continue",
             onPress: () => router.replace((`/market/order/${oid}?uo=${encodeURIComponent(userOpHash)}` as any) as any),

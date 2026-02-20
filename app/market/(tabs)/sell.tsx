@@ -8,7 +8,7 @@ import { ActivityIndicator, Alert, Image, Linking, Pressable, ScrollView, Text, 
 
 import AppHeader from "@/components/common/AppHeader";
 import { getAllCategories } from "@/services/market/categories";
-import { createListing, getMySellerProfile, insertListingImages, setListingCoverImage, uploadToBucket } from "@/services/market/marketService";
+import { createListing, getMySellerProfile, insertListingImages, uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -206,6 +206,7 @@ export default function SellTab() {
   const [fxUsdToLocal, setFxUsdToLocal] = useState<number | null>(null);
   const [fxUsdToNgn, setFxUsdToNgn] = useState<number | null>(null);
   const [fxFetchedAt, setFxFetchedAt] = useState<string | null>(null);
+  const [stockMode, setStockMode] = useState<"limited" | "unlimited">("limited");
   const [stockQty, setStockQty] = useState("");
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountOriginalPrice, setDiscountOriginalPrice] = useState("");
@@ -283,9 +284,11 @@ export default function SellTab() {
   useEffect(() => {
     if (category === "product") {
       setDeliveryType("physical");
+      setStockMode((prev) => (prev === "unlimited" ? "unlimited" : "limited"));
     } else {
       // services: default digital
       setDeliveryType("digital");
+      setStockMode("unlimited");
     }
 
     setUseCustomSub(false);
@@ -477,8 +480,10 @@ export default function SellTab() {
     }
 
     if (category === "product") {
-      const q = safeNumber(stockQty);
-      if (!Number.isFinite(q) || q <= 0) return "Stock is required and must be at least 1";
+      if (stockMode === "limited") {
+        const q = safeNumber(stockQty);
+        if (!Number.isFinite(q) || q <= 0) return "Stock is required and must be at least 1";
+      }
     }
 
     // media requirements:
@@ -533,7 +538,10 @@ export default function SellTab() {
       if (!fxUsdToLocal || fxUsdToLocal <= 0) {
         throw new Error("FX is not ready. Please wait and try again.");
       }
-      const qty = category === "product" && stockQty.trim() ? Math.max(0, Math.floor(safeNumber(stockQty))) : null;
+      const qty =
+        category === "product" && stockMode === "limited" && stockQty.trim()
+          ? Math.max(0, Math.floor(safeNumber(stockQty)))
+          : null;
       const effectivePayMode = isNigeria ? payMode : "crypto";
       const baseCurrency: "NGN" | "USD" = localCurrency === "NGN" ? "NGN" : "USD";
       const listingCurrency: Currency = effectivePayMode === "ngn" ? "NGN" : "USDC";
@@ -573,6 +581,8 @@ export default function SellTab() {
           allow_usdt: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
           chain_mode: cryptoNetworkMode,
           coin_mode: cryptoCoinMode,
+          stock_mode: category === "product" ? stockMode : "unlimited",
+          out_of_stock: false,
           base_currency: baseCurrency,
           fx_rate_ngn_per_usd: fxUsdToNgn ?? null,
           fx: {
@@ -625,6 +635,8 @@ export default function SellTab() {
         allow_usdt: (effectivePayMode === "crypto" || effectivePayMode === "all") && (cryptoCoinMode === "all" || cryptoCoinMode === "usdt"),
         chain_mode: cryptoNetworkMode,
         coin_mode: cryptoCoinMode,
+        stock_mode: category === "product" ? stockMode : "unlimited",
+        out_of_stock: false,
         base_currency: baseCurrency,
         fx_rate_ngn_per_usd: fxUsdToNgn ?? null,
         fx: {
@@ -750,12 +762,8 @@ export default function SellTab() {
         const rows = await insertListingImages(inserts);
         console.log("[SellTab] insertListingImages -> ok", { count: rows?.length ?? 0 });
 
-        const coverId = rows?.[0]?.id;
-        if (coverId) {
-          console.log("[SellTab] setListingCoverImage -> start", { coverId });
-          setStage("Setting cover…");
-          await setListingCoverImage(listing.id, coverId);
-          console.log("[SellTab] setListingCoverImage -> ok", { coverId });
+        if (!rows?.length) {
+          throw new Error("Upload finished but image rows were not saved. Please retry.");
         }
       }
 
@@ -764,6 +772,7 @@ export default function SellTab() {
     setDescription("");
     setWebsiteUrl("");
     setPrice("");
+    setStockMode("limited");
     setStockQty("");
     setImages([]);
     setUseCustomSub(false);
@@ -1134,8 +1143,31 @@ export default function SellTab() {
 
           {category === "product" ? (
             <>
-              <Label>Stock qty (optional)</Label>
-              <Input value={stockQty} onChangeText={setStockQty} placeholder="e.g. 5" keyboardType="numeric" />
+              <Label>Stock mode</Label>
+              <Row>
+                <Pill
+                  active={stockMode === "limited"}
+                  label="Limited"
+                  icon="layers-outline"
+                  onPress={() => setStockMode("limited")}
+                />
+                <Pill
+                  active={stockMode === "unlimited"}
+                  label="Unlimited"
+                  icon="infinite-outline"
+                  onPress={() => setStockMode("unlimited")}
+                />
+              </Row>
+              {stockMode === "limited" ? (
+                <>
+                  <Label>Stock qty</Label>
+                  <Input value={stockQty} onChangeText={setStockQty} placeholder="e.g. 5" keyboardType="numeric" />
+                </>
+              ) : (
+                <Text style={{ marginTop: 10, color: MUTED, fontSize: 12 }}>
+                  Unlimited stock keeps this product visible until you disable or delete it.
+                </Text>
+              )}
             </>
           ) : null}
         </CardBox>

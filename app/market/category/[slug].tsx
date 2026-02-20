@@ -16,6 +16,7 @@ const BG1 = "#0A0620";
 const PURPLE = "#7C3AED";
 
 const LISTINGS_TABLE = "market_listings";
+const LISTING_IMAGES_BUCKET = "market-listings";
 
 type ListingRow = {
   id: string;
@@ -28,7 +29,7 @@ type ListingRow = {
   sub_category: string | null;
   cover_image_id: string | null;
   availability?: any;
-  market_listing_images?: { id: string; public_url: string | null } | null;
+  market_listing_images?: { id: string; public_url: string | null; storage_path: string | null } | null;
 };
 
 export default function CategoryFeed() {
@@ -38,6 +39,8 @@ export default function CategoryFeed() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ListingRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const supabaseUrl =
+    (supabase as any)?.supabaseUrl ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string) ?? "";
 
   useEffect(() => {
     let mounted = true;
@@ -75,7 +78,8 @@ export default function CategoryFeed() {
               availability,
               market_listing_images!market_listings_cover_image_fk (
                 id,
-                public_url
+                public_url,
+                storage_path
               )
             `
           )
@@ -215,7 +219,11 @@ export default function CategoryFeed() {
         ) : (
           <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
             {rows.map((r) => {
-              const img = r.market_listing_images?.public_url ?? null;
+              const img =
+                r.market_listing_images?.public_url ??
+                (r.market_listing_images?.storage_path
+                  ? `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${r.market_listing_images.storage_path}`
+                  : null);
 
               return (
                 <Pressable

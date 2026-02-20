@@ -51,6 +51,35 @@ Deno.serve(async (req) => {
   }
   const amount = Number((unit_price * quantity).toFixed(2));
 
+  let reservedStock:
+    | {
+        stock_before: number | null;
+        stock_after: number | null;
+        depleted: boolean;
+        listing_active: boolean;
+      }
+    | null = null;
+
+  if (listing.stock_qty !== null) {
+    const { data: reserveData, error: reserveErr } = await admin.rpc("market_reserve_listing_stock", {
+      p_listing_id: listing.id,
+      p_quantity: quantity,
+    });
+    if (reserveErr) {
+      const reserveMsg = String(reserveErr.message || "");
+      if (reserveMsg.toLowerCase().includes("not enough stock")) return bad("Not enough stock");
+      return bad(reserveMsg || "Unable to reserve stock");
+    }
+
+    const row: any = Array.isArray(reserveData) ? reserveData[0] : reserveData;
+    reservedStock = {
+      stock_before: row?.stock_before === null || row?.stock_before === undefined ? null : Number(row.stock_before),
+      stock_after: row?.stock_after === null || row?.stock_after === undefined ? null : Number(row.stock_after),
+      depleted: row?.depleted === true,
+      listing_active: row?.listing_active === true,
+    };
+  }
+
   const { data: order, error } = await admin
     .from("market_orders")
     .insert({
@@ -68,14 +97,25 @@ Deno.serve(async (req) => {
     .select("*")
     .single();
 
-  if (error) return bad(error.message);
-
-  // Decrement stock (optional v1 behavior)
-  if (listing.stock_qty !== null) {
-    await admin
-      .from("market_listings")
-      .update({ stock_qty: listing.stock_qty - quantity })
-      .eq("id", listing.id);
+  if (error) {
+    // Best-effort restore if order insert fails after stock reservation.
+    if (
+      reservedStock &&
+      reservedStock.stock_before !== null &&
+      reservedStock.stock_after !== null
+    ) {
+      await admin
+        .from("market_listings")
+        .update({
+          stock_qty: reservedStock.stock_before,
+          is_active: true,
+          payment_options: (listing as any)?.payment_options ?? {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", listing.id)
+        .eq("stock_qty", reservedStock.stock_after);
+    }
+    return bad(error.message);
   }
 
   await admin.from("market_audit_logs").insert({
@@ -84,8 +124,31 @@ Deno.serve(async (req) => {
     action: "ORDER_CREATED",
     entity_type: "market_orders",
     entity_id: order.id,
-    payload: { listing_id, quantity, amount },
+    payload: {
+      listing_id,
+      quantity,
+      amount,
+      stock_before: reservedStock?.stock_before ?? null,
+      stock_after: reservedStock?.stock_after ?? null,
+      stock_depleted: reservedStock?.depleted === true,
+    },
   });
+
+  if (reservedStock?.depleted) {
+    await admin.from("market_audit_logs").insert({
+      actor_id: u.user.id,
+      actor_type: "system",
+      action: "LISTING_AUTO_CLOSED_OUT_OF_STOCK",
+      entity_type: "market_listings",
+      entity_id: listing.id,
+      payload: {
+        listing_id: listing.id,
+        order_id: order.id,
+        stock_before: reservedStock.stock_before,
+        stock_after: reservedStock.stock_after,
+      },
+    });
+  }
 
   return ok({ order });
 });

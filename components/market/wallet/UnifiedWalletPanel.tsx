@@ -12,6 +12,7 @@ type Props = {
   compact?: boolean;
   onOpenNgnWallet?: () => void;
   onOpenCryptoWallet?: () => void;
+  onOpenHistory?: () => void;
 };
 
 function isAddress(value?: string | null) {
@@ -35,7 +36,13 @@ function firstValidAddress(...values: Array<string | null | undefined>) {
   return "";
 }
 
-export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnWallet, onOpenCryptoWallet }: Props) {
+export default function UnifiedWalletPanel({
+  wallet,
+  compact = false,
+  onOpenNgnWallet,
+  onOpenCryptoWallet,
+  onOpenHistory,
+}: Props) {
   const portfolio = wallet.portfolioPositions.slice(0, compact ? 3 : 5);
   const copyAddress = firstValidAddress(wallet.savedAddress, wallet.connectedAddress);
 
@@ -92,6 +99,35 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
         <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.66)", fontSize: 11 }}>
           Stable ${wallet.stableTotalUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} + Stock ${wallet.portfolioTotalUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })}
         </Text>
+      </View>
+
+      <View
+        style={{
+          marginTop: 10,
+          borderRadius: 14,
+          padding: 10,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          backgroundColor: "rgba(255,255,255,0.03)",
+        }}
+      >
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>Stock Portfolio</Text>
+        {portfolio.length === 0 ? (
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.62)", fontSize: 12 }}>
+            No stock holdings yet.
+          </Text>
+        ) : (
+          <View style={{ marginTop: 8, gap: 7 }}>
+            {portfolio.map((row) => (
+              <View key={`${row.stock_id}-${row.slug}`} style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+                <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.85)", fontWeight: "800", flex: 1 }}>
+                  {row.name} ({row.symbol || "STK"}) - {row.qty.toFixed(4)}
+                </Text>
+                <Text style={{ color: "#fff", fontWeight: "900" }}>${row.value_usdc.toFixed(2)}</Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       <View style={{ marginTop: 10, flexDirection: "row", gap: 8 }}>
@@ -315,34 +351,26 @@ export default function UnifiedWalletPanel({ wallet, compact = false, onOpenNgnW
         )}
       </View>
 
-      <View
-        style={{
-          marginTop: 12,
-          borderRadius: 14,
-          padding: 10,
-          borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.1)",
-          backgroundColor: "rgba(255,255,255,0.03)",
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>Stock Portfolio</Text>
-        {portfolio.length === 0 ? (
-          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.62)", fontSize: 12 }}>
-            No stock holdings yet.
-          </Text>
-        ) : (
-          <View style={{ marginTop: 8, gap: 7 }}>
-            {portfolio.map((row) => (
-              <View key={`${row.stock_id}-${row.slug}`} style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-                <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.85)", fontWeight: "800", flex: 1 }}>
-                  {row.name} ({row.symbol || "STK"}) - {row.qty.toFixed(4)}
-                </Text>
-                <Text style={{ color: "#fff", fontWeight: "900" }}>${row.value_usdc.toFixed(2)}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
+      {onOpenHistory ? (
+        <Pressable
+          onPress={onOpenHistory}
+          style={{
+            marginTop: 8,
+            borderRadius: 12,
+            height: 40,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(124,58,237,0.20)",
+            borderWidth: 1,
+            borderColor: "rgba(124,58,237,0.45)",
+            flexDirection: "row",
+            gap: 8,
+          }}
+        >
+          <Ionicons name="time-outline" size={15} color="#fff" />
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Transaction History</Text>
+        </Pressable>
+      ) : null}
 
       {!!wallet.error ? (
         <Text style={{ marginTop: 10, color: "#FCA5A5", fontWeight: "800", fontSize: 12 }}>{wallet.error}</Text>

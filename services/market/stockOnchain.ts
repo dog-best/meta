@@ -438,14 +438,44 @@ export async function createStockIdentityOnchain(input: {
 
     const { data: existing, error: existingErr } = await supabase
       .from("market_stock_identities")
-      .select("id,slug,name,symbol,chain")
+      .select("id,slug,name,symbol,chain,active,token_address,pool_address,trading_paused_until")
       .eq("store_id", user.id)
       .maybeSingle();
     if (existingErr) throw new Error(existingErr.message);
-    if (existing?.id) {
-      throw new Error(`Store already has a stock identity (${existing.slug || existing.symbol || existing.id})`);
+    const pausedUntilMs = Date.parse(String((existing as any)?.trading_paused_until || ""));
+    const tradingPaused = Number.isFinite(pausedUntilMs) && pausedUntilMs > Date.now();
+    if (
+      existing?.id &&
+      existing.active !== false &&
+      isAddress(String((existing as any).token_address || "")) &&
+      isAddress(String((existing as any).pool_address || "")) &&
+      !tradingPaused
+    ) {
+      logCreate("existing_identity_ready", {
+        identity_id: existing.id,
+        slug: existing.slug,
+        chain: existing.chain,
+      });
+      return {
+        ok: true,
+        created: false,
+        identity: existing,
+        tx_hash: null,
+        user_op_hash: null,
+        explorer_url: null,
+      } as any;
     }
-    logCreate("store_identity_check_ok");
+    if (existing?.id) {
+      logCreate("store_identity_repair_mode", {
+        identity_id: existing.id,
+        active: existing.active,
+        has_token: isAddress(String((existing as any).token_address || "")),
+        has_pool: isAddress(String((existing as any).pool_address || "")),
+        trading_paused: tradingPaused,
+      });
+    } else {
+      logCreate("store_identity_check_ok");
+    }
 
     logCreate("wallet_connect_required");
 

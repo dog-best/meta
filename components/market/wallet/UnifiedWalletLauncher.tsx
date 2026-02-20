@@ -97,6 +97,10 @@ export default function UnifiedWalletLauncher() {
           setOpen(false);
           router.push("/market/wallet" as any);
         }}
+        onOpenHistory={() => {
+          setOpen(false);
+          router.push("/market/history" as any);
+        }}
       />
     </View>
   );

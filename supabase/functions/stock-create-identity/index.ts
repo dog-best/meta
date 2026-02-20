@@ -170,42 +170,44 @@ Deno.serve(async (req) => {
 
   const { data: existingByStore, error: existingErr } = await admin
     .from("market_stock_identities")
-    .select("id,slug,name,symbol,chain,active")
+    .select("id,slug,name,symbol,chain,chain_id,active,token_address,pool_address,trading_paused_until,launched_at")
     .eq("store_id", user.id)
     .maybeSingle();
   if (existingErr) return bad(existingErr.message);
-  if (existingByStore) return ok({ ok: true, created: false, identity: existingByStore });
+  const hadExistingIdentity = !!existingByStore?.id;
 
-  const reservedFn = await admin.rpc("market_stock_has_reserved_text", {
-    p_name: name,
-    p_symbol: symbol,
-  });
-  let isReserved = false;
-  if (!reservedFn.error) {
-    isReserved = reservedFn.data === true;
-  } else {
-    const normName = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const normSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const termsV2 = await admin
-      .from("market_stock_reserved_terms")
-      .select("term_norm")
-      .eq("active", true)
-      .in("term_norm", [normName, normSymbol]);
-    if (!termsV2.error && (termsV2.data?.length ?? 0) > 0) {
-      isReserved = true;
+  if (!hadExistingIdentity) {
+    const reservedFn = await admin.rpc("market_stock_has_reserved_text", {
+      p_name: name,
+      p_symbol: symbol,
+    });
+    let isReserved = false;
+    if (!reservedFn.error) {
+      isReserved = reservedFn.data === true;
     } else {
-      const termsLegacy = await admin
-        .from("reserved_name_rules")
-        .select("normalized_pattern")
+      const normName = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const normSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const termsV2 = await admin
+        .from("market_stock_reserved_terms")
+        .select("term_norm")
         .eq("active", true)
-        .in("normalized_pattern", [normName, normSymbol]);
-      if (!termsLegacy.error && (termsLegacy.data?.length ?? 0) > 0) {
+        .in("term_norm", [normName, normSymbol]);
+      if (!termsV2.error && (termsV2.data?.length ?? 0) > 0) {
         isReserved = true;
+      } else {
+        const termsLegacy = await admin
+          .from("reserved_name_rules")
+          .select("normalized_pattern")
+          .eq("active", true)
+          .in("normalized_pattern", [normName, normSymbol]);
+        if (!termsLegacy.error && (termsLegacy.data?.length ?? 0) > 0) {
+          isReserved = true;
+        }
       }
     }
-  }
-  if (isReserved && !allowReserved) {
-    return bad("Reserved identity name/symbol. Contact BestCity support");
+    if (isReserved && !allowReserved) {
+      return bad("Reserved identity name/symbol. Contact BestCity support");
+    }
   }
 
   let chainConfig: any = null;
@@ -295,24 +297,52 @@ Deno.serve(async (req) => {
   const now = new Date();
   const launchGuardUntil = new Date(now.getTime() + (24 * 60 * 60 * 1000)).toISOString();
 
-  const { data: identity, error: createErr } = await admin
-    .from("market_stock_identities")
-    .insert({
-      store_id: user.id,
-      chain: chainConfig.chain,
-      chain_id: Number(chainConfig.chain_id ?? 0),
-      slug,
-      name,
-      symbol,
-      token_address: decoded.token,
-      pool_address: decoded.pool,
-      active: true,
-      launch_guard_until: launchGuardUntil,
-      launched_at: now.toISOString(),
-    })
-    .select("*")
-    .single();
-  if (createErr || !identity) return bad(createErr?.message ?? "Failed to create stock identity");
+  let identity: any = null;
+  if (existingByStore?.id) {
+    const resolvedSlug = String(existingByStore.slug || slug || "");
+    const { data: repaired, error: repairErr } = await admin
+      .from("market_stock_identities")
+      .update({
+        chain: chainConfig.chain,
+        chain_id: Number(chainConfig.chain_id ?? existingByStore.chain_id ?? 0),
+        slug: resolvedSlug,
+        name,
+        symbol,
+        token_address: decoded.token,
+        pool_address: decoded.pool,
+        active: true,
+        trading_paused_until: null,
+        launch_guard_until: launchGuardUntil,
+        launched_at: existingByStore.launched_at ?? now.toISOString(),
+        updated_at: now.toISOString(),
+      })
+      .eq("id", existingByStore.id)
+      .select("*")
+      .single();
+    if (repairErr || !repaired) return bad(repairErr?.message ?? "Failed to repair existing stock identity");
+    identity = repaired;
+  } else {
+    const { data: created, error: createErr } = await admin
+      .from("market_stock_identities")
+      .insert({
+        store_id: user.id,
+        chain: chainConfig.chain,
+        chain_id: Number(chainConfig.chain_id ?? 0),
+        slug,
+        name,
+        symbol,
+        token_address: decoded.token,
+        pool_address: decoded.pool,
+        active: true,
+        trading_paused_until: null,
+        launch_guard_until: launchGuardUntil,
+        launched_at: now.toISOString(),
+      })
+      .select("*")
+      .single();
+    if (createErr || !created) return bad(createErr?.message ?? "Failed to create stock identity");
+    identity = created;
+  }
 
   const { error: lockPermErr } = await admin
     .from("store_identity_permissions")
@@ -343,7 +373,7 @@ Deno.serve(async (req) => {
 
   const { error: reinvestErr } = await admin
     .from("market_stock_reinvestments")
-    .insert({
+    .upsert({
       stock_id: identity.id,
       store_id: user.id,
       source_type: "creation_fee",
@@ -355,7 +385,7 @@ Deno.serve(async (req) => {
       tx_hash: txHash,
       status: "confirmed",
       idempotency_key: `stock:create:${identity.id}`,
-    });
+    }, { onConflict: "idempotency_key" });
   if (reinvestErr) return bad(reinvestErr.message);
 
   const marketCap = Number(identity.total_supply ?? 10_000_000) * initialPrice;
@@ -371,7 +401,8 @@ Deno.serve(async (req) => {
 
   return ok({
     ok: true,
-    created: true,
+    created: !hadExistingIdentity,
+    repaired: hadExistingIdentity,
     identity,
     chain_config: chainConfig,
     economics: {

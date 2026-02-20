@@ -3,6 +3,7 @@ import { supabase } from "@/services/supabase";
 export type DeliverableAccess = "preview" | "final";
 export type DeliverableKind = "image" | "audio" | "video" | "file" | "link";
 const FN_ORDER_DELIVERABLE_URL = "market-order-deliverable-url";
+const DEFAULT_DELIVERABLE_BUCKET = "market-deliverables";
 export type SignedUrlOptions = { download?: boolean | string };
 
 export type OrderDeliverable = {
@@ -48,6 +49,11 @@ function normalizeStoragePath(bucket: string, rawPath: string) {
   return out;
 }
 
+function normalizeBucket(raw?: string | null) {
+  const b = String(raw || "").trim();
+  return b || DEFAULT_DELIVERABLE_BUCKET;
+}
+
 export async function listOrderDeliverables(orderId: string) {
   const { data, error } = await supabase
     .from("market_order_deliverables")
@@ -63,10 +69,9 @@ export async function listOrderDeliverables(orderId: string) {
 }
 
 export async function signedUrl(bucket: string, path: string, expiresSec = 900, options: SignedUrlOptions = {}) {
-  const normalizedPath = normalizeStoragePath(bucket, path);
-  if (!normalizedPath) return null;
-  if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;
-
+  const firstBucket = normalizeBucket(bucket);
+  const candidateBuckets =
+    firstBucket === DEFAULT_DELIVERABLE_BUCKET ? [firstBucket] : [firstBucket, DEFAULT_DELIVERABLE_BUCKET];
   const download = options.download;
   const signOptions =
     typeof download === "string" && download.trim()
@@ -74,19 +79,38 @@ export async function signedUrl(bucket: string, path: string, expiresSec = 900, 
       : download
       ? { download: true }
       : undefined;
-  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(normalizedPath, expiresSec, signOptions as any);
-  if (error) {
+
+  let lastErr: any = null;
+  for (const candidateBucket of candidateBuckets) {
+    const normalizedPath = normalizeStoragePath(candidateBucket, path);
+    if (!normalizedPath) continue;
+    if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;
+
+    const { data, error } = await supabase.storage
+      .from(candidateBucket)
+      .createSignedUrl(normalizedPath, expiresSec, signOptions as any);
+    if (!error) {
+      return data?.signedUrl ?? null;
+    }
+
     const msg = String(error.message || "");
     const code = String((error as any)?.code || "");
+    lastErr = error;
+
     // Some Storage RLS policy SQL expressions can throw 22P02 on signed URL queries.
     // Fall back to public URL when possible so previews still render.
     if (code === "22P02" || msg.includes("22P02") || /invalid input syntax/i.test(msg)) {
-      const pub = supabase.storage.from(bucket).getPublicUrl(normalizedPath)?.data?.publicUrl || null;
+      const pub = supabase.storage.from(candidateBucket).getPublicUrl(normalizedPath)?.data?.publicUrl || null;
       if (pub) return pub;
     }
+  }
+
+  if (lastErr) {
+    const msg = String(lastErr.message || "");
+    const code = String((lastErr as any)?.code || "");
     throw new Error(code ? `${msg} (code: ${code})` : msg);
   }
-  return data?.signedUrl ?? null;
+  return null;
 }
 
 async function signedUrlViaFunction(
@@ -117,7 +141,7 @@ async function signedUrlViaFunction(
 
 export async function signedUrlForDeliverable(d: OrderDeliverable, expiresSec = 900, options: SignedUrlOptions = {}) {
   if (!d.storage_path) return null;
-  const bucket = d.storage_bucket || "market-deliverables";
+  const bucket = normalizeBucket(d.storage_bucket);
   const normalizedPath = normalizeStoragePath(bucket, d.storage_path);
   if (!normalizedPath) return null;
   if (looksLikeHttpUrl(normalizedPath)) return normalizedPath;

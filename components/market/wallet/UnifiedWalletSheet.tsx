@@ -13,6 +13,7 @@ type Props = {
   wallet: UnifiedWalletData;
   onOpenNgnWallet?: () => void;
   onOpenCryptoWallet?: () => void;
+  onOpenHistory?: () => void;
 };
 
 export default function UnifiedWalletSheet({
@@ -21,6 +22,7 @@ export default function UnifiedWalletSheet({
   wallet,
   onOpenNgnWallet,
   onOpenCryptoWallet,
+  onOpenHistory,
 }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -59,6 +61,7 @@ export default function UnifiedWalletSheet({
               wallet={wallet}
               onOpenNgnWallet={onOpenNgnWallet}
               onOpenCryptoWallet={onOpenCryptoWallet}
+              onOpenHistory={onOpenHistory}
             />
           </ScrollView>
         </View>

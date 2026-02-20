@@ -370,6 +370,15 @@ export default function ListingsFeed() {
     async (listing: Listing, nextActive: boolean) => {
       setBusyId(listing.id);
       try {
+        if (
+          nextActive &&
+          listing.category === "product" &&
+          typeof listing.stock_qty === "number" &&
+          listing.stock_qty <= 0
+        ) {
+          throw new Error("Cannot enable a product listing with zero stock. Restock or create a new listing.");
+        }
+
         let resolvedNext = nextActive;
         try {
           const { data, error } = await supabase.rpc("market_set_listing_active", {
@@ -792,10 +801,20 @@ export default function ListingsFeed() {
       const busy = busyId === item.id;
       const displayPrice = getListingPriceDisplay(item as any);
       const showDiscount = displayPrice.hasDiscount;
+      const isOutOfStock = item.category === "product" && typeof item.stock_qty === "number" && item.stock_qty <= 0;
+      const cannotEnableOutOfStock = isOutOfStock && !item.is_active;
 
-      const statusBg = item.is_active ? "rgba(16,185,129,0.18)" : "rgba(239,68,68,0.16)";
-      const statusBd = item.is_active ? "rgba(16,185,129,0.35)" : "rgba(239,68,68,0.35)";
-      const statusTxt = item.is_active ? "Active" : "Disabled";
+      const statusBg = isOutOfStock
+        ? "rgba(239,68,68,0.20)"
+        : item.is_active
+        ? "rgba(16,185,129,0.18)"
+        : "rgba(148,163,184,0.18)";
+      const statusBd = isOutOfStock
+        ? "rgba(239,68,68,0.40)"
+        : item.is_active
+        ? "rgba(16,185,129,0.35)"
+        : "rgba(148,163,184,0.35)";
+      const statusTxt = isOutOfStock ? "Out of stock" : item.is_active ? "Active" : "Disabled";
 
       return (
         <View
@@ -897,24 +916,32 @@ export default function ListingsFeed() {
           {isMineView ? (
             <View style={{ flexDirection: "row", gap: 10, padding: 12, paddingTop: 0 }}>
               <Pressable
-                disabled={busy}
+                disabled={busy || cannotEnableOutOfStock}
                 onPress={() => rpcToggleActive(item, !item.is_active)}
                 style={{
                   flex: 1,
                   borderRadius: 14,
                   paddingVertical: 10,
                   alignItems: "center",
-                  backgroundColor: item.is_active ? "rgba(255,255,255,0.08)" : PURPLE,
+                  backgroundColor: cannotEnableOutOfStock
+                    ? "rgba(239,68,68,0.18)"
+                    : item.is_active
+                    ? "rgba(255,255,255,0.08)"
+                    : PURPLE,
                   borderWidth: 1,
-                  borderColor: item.is_active ? "rgba(255,255,255,0.12)" : PURPLE,
-                  opacity: busy ? 0.6 : 1,
+                  borderColor: cannotEnableOutOfStock
+                    ? "rgba(239,68,68,0.38)"
+                    : item.is_active
+                    ? "rgba(255,255,255,0.12)"
+                    : PURPLE,
+                  opacity: busy || cannotEnableOutOfStock ? 0.6 : 1,
                 }}
               >
                 {busy ? (
                   <ActivityIndicator />
                 ) : (
                   <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                    {item.is_active ? "Disable" : "Enable"}
+                    {cannotEnableOutOfStock ? "Restock first" : item.is_active ? "Disable" : "Enable"}
                   </Text>
                 )}
               </Pressable>

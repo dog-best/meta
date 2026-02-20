@@ -23,9 +23,20 @@ Deno.serve(async (req) => {
   if (le || !listing) return bad("Listing not found");
   if (listing.seller_id !== u.user.id) return bad("Not your listing");
 
+  const { data: hasOpenOrders, error: openErr } = await admin.rpc("market_listing_has_open_orders", {
+    p_listing_id: listing_id,
+  });
+  if (openErr) return bad(openErr.message);
+  if (hasOpenOrders === true) {
+    return bad("Cannot disable listing with pending or active orders.");
+  }
+
   const { data: updated, error } = await admin
     .from("market_listings")
-    .update({ is_active: false })
+    .update({
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", listing_id)
     .select("*")
     .single();

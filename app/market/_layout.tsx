@@ -10,6 +10,8 @@ export default function MarketLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="menu/index" />
+        <Stack.Screen name="history/index" />
+        <Stack.Screen name="history/[entryId]" />
         <Stack.Screen name="social/index" />
         <Stack.Screen name="dm/[username]" />
         <Stack.Screen name="stock/index" />

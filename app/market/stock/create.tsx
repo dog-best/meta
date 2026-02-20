@@ -124,7 +124,13 @@ export default function CreateStockIdentityScreen() {
       const createdTxHash = String(res?.tx_hash || "").trim();
       setTxHash(createdTxHash || null);
       setTxExplorer(String(res?.explorer_url || "").trim() || null);
-      setOkMsg("Stock identity created on-chain. Fees split: $45 liquidity / $5 fee receiver.");
+      if (res?.repaired) {
+        setOkMsg("Stock identity repaired and trading enabled.");
+      } else if (res?.created === false) {
+        setOkMsg("Stock identity already exists and is ready for trading.");
+      } else {
+        setOkMsg("Stock identity created on-chain. Fees split: $45 liquidity / $5 fee receiver.");
+      }
       setSuccessVisible(true);
       if (createdSlug) {
         setTimeout(() => {

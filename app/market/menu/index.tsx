@@ -26,6 +26,7 @@ const MENU_ITEMS: Array<{
   { title: "Rewards", icon: "gift-outline", route: "/market/(tabs)/rewards" },
   { title: "Messages", icon: "chatbubble-ellipses-outline", route: "/market/(tabs)/messages" },
   { title: "Wallet", icon: "wallet-outline", route: "/market/wallet" },
+  { title: "Transaction History", icon: "time-outline", route: "/market/history" },
   { title: "Listings", icon: "albums-outline", route: "/market/listings" },
   { title: "My Listing", icon: "clipboard-outline", route: "/market/mylisting" },
   { title: "Search", icon: "search-outline", route: "/market/search" },

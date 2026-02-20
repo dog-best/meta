@@ -1,6 +1,8 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
+const DEFAULT_DELIVERABLE_BUCKET = "market-deliverables";
+
 function clampExpires(input: unknown) {
   const n = Number(input ?? 900);
   if (!Number.isFinite(n)) return 900;
@@ -13,6 +15,21 @@ function decodeMaybe(input: string) {
   } catch {
     return input;
   }
+}
+
+function normalizeBucket(input: string) {
+  const b = String(input || "").trim();
+  return b || DEFAULT_DELIVERABLE_BUCKET;
+}
+
+function normalizeStoragePath(bucket: string, rawPath: string) {
+  const p = decodeMaybe(String(rawPath || "").trim()).replace(/^\/+/, "");
+  if (!p) return "";
+  const prefixA = `${bucket}/`;
+  const prefixB = `public/${bucket}/`;
+  if (p.startsWith(prefixB)) return p.slice(prefixB.length);
+  if (p.startsWith(prefixA)) return p.slice(prefixA.length);
+  return p;
 }
 
 Deno.serve(async (req) => {
@@ -95,12 +112,14 @@ Deno.serve(async (req) => {
   }
 
   const rowAccess = String(deliverable.access || "").trim().toLowerCase();
-  const rowBucket = String(deliverable.storage_bucket || "").trim();
-  const rowStoragePath = decodeMaybe(String(deliverable.storage_path || "").trim());
+  const rowBucket = normalizeBucket(String(deliverable.storage_bucket || "").trim());
+  const rowStoragePath = normalizeStoragePath(rowBucket, String(deliverable.storage_path || "").trim());
 
+  const reqBucket = normalizeBucket(bucket);
+  const reqPath = normalizeStoragePath(reqBucket, storagePath);
   if (access && access !== rowAccess) return bad("access mismatch for deliverable");
-  if (bucket && bucket !== rowBucket) return bad("storage_bucket mismatch for deliverable");
-  if (storagePath && decodeMaybe(storagePath) !== rowStoragePath) return bad("storage_path mismatch for deliverable");
+  if (bucket && reqBucket !== rowBucket) return bad("storage_bucket mismatch for deliverable");
+  if (storagePath && reqPath !== rowStoragePath) return bad("storage_path mismatch for deliverable");
 
   access = rowAccess;
   bucket = rowBucket;
@@ -124,9 +143,19 @@ Deno.serve(async (req) => {
       : wantsDownload
       ? { download: true }
       : undefined;
-  const { data: signed, error: signErr } = await admin.storage
+  let { data: signed, error: signErr } = await admin.storage
     .from(bucket)
     .createSignedUrl(storagePath, expiresSec, signOptions as any);
+
+  // Fallback for legacy rows with wrong bucket name saved in DB.
+  if (signErr && /bucket not found/i.test(String(signErr.message || "")) && bucket !== DEFAULT_DELIVERABLE_BUCKET) {
+    const retry = await admin.storage
+      .from(DEFAULT_DELIVERABLE_BUCKET)
+      .createSignedUrl(storagePath, expiresSec, signOptions as any);
+    signed = retry.data;
+    signErr = retry.error;
+  }
+
   if (signErr) return bad(signErr.message, { code: (signErr as any)?.code ?? null });
   const url = String(signed?.signedUrl ?? "").trim();
   if (!url) return bad("Signed URL unavailable");

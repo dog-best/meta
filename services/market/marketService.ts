@@ -1,4 +1,5 @@
 import { uploadToSupabaseStorage } from "@/services/market/storageUpload";
+import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 
 export type MarketSellerProfile = {
@@ -87,6 +88,18 @@ export async function upsertSellerProfile(input: Partial<MarketSellerProfile> & 
 }
 
 export async function createListing(input: CreateListingInput) {
+  const stockQty =
+    input.stock_qty === undefined || input.stock_qty === null ? null : Number(input.stock_qty);
+  const outOfStock = input.category === "product" && stockQty !== null && Number(stockQty) <= 0;
+  const paymentOptions = { ...(input.payment_options ?? {}) } as any;
+  if (outOfStock) {
+    paymentOptions.out_of_stock = true;
+    paymentOptions.out_of_stock_at = new Date().toISOString();
+  } else {
+    delete paymentOptions.out_of_stock;
+    delete paymentOptions.out_of_stock_at;
+  }
+
   const { data, error } = await supabase
     .from("market_listings")
     .insert({
@@ -98,10 +111,10 @@ export async function createListing(input: CreateListingInput) {
       price_amount: input.price_amount,
       currency: input.currency,
       delivery_type: input.delivery_type,
-      stock_qty: input.stock_qty ?? null,
+      stock_qty: stockQty,
       availability: input.availability ?? {},
-      payment_options: input.payment_options ?? {},
-      is_active: true,
+      payment_options: paymentOptions,
+      is_active: !outOfStock,
     })
     .select("*")
     .single();
@@ -120,13 +133,25 @@ export async function setListingCoverImage(listingId: string, coverImageId: stri
 }
 
 export async function insertListingImages(images: ListingImageInsert[]) {
-  const { data, error } = await supabase
-    .from("market_listing_images")
-    .insert(images)
-    .select("*");
+  const fallbackRows: any[] = [];
+  for (const img of images) {
+    const out = await callFn<{ image?: any }>("market-add-listing-image", {
+      listing_id: img.listing_id,
+      storage_path: img.storage_path,
+      public_url: img.public_url,
+      sort_order: img.sort_order,
+      meta: img.meta ?? {},
+      // first image becomes cover on the backend
+      set_as_cover: Number(img.sort_order ?? 0) === 0,
+    });
+    const row = (out as any)?.image;
+    if (!row?.id) {
+      throw new Error("Image saved but DB row id was not returned.");
+    }
+    fallbackRows.push(row);
+  }
 
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  return fallbackRows;
 }
 
 export async function uploadToBucket(params: {

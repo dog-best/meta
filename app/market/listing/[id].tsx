@@ -17,11 +17,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
+import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
 import { OrderPreviewModal, PreviewPayload } from "@/components/market/OrderPreviewModal";
-import { formatCurrency, getListingPriceDisplay, isDiscountActive } from "@/utils/pricing";
+import { formatCurrency, getListingPriceDisplay } from "@/utils/pricing";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 
 const BG0 = "#05040B";
@@ -32,7 +33,6 @@ const LISTINGS_TABLE = "market_listings";
 const IMAGES_TABLE = "market_listing_images";
 const PREVIEWS_TABLE = "market_listing_previews";
 const SELLERS_TABLE = "market_seller_profiles";
-const ORDERS_TABLE = "market_orders";
 const LISTING_IMAGES_BUCKET = "market-listings";
 
 type ListingImage = {
@@ -386,6 +386,11 @@ export default function ListingDetails() {
         return;
       }
       if (!listing) return;
+      const outOfStock = listing.category === "product" && listing.stock_qty !== null && Number(listing.stock_qty) <= 0;
+      if (outOfStock) {
+        Alert.alert("Out of stock", "This listing is sold out. The seller needs to restock or relist.");
+        return;
+      }
       let effectiveCountry = userCountry;
       if (effectiveCountry === undefined) {
         effectiveCountry = await resolveUserCountry({ prompt: true }).catch(() => null);
@@ -419,33 +424,16 @@ export default function ListingDetails() {
         return;
       }
 
-      const discount = listing.payment_options?.discount;
-      const discountActive = isDiscountActive(discount);
-      const unit = discountActive
-        ? Number(discount?.discountedPrice ?? listing.price_amount ?? 0)
-        : Number(listing.price_amount ?? 0);
       const qty = 1;
-      const amount = unit * qty;
+      const out = await callFn<{ order?: { id?: string } }>("market-create-order", {
+        listing_id: listing.id,
+        quantity: qty,
+        delivery_address: { geo: finalDeliveryGeo ?? {} },
+      });
+      const nextOrderId = String((out as any)?.order?.id || "").trim();
+      if (!nextOrderId) throw new Error("Order creation did not return an order id.");
 
-      const { data: order, error: oErr } = await supabase
-        .from(ORDERS_TABLE)
-        .insert({
-          buyer_id: user.id,
-          seller_id: listing.seller_id,
-          listing_id: listing.id,
-          quantity: qty,
-          unit_price: unit,
-          amount,
-          currency: listing.currency ?? "NGN",
-          status: "CREATED",
-          delivery_address: { geo: finalDeliveryGeo ?? {} },
-        })
-        .select("id")
-        .single();
-
-      if (oErr) throw new Error(oErr.message);
-
-      router.push(`/market/checkout/${order.id}` as any);
+      router.push(`/market/checkout/${nextOrderId}` as any);
     } catch (e: any) {
       setErr(friendlyMarketError(e, "We couldn't start checkout for this listing."));
     }
@@ -519,6 +507,7 @@ export default function ListingDetails() {
   const showSeeMore = commentCount > 4;
   const displayPrice = getListingPriceDisplay(listing as any);
   const showDiscount = displayPrice.hasDiscount;
+  const isOutOfStock = listing.category === "product" && listing.stock_qty !== null && Number(listing.stock_qty) <= 0;
 
   return (
     <LinearGradient
@@ -1075,18 +1064,22 @@ export default function ListingDetails() {
       >
         <Pressable
           onPress={buyNow}
+          disabled={isOutOfStock}
           style={{
             borderRadius: 22,
             paddingVertical: 16,
             alignItems: "center",
-            backgroundColor: PURPLE,
+            backgroundColor: isOutOfStock ? "rgba(255,255,255,0.2)" : PURPLE,
             borderWidth: 1,
-            borderColor: PURPLE,
+            borderColor: isOutOfStock ? "rgba(255,255,255,0.28)" : PURPLE,
+            opacity: isOutOfStock ? 0.85 : 1,
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>Buy now</Text>
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+            {isOutOfStock ? "Out of stock" : "Buy now"}
+          </Text>
           <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-            Escrow protected - choose NGN or USDC next
+            {isOutOfStock ? "Seller must restock before new orders." : "Escrow protected - choose NGN or USDC next"}
           </Text>
         </Pressable>
       </View>

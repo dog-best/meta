@@ -316,11 +316,16 @@ export default function MarketWallet() {
               <View style={[s.statePill, connectedAddr ? s.okPill : s.idlePill]}>
                 <Text style={s.stateText}>{connectedAddr ? "Connected" : "Not connected"}</Text>
               </View>
-              {isNigeria ? (
-                <Pressable onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}>
-                  <Text style={s.link}>Open NGN Wallet</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                {isNigeria ? (
+                  <Pressable onPress={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}>
+                    <Text style={s.link}>Open NGN Wallet</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable onPress={() => router.push("/market/history" as any)}>
+                  <Text style={s.link}>History</Text>
                 </Pressable>
-              ) : null}
+              </View>
             </View>
             <Text style={s.locationText}>{locationText}</Text>
           </View>
@@ -451,7 +456,12 @@ export default function MarketWallet() {
               <View style={s.card}>
                 <View style={s.rowBetween}>
                   <Text style={s.h}>Activity</Text>
-                  {txLoading ? <ActivityIndicator size="small" /> : null}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {txLoading ? <ActivityIndicator size="small" /> : null}
+                    <Pressable style={s.iconBtn} onPress={() => router.push("/market/history" as any)}>
+                      <Ionicons name="time-outline" size={15} color="#fff" />
+                    </Pressable>
+                  </View>
                 </View>
 
                 <FlatList

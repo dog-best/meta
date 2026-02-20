@@ -344,6 +344,7 @@ export default function MarketAccountTab() {
           <CommandTile icon="eye-outline" title="Public Store" subtitle="View live seller page" onPress={() => router.push(profile?.market_username ? `/market/profile/${profile.market_username}` as any : "/market/profile/create" as any)} />
           <CommandTile icon="albums-outline" title="My Listings" subtitle="Manage products & services" onPress={() => router.push("/market/listings?mine=1" as any)} />
           <CommandTile icon="receipt-outline" title="Orders" subtitle="Track incoming/outgoing orders" onPress={() => router.push("/market/(tabs)/orders" as any)} />
+          <CommandTile icon="time-outline" title="History" subtitle="Deposits, buys, sells, profits" onPress={() => router.push("/market/history" as any)} />
           <CommandTile icon="shield-checkmark-outline" title="Verification" subtitle="Apply or check status" onPress={() => router.push("/market/verification/status" as any)} />
           <CommandTile icon="menu-outline" title="More Menu" subtitle="Open extended navigation" onPress={() => router.push("/market/menu" as any)} />
         </View>
@@ -354,6 +355,7 @@ export default function MarketAccountTab() {
             compact
             onOpenNgnWallet={() => router.push("/fintech/(tabs)/wallet?action=fund" as any)}
             onOpenCryptoWallet={() => router.push("/market/wallet" as any)}
+            onOpenHistory={() => router.push("/market/history" as any)}
           />
         </View>
 
