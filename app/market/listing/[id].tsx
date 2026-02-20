@@ -389,12 +389,16 @@ export default function ListingDetails() {
         return;
       }
       if (!listing) {
-        Alert.alert("Listing unavailable", "This listing is not ready yet. Please refresh and try again.");
+        const msg = "This listing is not ready yet. Please refresh and try again.";
+        if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+        else Alert.alert("Listing unavailable", msg);
         return;
       }
       const outOfStock = listing.category === "product" && listing.stock_qty !== null && Number(listing.stock_qty) <= 0;
       if (outOfStock) {
-        Alert.alert("Out of stock", "This listing is sold out. The seller needs to restock or relist.");
+        const msg = "This listing is sold out. The seller needs to restock or relist.";
+        if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+        else Alert.alert("Out of stock", msg);
         return;
       }
       const effectiveCountry = userCountry === undefined ? null : userCountry;
@@ -415,7 +419,9 @@ export default function ListingDetails() {
         ? paymentOptions?.allow_usdt === true
         : listingCurrency === "USDT";
       if (shouldApplyRegionRestriction && !effectiveIsNigeria && !allowUsdc && !allowUsdt) {
-        Alert.alert("Crypto only", "This listing does not support USDC/USDT checkout for your region.");
+        const msg = "This listing does not support USDC/USDT checkout for your region.";
+        if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+        else Alert.alert("Crypto only", msg);
         return;
       }
 
@@ -437,7 +443,8 @@ export default function ListingDetails() {
     } catch (e: any) {
       const message = friendlyMarketError(e, "We couldn't start checkout for this listing.");
       setErr(message);
-      Alert.alert("Checkout failed", message);
+      if (Platform.OS === "web" && typeof window !== "undefined") window.alert(message);
+      else Alert.alert("Checkout failed", message);
     } finally {
       setBuyBusy(false);
     }
