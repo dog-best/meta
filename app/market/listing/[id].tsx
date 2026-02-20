@@ -388,7 +388,10 @@ export default function ListingDetails() {
         router.push("/(auth)/login" as any);
         return;
       }
-      if (!listing) return;
+      if (!listing) {
+        Alert.alert("Listing unavailable", "This listing is not ready yet. Please refresh and try again.");
+        return;
+      }
       const outOfStock = listing.category === "product" && listing.stock_qty !== null && Number(listing.stock_qty) <= 0;
       if (outOfStock) {
         Alert.alert("Out of stock", "This listing is sold out. The seller needs to restock or relist.");
@@ -425,14 +428,16 @@ export default function ListingDetails() {
       const out = await callFn<{ order?: { id?: string } }>("market-create-order", {
         listing_id: listing.id,
         quantity: qty,
-        delivery_address: { geo: finalDeliveryGeo ?? {} },
+        delivery_address: finalDeliveryGeo ? { geo: finalDeliveryGeo } : null,
       });
       const nextOrderId = String((out as any)?.order?.id || "").trim();
       if (!nextOrderId) throw new Error("Order creation did not return an order id.");
 
       router.push(`/market/checkout/${nextOrderId}` as any);
     } catch (e: any) {
-      setErr(friendlyMarketError(e, "We couldn't start checkout for this listing."));
+      const message = friendlyMarketError(e, "We couldn't start checkout for this listing.");
+      setErr(message);
+      Alert.alert("Checkout failed", message);
     } finally {
       setBuyBusy(false);
     }
