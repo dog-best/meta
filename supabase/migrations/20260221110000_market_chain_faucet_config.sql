@@ -27,6 +27,8 @@ UPDATE public.market_chain_config
 SET
   usdc_address = '0x345a3659f26bc113fc3139f6b5ad8c53aee7ed2d',
   usdt_address = '0x13e7bedeeddee0a3c4e4cabe8195b8cad0baf3c4',
+  faucet_address = '0x4B1f077Db45E5F0E8E11160c096d7589965b1c46',
+  faucet_active = true,
   faucet_cooldown_seconds = 86400,
   faucet_usdc_amount_raw = 1000000000, -- 1000 * 10^6
   faucet_usdt_amount_raw = 1000000000, -- 1000 * 10^6
