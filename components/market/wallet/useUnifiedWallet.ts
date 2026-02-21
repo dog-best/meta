@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPublicClient, formatUnits, http } from "viem";
+import { createPublicClient, encodeFunctionData, formatUnits, http, parseUnits } from "viem";
 
 import { useWalletSimple } from "@/hooks/wallet/useWalletSimple";
 import { fetchMarketChains, getPreferredMarketChain, setPreferredMarketChain, type MarketChainConfig } from "@/services/market/chainConfig";
 import { fetchMyStockPortfolio } from "@/services/market/stocks";
 import { ensureWalletAddressOnChain, getMyWalletForChain, replaceSavedWalletWithDevice } from "@/services/market/usdcCheckout";
-import { connectActiveWalletEvm, getActiveWalletSession, subscribeActiveWalletSession } from "@/services/wallet/activeWalletSession";
+import { connectActiveWalletEvm, getActiveWalletEip155Provider, getActiveWalletSession, subscribeActiveWalletSession } from "@/services/wallet/activeWalletSession";
 import { getWalletModeSync, isBaseSmartSupported, setWalletMode, subscribeWalletMode, type WalletMode } from "@/services/wallet/walletMode";
-import { getRpcUrlForChain } from "@/utils/aaWallet";
+import { getRpcUrlForChain, getSmartAccount } from "@/utils/aaWallet";
 import { isNigeriaCountry, resolveUserCountry, type UserCountry } from "@/utils/country";
 import { friendlyMarketError } from "@/utils/marketUx";
 
@@ -22,8 +22,115 @@ const ERC20_ABI = [
   },
 ] as const;
 
+const ERC20_TRANSFER_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
 function isAddress(value?: string | null) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(value || ""));
+}
+
+function isHexHash(value?: string | null) {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(value || "").trim());
+}
+
+function isLikelySeedPhrase(value: string) {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return words.length >= 12;
+}
+
+export type WalletSecretExport = {
+  kind: "private_key" | "seed_phrase";
+  value: string;
+  sourceMethod: string;
+};
+
+const WALLET_SECRET_METHODS = [
+  "wallet_getPrivateKey",
+  "wallet_exportPrivateKey",
+  "eth_private_key",
+  "wallet_getSeedPhrase",
+  "wallet_exportSeedPhrase",
+  "wallet_getMnemonic",
+];
+
+function parseWalletSecret(raw: unknown, sourceMethod: string): WalletSecretExport | null {
+  if (raw == null) return null;
+
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return null;
+
+    if (isHexHash(text)) {
+      return { kind: "private_key", value: text, sourceMethod };
+    }
+    if (/^[a-fA-F0-9]{64}$/.test(text)) {
+      return { kind: "private_key", value: `0x${text}`, sourceMethod };
+    }
+    if (isLikelySeedPhrase(text)) {
+      return { kind: "seed_phrase", value: text, sourceMethod };
+    }
+    return null;
+  }
+
+  if (Array.isArray(raw)) {
+    const joined = raw.map((v) => String(v || "").trim()).filter(Boolean).join(" ");
+    if (isLikelySeedPhrase(joined)) {
+      return { kind: "seed_phrase", value: joined, sourceMethod };
+    }
+    if (raw.length > 0) {
+      return parseWalletSecret(raw[0], sourceMethod);
+    }
+    return null;
+  }
+
+  if (typeof raw === "object") {
+    const item = raw as Record<string, unknown>;
+    const keys = [
+      "privateKey",
+      "private_key",
+      "key",
+      "seedPhrase",
+      "seed_phrase",
+      "mnemonic",
+      "phrase",
+      "secret",
+      "result",
+      "data",
+    ] as const;
+
+    for (const key of keys) {
+      if (!(key in item)) continue;
+      const parsed = parseWalletSecret(item[key], sourceMethod);
+      if (parsed) return parsed;
+    }
+  }
+
+  return null;
+}
+
+function isMethodUnsupportedError(err: unknown) {
+  const code = Number((err as any)?.code);
+  const msg = String((err as any)?.message || err || "").toLowerCase();
+  if (code === -32601) return true;
+  return (
+    msg.includes("method not found") ||
+    msg.includes("not supported") ||
+    msg.includes("unsupported") ||
+    msg.includes("does not exist")
+  );
 }
 
 export type UnifiedWalletStockPosition = {
@@ -52,12 +159,14 @@ export function useUnifiedWallet() {
   const [portfolioPositions, setPortfolioPositions] = useState<UnifiedWalletStockPosition[]>([]);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
+  const [securityBusy, setSecurityBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isNigeria = isNigeriaCountry(country?.code || country?.name);
   const stableTotalUsd = useMemo(() => Number(usdcBalance || 0) + Number(usdtBalance || 0), [usdcBalance, usdtBalance]);
   const overallUsdApprox = useMemo(() => stableTotalUsd + Number(portfolioTotalUsdc || 0), [stableTotalUsd, portfolioTotalUsdc]);
-  const loading = ngnLoading || portfolioLoading || busy || country === undefined;
+  const loading = ngnLoading || portfolioLoading || busy || sendBusy || securityBusy || country === undefined;
 
   const refreshCountry = useCallback(async () => {
     try {
@@ -235,6 +344,157 @@ export function useUnifiedWallet() {
     }
   }, [refreshChainBalances, refreshCountry, refreshPortfolio, reloadNgn]);
 
+  const sendStableToken = useCallback(
+    async (input: { symbol: "USDC" | "USDT"; to: string; amount: string }) => {
+      const current = chain;
+      if (!current) throw new Error("Select a network first.");
+
+      const to = String(input.to || "").trim();
+      if (!isAddress(to)) {
+        throw new Error("Enter a valid recipient wallet address.");
+      }
+
+      const amountText = String(input.amount || "").trim();
+      if (!amountText) {
+        throw new Error("Enter an amount to send.");
+      }
+
+      const tokenAddress = input.symbol === "USDT" ? String(current.usdt_address || "") : String(current.usdc_address || "");
+      if (!isAddress(tokenAddress)) {
+        throw new Error(`${input.symbol} is not configured on this network.`);
+      }
+
+      setSendBusy(true);
+      setError(null);
+      try {
+        const { account, address, client } = await getSmartAccount(current);
+        if (!isAddress(address)) {
+          throw new Error("Wallet connection failed. Reconnect and try again.");
+        }
+        if (String(address).toLowerCase() === to.toLowerCase()) {
+          throw new Error("Recipient address cannot be your own wallet address.");
+        }
+
+        const rpc = getRpcUrlForChain(current);
+        if (!rpc) {
+          throw new Error("Missing network RPC URL. Ask admin to update chain config.");
+        }
+
+        const publicClient = createPublicClient({ transport: http(rpc) });
+        const decimals = Number(
+          await publicClient.readContract({
+            address: tokenAddress as `0x${string}`,
+            abi: ERC20_ABI,
+            functionName: "decimals",
+          }),
+        );
+
+        let amountRaw = 0n;
+        try {
+          amountRaw = parseUnits(amountText, decimals);
+        } catch {
+          throw new Error(`Invalid amount format for ${input.symbol}.`);
+        }
+        if (amountRaw <= 0n) {
+          throw new Error("Amount must be greater than zero.");
+        }
+
+        const balanceRaw = await publicClient.readContract({
+          address: tokenAddress as `0x${string}`,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [address as `0x${string}`],
+        });
+        if (BigInt(balanceRaw as bigint) < amountRaw) {
+          throw new Error(`Insufficient ${input.symbol} balance.`);
+        }
+
+        const data = encodeFunctionData({
+          abi: ERC20_TRANSFER_ABI,
+          functionName: "transfer",
+          args: [to as `0x${string}`, amountRaw],
+        });
+
+        const submitted = await (client as any).sendTransaction({
+          account,
+          from: address as `0x${string}`,
+          to: tokenAddress as `0x${string}`,
+          data,
+        });
+
+        const txHash = String(
+          (submitted as any)?.transactionHash ||
+            (submitted as any)?.hash ||
+            (submitted as any)?.userOpHash ||
+            (submitted as any)?.userOperationHash ||
+            "",
+        ).trim();
+        if (!txHash) {
+          throw new Error("Transfer submitted but no transaction hash was returned.");
+        }
+
+        await refreshChainBalances(current, address);
+
+        return {
+          txHash,
+          symbol: input.symbol,
+          to,
+          amount: amountText,
+        };
+      } catch (e: any) {
+        const msg = friendlyMarketError(e, "Unable to send crypto right now.");
+        setError(msg);
+        throw new Error(msg);
+      } finally {
+        setSendBusy(false);
+      }
+    },
+    [chain, refreshChainBalances],
+  );
+
+  const exportWalletSecret = useCallback(async (): Promise<WalletSecretExport> => {
+    setSecurityBusy(true);
+    setError(null);
+    try {
+      const { provider, address } = await getActiveWalletEip155Provider(60_000);
+      if (!provider || typeof provider.request !== "function") {
+        throw new Error("Connected wallet provider is unavailable.");
+      }
+
+      for (const method of WALLET_SECRET_METHODS) {
+        const attempts: Array<any[] | undefined> = [undefined, [address]];
+
+        for (const params of attempts) {
+          try {
+            const raw = await provider.request(
+              params ? { method, params } : { method },
+            );
+            const parsed = parseWalletSecret(raw, method);
+            if (parsed) return parsed;
+          } catch (e: any) {
+            if (isMethodUnsupportedError(e)) continue;
+
+            const msg = String(e?.message || e || "").toLowerCase();
+            if (msg.includes("rejected") || msg.includes("denied")) {
+              throw new Error("Request was rejected in your wallet.");
+            }
+            if (msg.includes("invalid params") || msg.includes("missing value")) {
+              continue;
+            }
+          }
+        }
+      }
+
+      throw new Error("This wallet blocks seed/private-key export to apps. Open your wallet app and export from its security settings.");
+    } catch (e: any) {
+      const msg = friendlyMarketError(e, "Unable to export wallet secret.");
+      setError(msg);
+      throw new Error(msg);
+    } finally {
+      setSecurityBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     const sync = () => {
       const s = getActiveWalletSession();
@@ -270,6 +530,8 @@ export function useUnifiedWallet() {
   return {
     loading,
     busy,
+    sendBusy,
+    securityBusy,
     error: error || chainErr || countryErr || ngnError || null,
     ngnBalance: Number(ngnBalance || 0),
     country,
@@ -294,5 +556,7 @@ export function useUnifiedWallet() {
     selectChain,
     loadChains,
     refreshChainBalances,
+    sendStableToken,
+    exportWalletSecret,
   };
 }

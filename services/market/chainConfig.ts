@@ -9,6 +9,11 @@ export type MarketChainConfig = {
   usdc_address: string;
   usdt_address: string | null;
   escrow_address: string;
+  faucet_address: string | null;
+  faucet_active: boolean;
+  faucet_cooldown_seconds: number;
+  faucet_usdc_amount_raw: string | null;
+  faucet_usdt_amount_raw: string | null;
   identity_factory?: string | null;
   identity_router?: string | null;
   identity_name_registry?: string | null;
@@ -19,19 +24,43 @@ export type MarketChainConfig = {
 
 const KEY_CHAIN = "bc_market_chain_pref_v2";
 
+function parseBoolEnv(raw: unknown, fallback = false) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) return fallback;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return fallback;
+}
+
+function parseNumber(input: unknown, fallback: number) {
+  const value = Number(input);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
   const normalize = (input: any): MarketChainConfig => ({
     chain: String(input?.chain ?? ""),
-    chain_id: Number(input?.chain_id ?? 0),
+    chain_id: parseNumber(input?.chain_id, 0),
     rpc_url: input?.rpc_url ? String(input.rpc_url) : null,
     usdc_address: String(input?.usdc_address ?? ""),
     usdt_address: input?.usdt_address ? String(input.usdt_address) : null,
     escrow_address: String(input?.escrow_address ?? ""),
+    faucet_address: input?.faucet_address ? String(input.faucet_address) : null,
+    faucet_active: Boolean(input?.faucet_active),
+    faucet_cooldown_seconds: parseNumber(input?.faucet_cooldown_seconds, 0),
+    faucet_usdc_amount_raw:
+      input?.faucet_usdc_amount_raw === null || input?.faucet_usdc_amount_raw === undefined
+        ? null
+        : String(input?.faucet_usdc_amount_raw),
+    faucet_usdt_amount_raw:
+      input?.faucet_usdt_amount_raw === null || input?.faucet_usdt_amount_raw === undefined
+        ? null
+        : String(input?.faucet_usdt_amount_raw),
     identity_factory: input?.identity_factory ? String(input.identity_factory) : null,
     identity_router: input?.identity_router ? String(input.identity_router) : null,
     identity_name_registry: input?.identity_name_registry ? String(input.identity_name_registry) : null,
     identity_stable_address: input?.identity_stable_address ? String(input.identity_stable_address) : null,
-    confirmations_required: Number(input?.confirmations_required ?? 3),
+    confirmations_required: parseNumber(input?.confirmations_required, 3),
     active: Boolean(input?.active),
   });
 
@@ -39,7 +68,9 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
     // Prefer direct DB query to avoid stale/misconfigured edge function responses.
     const { data: direct, error: directErr } = await supabase
       .from("market_chain_config")
-      .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,identity_factory,identity_router,identity_name_registry,identity_stable_address,confirmations_required,active")
+      .select(
+        "chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,faucet_address,faucet_active,faucet_cooldown_seconds,faucet_usdc_amount_raw,faucet_usdt_amount_raw,identity_factory,identity_router,identity_name_registry,identity_stable_address,confirmations_required,active"
+      )
       .order("active", { ascending: false });
     if (!directErr && direct && direct.length) {
       const directNorm = direct.map(normalize);
@@ -76,6 +107,11 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
         usdc_address: process.env.EXPO_PUBLIC_USDC_ADDRESS_BASE_SEPOLIA ?? "",
         usdt_address: process.env.EXPO_PUBLIC_USDT_ADDRESS_BASE_SEPOLIA ?? null,
         escrow_address: process.env.EXPO_PUBLIC_ESCROW_ADDRESS_BASE_SEPOLIA ?? "",
+        faucet_address: process.env.EXPO_PUBLIC_FAUCET_ADDRESS_BASE_SEPOLIA ?? null,
+        faucet_active: parseBoolEnv(process.env.EXPO_PUBLIC_FAUCET_ACTIVE_BASE_SEPOLIA, Boolean(process.env.EXPO_PUBLIC_FAUCET_ADDRESS_BASE_SEPOLIA)),
+        faucet_cooldown_seconds: parseNumber(process.env.EXPO_PUBLIC_FAUCET_COOLDOWN_SECONDS_BASE_SEPOLIA, 86_400),
+        faucet_usdc_amount_raw: process.env.EXPO_PUBLIC_FAUCET_USDC_AMOUNT_RAW_BASE_SEPOLIA ?? "1000000000",
+        faucet_usdt_amount_raw: process.env.EXPO_PUBLIC_FAUCET_USDT_AMOUNT_RAW_BASE_SEPOLIA ?? "1000000000",
         identity_factory: process.env.EXPO_PUBLIC_IDENTITY_FACTORY_BASE_SEPOLIA ?? null,
         identity_router: process.env.EXPO_PUBLIC_IDENTITY_ROUTER_BASE_SEPOLIA ?? null,
         identity_name_registry: process.env.EXPO_PUBLIC_IDENTITY_NAME_REGISTRY_BASE_SEPOLIA ?? null,
@@ -101,6 +137,11 @@ export async function fetchMarketChains(): Promise<MarketChainConfig[]> {
         usdc_address: amoyUsdc,
         usdt_address: amoyUsdt,
         escrow_address: amoyEscrow,
+        faucet_address: process.env.EXPO_PUBLIC_FAUCET_ADDRESS_POLYGON_AMOY ?? null,
+        faucet_active: parseBoolEnv(process.env.EXPO_PUBLIC_FAUCET_ACTIVE_POLYGON_AMOY, Boolean(process.env.EXPO_PUBLIC_FAUCET_ADDRESS_POLYGON_AMOY)),
+        faucet_cooldown_seconds: parseNumber(process.env.EXPO_PUBLIC_FAUCET_COOLDOWN_SECONDS_POLYGON_AMOY, 86_400),
+        faucet_usdc_amount_raw: process.env.EXPO_PUBLIC_FAUCET_USDC_AMOUNT_RAW_POLYGON_AMOY ?? "1000000000",
+        faucet_usdt_amount_raw: process.env.EXPO_PUBLIC_FAUCET_USDT_AMOUNT_RAW_POLYGON_AMOY ?? "1000000000",
         identity_factory: process.env.EXPO_PUBLIC_IDENTITY_FACTORY_POLYGON_AMOY ?? null,
         identity_router: process.env.EXPO_PUBLIC_IDENTITY_ROUTER_POLYGON_AMOY ?? null,
         identity_name_registry: process.env.EXPO_PUBLIC_IDENTITY_NAME_REGISTRY_POLYGON_AMOY ?? null,

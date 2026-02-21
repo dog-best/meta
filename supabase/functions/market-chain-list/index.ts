@@ -8,7 +8,7 @@ Deno.serve(async (req) => {
 
   const { data, error } = await admin
     .from("market_chain_config")
-    .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,confirmations_required,active")
+    .select("chain,chain_id,rpc_url,usdc_address,usdt_address,escrow_address,faucet_address,faucet_active,faucet_cooldown_seconds,faucet_usdc_amount_raw,faucet_usdt_amount_raw,confirmations_required,active")
     .order("active", { ascending: false });
 
   if (error) {

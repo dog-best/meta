@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
-import React from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import React, { useState } from "react";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 import { useUnifiedWallet } from "@/components/market/wallet/useUnifiedWallet";
 
@@ -43,8 +43,48 @@ export default function UnifiedWalletPanel({
   onOpenCryptoWallet,
   onOpenHistory,
 }: Props) {
+  const [sendTo, setSendTo] = useState("");
+  const [sendAmount, setSendAmount] = useState("");
+  const [sendToken, setSendToken] = useState<"USDC" | "USDT">("USDC");
+
   const portfolio = wallet.portfolioPositions.slice(0, compact ? 3 : 5);
   const copyAddress = firstValidAddress(wallet.savedAddress, wallet.connectedAddress);
+  const canSendUsdt = isAddress(wallet.chain?.usdt_address || "");
+  const sendDisabled =
+    wallet.sendBusy ||
+    !wallet.chain?.active ||
+    !sendTo.trim() ||
+    !sendAmount.trim() ||
+    (sendToken === "USDT" && !canSendUsdt);
+
+  const doSend = async () => {
+    try {
+      const out = await wallet.sendStableToken({
+        symbol: sendToken,
+        to: sendTo.trim(),
+        amount: sendAmount.trim(),
+      });
+      setSendAmount("");
+      Alert.alert("Transfer submitted", `Tx: ${out.txHash}`);
+    } catch (e: any) {
+      Alert.alert("Transfer failed", String(e?.message || e || "Unable to send crypto right now."));
+    }
+  };
+
+  const copyWalletSecret = async () => {
+    try {
+      const out = await wallet.exportWalletSecret();
+      await Clipboard.setStringAsync(out.value);
+      Alert.alert(
+        "Copied",
+        out.kind === "seed_phrase"
+          ? "Seed phrase copied. Keep it offline and private."
+          : "Private key copied. Keep it offline and private.",
+      );
+    } catch (e: any) {
+      Alert.alert("Export unavailable", String(e?.message || e || "Wallet secret export is unavailable."));
+    }
+  };
 
   return (
     <View
@@ -349,6 +389,159 @@ export default function UnifiedWalletPanel({
             <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>Open Crypto Wallet</Text>
           </Pressable>
         )}
+      </View>
+
+      <View
+        style={{
+          marginTop: 10,
+          borderRadius: 14,
+          padding: 10,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          backgroundColor: "rgba(255,255,255,0.04)",
+        }}
+      >
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>Send Crypto</Text>
+        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
+          Transfer USDC/USDT from your connected wallet.
+        </Text>
+
+        <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
+          <Pressable
+            onPress={() => setSendToken("USDC")}
+            style={{
+              flex: 1,
+              height: 36,
+              borderRadius: 10,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: sendToken === "USDC" ? "rgba(124,58,237,0.5)" : "rgba(255,255,255,0.12)",
+              backgroundColor: sendToken === "USDC" ? "rgba(124,58,237,0.22)" : "rgba(255,255,255,0.05)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>USDC</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              if (!canSendUsdt) {
+                Alert.alert("USDT unavailable", "USDT is not configured on the selected network.");
+                return;
+              }
+              setSendToken("USDT");
+            }}
+            style={{
+              flex: 1,
+              height: 36,
+              borderRadius: 10,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: sendToken === "USDT" ? "rgba(45,212,191,0.5)" : "rgba(255,255,255,0.12)",
+              backgroundColor: sendToken === "USDT" ? "rgba(45,212,191,0.22)" : "rgba(255,255,255,0.05)",
+              opacity: canSendUsdt ? 1 : 0.55,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 11 }}>USDT</Text>
+          </Pressable>
+        </View>
+
+        <TextInput
+          value={sendTo}
+          onChangeText={setSendTo}
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder="Recipient wallet address (0x...)"
+          placeholderTextColor="rgba(255,255,255,0.42)"
+          style={{
+            marginTop: 8,
+            height: 42,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.14)",
+            backgroundColor: "rgba(255,255,255,0.06)",
+            color: "#fff",
+            fontWeight: "700",
+            fontSize: 12,
+            paddingHorizontal: 12,
+          }}
+        />
+        <TextInput
+          value={sendAmount}
+          onChangeText={setSendAmount}
+          keyboardType="decimal-pad"
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={`Amount (${sendToken})`}
+          placeholderTextColor="rgba(255,255,255,0.42)"
+          style={{
+            marginTop: 8,
+            height: 42,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.14)",
+            backgroundColor: "rgba(255,255,255,0.06)",
+            color: "#fff",
+            fontWeight: "700",
+            fontSize: 12,
+            paddingHorizontal: 12,
+          }}
+        />
+
+        <Pressable
+          onPress={doSend}
+          disabled={sendDisabled}
+          style={{
+            marginTop: 8,
+            borderRadius: 12,
+            height: 42,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(56,189,248,0.2)",
+            borderWidth: 1,
+            borderColor: "rgba(56,189,248,0.4)",
+            opacity: sendDisabled ? 0.6 : 1,
+          }}
+        >
+          <Text style={{ color: "#E0F2FE", fontWeight: "900", fontSize: 12 }}>
+            {wallet.sendBusy ? "Sending..." : `Send ${sendToken}`}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View
+        style={{
+          marginTop: 8,
+          borderRadius: 14,
+          padding: 10,
+          borderWidth: 1,
+          borderColor: "rgba(255,255,255,0.1)",
+          backgroundColor: "rgba(239,68,68,0.10)",
+        }}
+      >
+        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>Security Export</Text>
+        <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.7)", fontSize: 11 }}>
+          Seed/private-key export is wallet-dependent. Keep copied secrets offline.
+        </Text>
+        <Pressable
+          onPress={copyWalletSecret}
+          disabled={wallet.securityBusy || !wallet.connectedAddress}
+          style={{
+            marginTop: 8,
+            borderRadius: 12,
+            height: 40,
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: "rgba(239,68,68,0.4)",
+            backgroundColor: "rgba(239,68,68,0.22)",
+            opacity: wallet.securityBusy || !wallet.connectedAddress ? 0.6 : 1,
+          }}
+        >
+          <Text style={{ color: "#FECACA", fontWeight: "900", fontSize: 12 }}>
+            {wallet.securityBusy ? "Checking wallet..." : "Copy Seed / Private Key"}
+          </Text>
+        </Pressable>
       </View>
 
       {onOpenHistory ? (
