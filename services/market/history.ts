@@ -348,7 +348,10 @@ export async function fetchMarketHistory(limit = 300) {
     .limit(Math.min(limit, 500));
 
   if (!tableRes.error) {
-    return ((tableRes.data ?? []) as any[]).map(normalizeRow);
+    const rows = ((tableRes.data ?? []) as any[]).map(normalizeRow);
+    // If history table exists but isn't populated yet, fall back to live legacy sources.
+    if (rows.length > 0) return rows;
+    return await fetchLegacyHistory(user.id, limit);
   }
 
   if (!isMissingHistoryTableError(tableRes.error)) {

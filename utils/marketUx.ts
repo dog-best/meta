@@ -27,7 +27,18 @@ export function friendlyMarketError(error: unknown, fallback = "Something went w
   if (msg.includes("not your order")) {
     return "You can only perform this action on your own order.";
   }
+  if (msg.includes("cannot create stock yet")) {
+    return raw;
+  }
+  if (msg.includes("create transaction reverted")) {
+    return raw;
+  }
+  if (msg.includes("identity factory contract not found")) {
+    return raw;
+  }
+  if (msg.includes("stable token contract not found")) {
+    return raw;
+  }
 
   return raw.length > 180 ? fallback : raw;
 }
-

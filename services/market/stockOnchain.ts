@@ -164,6 +164,34 @@ function formatUsdc6(raw: bigint) {
   return fracText ? `${whole.toString()}.${fracText}` : whole.toString();
 }
 
+function shortRevertReason(err: unknown) {
+  const candidates = [
+    (err as any)?.shortMessage,
+    (err as any)?.details,
+    (err as any)?.cause?.shortMessage,
+    (err as any)?.cause?.details,
+    (err as any)?.message,
+    (err as any)?.cause?.message,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+
+  for (const raw of candidates) {
+    const lowered = raw.toLowerCase();
+    const execIdx = lowered.indexOf("execution reverted");
+    if (execIdx >= 0) {
+      return raw.slice(execIdx).replace(/^.*?(execution reverted)/i, "$1").trim();
+    }
+    if (lowered.includes("useroperation reverted")) {
+      return raw;
+    }
+    if (lowered.includes("revert")) {
+      return raw;
+    }
+  }
+  return "";
+}
+
 export function storeKeyFromStoreId(storeId: string) {
   return keccak256(stringToHex(String(storeId || "").trim()));
 }
@@ -417,6 +445,30 @@ async function diagnoseCreateRevert(
   return notes;
 }
 
+async function preflightCreateIdentityCall(
+  publicClient: any,
+  args: {
+    factoryAddress: `0x${string}`;
+    wallet: `0x${string}`;
+    storeKey: `0x${string}`;
+    name: string;
+    symbol: string;
+  },
+) {
+  try {
+    await publicClient.simulateContract({
+      abi: IDENTITY_FACTORY_ABI,
+      address: args.factoryAddress,
+      functionName: "createIdentity",
+      args: [args.storeKey, args.name, args.symbol],
+      account: args.wallet,
+    });
+    return { ok: true as const, reason: "" };
+  } catch (e: any) {
+    return { ok: false as const, reason: shortRevertReason(e) };
+  }
+}
+
 export async function createStockIdentityOnchain(input: {
   name: string;
   symbol: string;
@@ -504,6 +556,22 @@ export async function createStockIdentityOnchain(input: {
     const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
     const factoryAddress = chain.identity_factory as `0x${string}`;
     const creationFeeRaw = 50_000_000n; // 50 USDC (6 decimals)
+
+    const [factoryCode, stableCode] = await Promise.all([
+      publicClient.getCode({ address: factoryAddress as `0x${string}` }),
+      publicClient.getCode({ address: stableAddress as `0x${string}` }),
+    ]);
+    if (!factoryCode || factoryCode === "0x") {
+      throw new Error(`Identity factory contract not found on ${chain.chain}. Update market_chain_config.identity_factory.`);
+    }
+    if (!stableCode || stableCode === "0x") {
+      throw new Error(`Stable token contract not found on ${chain.chain}. Update market_chain_config.identity_stable_address/usdc_address.`);
+    }
+
+    const nativeBalance = await publicClient.getBalance({ address: address as `0x${string}` });
+    if (nativeBalance <= 0n) {
+      throw new Error(`Insufficient ${String(chain.chain || "native")} gas token. Fund this wallet with native gas token first.`);
+    }
 
     // If previous create succeeded on-chain but DB write failed, sync instead of creating again.
     const preInfo = await publicClient.readContract({
@@ -619,6 +687,32 @@ export async function createStockIdentityOnchain(input: {
       logCreate("approve_skip_existing_allowance");
     }
 
+    const preflight = await preflightCreateIdentityCall(publicClient, {
+      factoryAddress,
+      wallet: address as `0x${string}`,
+      storeKey: storeKey as `0x${string}`,
+      name: input.name.trim(),
+      symbol: input.symbol.trim().toUpperCase(),
+    });
+    if (!preflight.ok) {
+      const notes = await diagnoseCreateRevert(publicClient, {
+        factoryAddress,
+        stableAddress,
+        wallet: address as `0x${string}`,
+        storeKey: storeKey as `0x${string}`,
+        creationFeeRaw,
+        name: input.name.trim(),
+        symbol: input.symbol.trim().toUpperCase(),
+      });
+      if (notes.length) {
+        throw new Error(`Cannot create stock yet: ${notes.join("; ")}`);
+      }
+      if (preflight.reason) {
+        throw new Error(`Cannot create stock yet: ${preflight.reason}`);
+      }
+      throw new Error("Cannot create stock yet: on-chain simulation reverted.");
+    }
+
     const createData = encodeFunctionData({
       abi: IDENTITY_FACTORY_ABI,
       functionName: "createIdentity",
@@ -645,6 +739,10 @@ export async function createStockIdentityOnchain(input: {
       });
       if (notes.length) {
         throw new Error(`Create transaction reverted: ${notes.join("; ")}`);
+      }
+      const reason = shortRevertReason(submitErr);
+      if (reason) {
+        throw new Error(`Create transaction reverted: ${reason}`);
       }
       throw submitErr;
     }
