@@ -17,7 +17,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
-import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -34,6 +33,7 @@ const IMAGES_TABLE = "market_listing_images";
 const PREVIEWS_TABLE = "market_listing_previews";
 const SELLERS_TABLE = "market_seller_profiles";
 const LISTING_IMAGES_BUCKET = "market-listings";
+const FN_CREATE_ORDER = "market-create-order";
 
 type ListingImage = {
   id: string;
@@ -431,12 +431,27 @@ export default function ListingDetails() {
           : null;
 
       const qty = 1;
-      const out = await callFn<{ order?: { id?: string } }>("market-create-order", {
+      const payload = {
         listing_id: listing.id,
         quantity: qty,
         delivery_address: finalDeliveryGeo ? { geo: finalDeliveryGeo } : null,
+      };
+      let out = await supabase.functions.invoke<{ order?: { id?: string } }>(FN_CREATE_ORDER, {
+        body: payload,
       });
-      const nextOrderId = String((out as any)?.order?.id || "").trim();
+      if (out.error) {
+        const msg = String(out.error.message || "").toLowerCase();
+        if (msg.includes("jwt") || msg.includes("unauthor") || msg.includes("401")) {
+          await supabase.auth.refreshSession();
+          out = await supabase.functions.invoke<{ order?: { id?: string } }>(FN_CREATE_ORDER, {
+            body: payload,
+          });
+        }
+      }
+      if (out.error) {
+        throw new Error(out.error.message || "Failed to create order");
+      }
+      const nextOrderId = String((out.data as any)?.order?.id || "").trim();
       if (!nextOrderId) throw new Error("Order creation did not return an order id.");
 
       router.push(`/market/checkout/${nextOrderId}` as any);

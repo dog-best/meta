@@ -46,13 +46,12 @@ export async function fetchJsonWithTimeout(
 }
 
 export function getSupabaseFunctionsBaseUrl() {
+  const clientUrl = (supabase as any)?.supabaseUrl as string | undefined;
   const envUrl =
     (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ||
     (process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined);
 
-  const clientUrl = (supabase as any)?.supabaseUrl as string | undefined;
-
-  const sbUrl = envUrl || clientUrl;
+  const sbUrl = clientUrl || envUrl;
   if (!sbUrl) {
     throw new Error("Missing Supabase URL (set EXPO_PUBLIC_SUPABASE_URL)");
   }

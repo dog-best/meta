@@ -5,10 +5,10 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
-const RPC_DEPOSIT_INTENT_CANDIDATES = ["market_crypto_deposit_intent_rpc", "market_usdc_deposit_intent_rpc"];
-const RPC_RELEASE_INTENT_CANDIDATES = ["market_crypto_release_intent_rpc", "market_usdc_release_intent_rpc"];
-const RPC_DEPOSIT_SUBMIT_CANDIDATES = ["market_crypto_deposit_submit_rpc", "market_usdc_deposit_submit_rpc"];
-const RPC_RELEASE_SUBMIT_CANDIDATES = ["market_crypto_release_submit_rpc", "market_usdc_release_submit_rpc"];
+const RPC_DEPOSIT_INTENT_CANDIDATES = ["market_usdc_deposit_intent_rpc", "market_crypto_deposit_intent_rpc"];
+const RPC_RELEASE_INTENT_CANDIDATES = ["market_usdc_release_intent_rpc", "market_crypto_release_intent_rpc"];
+const RPC_DEPOSIT_SUBMIT_CANDIDATES = ["market_usdc_deposit_submit_rpc", "market_crypto_deposit_submit_rpc"];
+const RPC_RELEASE_SUBMIT_CANDIDATES = ["market_usdc_release_submit_rpc", "market_crypto_release_submit_rpc"];
 const RPC_CHAIN_TX_FINALIZE_CANDIDATES = ["market_chain_tx_finalize_rpc"];
 
 function isMissingRpcError(err: any) {
@@ -20,9 +20,15 @@ function isMissingRpcError(err: any) {
 
 async function rpcWithFallback<T = any>(names: string[], params: Record<string, unknown>) {
   let lastError: any = null;
+  const primary = names[0] || "";
   for (const name of names) {
     const out = await supabase.rpc(name, params as any);
-    if (!out.error) return { name, data: out.data as T };
+    if (!out.error) {
+      if (name !== primary) {
+        console.log("[Checkout] RPC fallback matched", { primary, matched: name });
+      }
+      return { name, data: out.data as T };
+    }
     lastError = out.error;
     if (!isMissingRpcError(out.error)) {
       throw new Error(out.error.message || `RPC ${name} failed`);
