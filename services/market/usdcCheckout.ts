@@ -5,11 +5,31 @@ import { requireLocalAuth } from "@/utils/secureAuth";
 import { getSmartAccount } from "@/utils/aaWallet";
 import { getPreferredMarketChain, MarketChainConfig } from "@/services/market/chainConfig";
 
-const RPC_USDC_DEPOSIT_INTENT = "market_usdc_deposit_intent_rpc";
-const RPC_USDC_RELEASE_INTENT = "market_usdc_release_intent_rpc";
-const RPC_USDC_DEPOSIT_SUBMIT = "market_usdc_deposit_submit_rpc";
-const RPC_USDC_RELEASE_SUBMIT = "market_usdc_release_submit_rpc";
-const RPC_CHAIN_TX_FINALIZE = "market_chain_tx_finalize_rpc";
+const RPC_DEPOSIT_INTENT_CANDIDATES = ["market_crypto_deposit_intent_rpc", "market_usdc_deposit_intent_rpc"];
+const RPC_RELEASE_INTENT_CANDIDATES = ["market_crypto_release_intent_rpc", "market_usdc_release_intent_rpc"];
+const RPC_DEPOSIT_SUBMIT_CANDIDATES = ["market_crypto_deposit_submit_rpc", "market_usdc_deposit_submit_rpc"];
+const RPC_RELEASE_SUBMIT_CANDIDATES = ["market_crypto_release_submit_rpc", "market_usdc_release_submit_rpc"];
+const RPC_CHAIN_TX_FINALIZE_CANDIDATES = ["market_chain_tx_finalize_rpc"];
+
+function isMissingRpcError(err: any) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("function") && msg.includes("does not exist")
+  ) || msg.includes("could not find the function") || msg.includes("pgrst202") || msg.includes("42883");
+}
+
+async function rpcWithFallback<T = any>(names: string[], params: Record<string, unknown>) {
+  let lastError: any = null;
+  for (const name of names) {
+    const out = await supabase.rpc(name, params as any);
+    if (!out.error) return { name, data: out.data as T };
+    lastError = out.error;
+    if (!isMissingRpcError(out.error)) {
+      throw new Error(out.error.message || `RPC ${name} failed`);
+    }
+  }
+  throw new Error(lastError?.message || `No RPC candidate matched: ${names.join(", ")}`);
+}
 
 export type StableSymbol = "USDC" | "USDT";
 
@@ -162,14 +182,17 @@ async function tryFinalizeOnce(
   txHash: string,
   eventType: ChainFinalizeEvent,
 ) {
-  const { data, error } = await supabase.rpc(RPC_CHAIN_TX_FINALIZE, {
-    p_order_id: orderId,
-    p_chain: chainName,
-    p_tx_hash: txHash,
-    p_event_type: eventType,
-  });
-  if (error) return { ok: false, error: error.message, data: null as any };
-  return { ok: true, error: null as string | null, data };
+  try {
+    const out = await rpcWithFallback(RPC_CHAIN_TX_FINALIZE_CANDIDATES, {
+      p_order_id: orderId,
+      p_chain: chainName,
+      p_tx_hash: txHash,
+      p_event_type: eventType,
+    });
+    return { ok: true, error: null as string | null, data: out.data };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e), data: null as any };
+  }
 }
 
 async function tryFinalizeViaFunction(
@@ -646,13 +669,12 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     fee_bps: number;
     chain: string;
   } = await (async () => {
-    const { data, error } = await supabase.rpc(RPC_USDC_DEPOSIT_INTENT, {
+    const out = await rpcWithFallback(RPC_DEPOSIT_INTENT_CANDIDATES, {
       p_order_id: orderId,
       p_chain: chain.chain,
       p_token: symbol,
     });
-    if (error) throw new Error(error.message || "Could not create crypto deposit intent.");
-    return data as any;
+    return out.data as any;
   })();
 
   const tokenAddress =
@@ -752,14 +774,15 @@ export async function payStableForOrder(orderId: string, symbol: StableSymbol = 
     user_op_hash: resolvedUserOpHash || null,
   });
 
-  const { error: submitErr } = await supabase.rpc(RPC_USDC_DEPOSIT_SUBMIT, {
-    p_order_id: orderId,
-    p_chain: chain.chain,
-    p_token: symbol,
-    p_tx_hash: resolvedTxHash || null,
-  });
-  if (submitErr) {
-    console.log("[Checkout] deposit submit RPC failed", submitErr.message);
+  try {
+    await rpcWithFallback(RPC_DEPOSIT_SUBMIT_CANDIDATES, {
+      p_order_id: orderId,
+      p_chain: chain.chain,
+      p_token: symbol,
+      p_tx_hash: resolvedTxHash || null,
+    });
+  } catch (e: any) {
+    console.log("[Checkout] deposit submit RPC failed", String(e?.message || e));
   }
   // Ensure intent is marked submitted even if we only have a userOp hash.
   const intentUpdate: any = { status: "SUBMITTED" };
@@ -820,12 +843,11 @@ export async function releaseUsdcForOrder(orderId: string) {
     escrow_address: string;
     chain: string;
   } = await (async () => {
-    const { data, error } = await supabase.rpc(RPC_USDC_RELEASE_INTENT, {
+    const out = await rpcWithFallback(RPC_RELEASE_INTENT_CANDIDATES, {
       p_order_id: orderId,
       p_chain: chain.chain,
     });
-    if (error) throw new Error(error.message || "Could not create release intent.");
-    return data as any;
+    return out.data as any;
   })();
 
   const data = encodeFunctionData({
@@ -857,13 +879,14 @@ export async function releaseUsdcForOrder(orderId: string) {
     user_op_hash: resolvedUserOpHash || null,
   });
 
-  const { error: submitErr } = await supabase.rpc(RPC_USDC_RELEASE_SUBMIT, {
-    p_order_id: orderId,
-    p_chain: chain.chain,
-    p_tx_hash: resolvedTxHash || null,
-  });
-  if (submitErr) {
-    console.log("[Checkout] release submit RPC failed", submitErr.message);
+  try {
+    await rpcWithFallback(RPC_RELEASE_SUBMIT_CANDIDATES, {
+      p_order_id: orderId,
+      p_chain: chain.chain,
+      p_tx_hash: resolvedTxHash || null,
+    });
+  } catch (e: any) {
+    console.log("[Checkout] release submit RPC failed", String(e?.message || e));
   }
   const intentUpdate: any = { status: "SUBMITTED" };
   if (resolvedTxHash) intentUpdate.tx_hash = resolvedTxHash;

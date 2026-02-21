@@ -464,9 +464,9 @@ export default function Checkout() {
       if (!auth.ok) throw new Error(auth.message || "Authentication required");
       console.log("[Checkout] payWithWallet auth ok");
       try {
-        console.log("[Checkout] payWithWallet callFn start");
+        console.log("[Checkout] payWithWallet rpc start");
         await invokeCheckoutWallet(oid);
-        console.log("[Checkout] payWithWallet callFn ok");
+        console.log("[Checkout] payWithWallet rpc ok");
       } catch (e: any) {
         const msg = String(e?.message || "");
         if (/jwt|session expired|unauthor/i.test(msg)) {
