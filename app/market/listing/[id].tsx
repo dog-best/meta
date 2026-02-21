@@ -8,6 +8,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -17,6 +18,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AppHeader from "@/components/common/AppHeader";
+import { callFn } from "@/services/functions";
 import { supabase } from "@/services/supabase";
 import { DeliveryGeo, formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -436,22 +438,8 @@ export default function ListingDetails() {
         quantity: qty,
         delivery_address: finalDeliveryGeo ? { geo: finalDeliveryGeo } : null,
       };
-      let out = await supabase.functions.invoke<{ order?: { id?: string } }>(FN_CREATE_ORDER, {
-        body: payload,
-      });
-      if (out.error) {
-        const msg = String(out.error.message || "").toLowerCase();
-        if (msg.includes("jwt") || msg.includes("unauthor") || msg.includes("401")) {
-          await supabase.auth.refreshSession();
-          out = await supabase.functions.invoke<{ order?: { id?: string } }>(FN_CREATE_ORDER, {
-            body: payload,
-          });
-        }
-      }
-      if (out.error) {
-        throw new Error(out.error.message || "Failed to create order");
-      }
-      const nextOrderId = String((out.data as any)?.order?.id || "").trim();
+      const out = await callFn<{ order?: { id?: string } }>(FN_CREATE_ORDER, payload, 15000);
+      const nextOrderId = String((out as any)?.order?.id || "").trim();
       if (!nextOrderId) throw new Error("Order creation did not return an order id.");
 
       router.push(`/market/checkout/${nextOrderId}` as any);

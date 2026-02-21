@@ -89,6 +89,30 @@ const NAME_REGISTRY_ABI = [
 const IDENTITY_ROUTER_ABI = [
   {
     type: "function",
+    name: "tradeConfigs",
+    stateMutability: "view",
+    inputs: [{ name: "storeId", type: "bytes32" }],
+    outputs: [
+      { name: "enabled", type: "bool" },
+      { name: "fee", type: "uint24" },
+      { name: "pool", type: "address" },
+      { name: "stableToken", type: "address" },
+      { name: "identityToken", type: "address" },
+    ],
+  },
+  {
+    type: "function",
+    name: "bootstrap",
+    stateMutability: "view",
+    inputs: [{ name: "storeId", type: "bytes32" }],
+    outputs: [
+      { name: "maxTradeBps", type: "uint256" },
+      { name: "cooldownSecs", type: "uint256" },
+      { name: "endTime", type: "uint256" },
+    ],
+  },
+  {
+    type: "function",
     name: "buyExactIn",
     stateMutability: "nonpayable",
     inputs: [
@@ -164,6 +188,19 @@ function formatUsdc6(raw: bigint) {
   return fracText ? `${whole.toString()}.${fracText}` : whole.toString();
 }
 
+function formatToken18(raw: bigint) {
+  const whole = raw / 1_000_000_000_000_000_000n;
+  const frac = raw % 1_000_000_000_000_000_000n;
+  const fracText = frac.toString().padStart(18, "0").replace(/0+$/, "");
+  return fracText ? `${whole.toString()}.${fracText}` : whole.toString();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const UINT256_MAX = (2n ** 256n) - 1n;
+
 const CREATE_ERROR_SELECTOR_HINTS: Record<string, string> = {
   // OpenChain lookup: 0x846ec056 -> Exists()
   "0x846ec056":
@@ -202,6 +239,94 @@ function shortRevertReason(err: unknown) {
     }
   }
   return "";
+}
+
+async function resolveBootstrapMaxTrade(
+  publicClient: any,
+  args: {
+    routerAddress: `0x${string}`;
+    storeKey: `0x${string}`;
+    tokenIn: `0x${string}`;
+    fallbackPool?: `0x${string}` | null;
+  },
+) {
+  try {
+    const [bootstrapCfg, tradeCfg] = await Promise.all([
+      publicClient.readContract({
+        abi: IDENTITY_ROUTER_ABI,
+        address: args.routerAddress,
+        functionName: "bootstrap",
+        args: [args.storeKey],
+      }),
+      publicClient.readContract({
+        abi: IDENTITY_ROUTER_ABI,
+        address: args.routerAddress,
+        functionName: "tradeConfigs",
+        args: [args.storeKey],
+      }),
+    ]);
+
+    const maxTradeBps = BigInt((bootstrapCfg as any)?.maxTradeBps ?? (bootstrapCfg as any)?.[0] ?? 0n);
+    const endTime = BigInt((bootstrapCfg as any)?.endTime ?? (bootstrapCfg as any)?.[2] ?? 0n);
+    const enabled = Boolean((tradeCfg as any)?.enabled ?? (tradeCfg as any)?.[0] ?? true);
+    if (!enabled || maxTradeBps <= 0n) return null;
+
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    if (endTime > 0n && nowSec > endTime) return null;
+
+    const configuredPool = normalizeHex(String((tradeCfg as any)?.pool ?? (tradeCfg as any)?.[2] ?? ""));
+    const poolAddress = configuredPool || args.fallbackPool || null;
+    if (!poolAddress) return null;
+
+    const poolBalanceRaw = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: args.tokenIn,
+      functionName: "balanceOf",
+      args: [poolAddress],
+    }) as bigint;
+
+    const maxTradeRaw = (poolBalanceRaw * maxTradeBps) / 10_000n;
+    return {
+      poolAddress,
+      maxTradeBps,
+      poolBalanceRaw,
+      maxTradeRaw,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function submitStockOrderWithRetry(
+  payload: {
+    slug: string;
+    side: "buy" | "sell";
+    amount_usdc?: number;
+    quantity?: number;
+    max_slippage_bps: number;
+    tx_hash: string;
+    user_op_hash?: string;
+    execution_mode: "onchain";
+    quote_snapshot?: any;
+  },
+  attempts = 60,
+  delayMs = 2000,
+) {
+  let lastErr: any = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await submitStockOrder(payload);
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message ?? e ?? "").toLowerCase();
+      const retryable =
+        msg.includes("awaiting confirmations") ||
+        msg.includes("transaction receipt not found on chain yet");
+      if (!retryable || i === attempts - 1) break;
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr ?? new Error("Trade submitted on-chain but indexing is still pending.");
 }
 
 export function storeKeyFromStoreId(storeId: string) {
@@ -966,6 +1091,9 @@ export async function submitStockTradeOnchain(input: {
   const storeKey = storeKeyFromStoreId(storeId);
   const slippageBps = toNumber(input.max_slippage_bps, 1200);
   const slippage = Math.max(0.0001, Math.min(0.95, slippageBps / 10_000));
+  const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
+  const poolAddress = normalizeHex(String(quoteRes?.identity?.pool_address || ""));
+  const symbol = String(quoteRes?.identity?.symbol || "TOKEN").trim() || "TOKEN";
 
   let tradeData: `0x${string}`;
   if (input.side === "buy") {
@@ -973,16 +1101,36 @@ export async function submitStockTradeOnchain(input: {
     const amountOutMinRaw = toRaw(toNumber(quoteRes?.quote?.quantity, 0) * (1 - slippage), 18, 12);
     if (amountInRaw <= 0n || amountOutMinRaw <= 0n) throw new Error("Invalid buy quote amount.");
 
-    const approveData = encodeFunctionData({
+    const maxTrade = await resolveBootstrapMaxTrade(publicClient, {
+      routerAddress,
+      storeKey: storeKey as `0x${string}`,
+      tokenIn: stableAddress,
+      fallbackPool: poolAddress,
+    });
+    if (maxTrade && (maxTrade.maxTradeRaw <= 0n || amountInRaw > maxTrade.maxTradeRaw)) {
+      throw new Error(
+        `Order exceeds current on-chain max size (${formatUsdc6(maxTrade.maxTradeRaw)} USDC). Try a smaller amount.`,
+      );
+    }
+
+    const allowance = await publicClient.readContract({
       abi: ERC20_ABI,
-      functionName: "approve",
-      args: [routerAddress, amountInRaw],
-    });
-    await (client as any).sendTransaction({
-      account,
-      to: stableAddress,
-      data: approveData,
-    });
+      address: stableAddress,
+      functionName: "allowance",
+      args: [address as `0x${string}`, routerAddress],
+    }) as bigint;
+    if (allowance < amountInRaw) {
+      const approveData = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [routerAddress, UINT256_MAX],
+      });
+      await (client as any).sendTransaction({
+        account,
+        to: stableAddress,
+        data: approveData,
+      });
+    }
 
     tradeData = encodeFunctionData({
       abi: IDENTITY_ROUTER_ABI,
@@ -994,16 +1142,36 @@ export async function submitStockTradeOnchain(input: {
     const amountOutMinRaw = toRaw(toNumber(quoteRes?.quote?.notional_usdc, 0) * (1 - slippage), 6, 6);
     if (amountInRaw <= 0n || amountOutMinRaw <= 0n) throw new Error("Invalid sell quote amount.");
 
-    const approveData = encodeFunctionData({
+    const maxTrade = await resolveBootstrapMaxTrade(publicClient, {
+      routerAddress,
+      storeKey: storeKey as `0x${string}`,
+      tokenIn: tokenAddress,
+      fallbackPool: poolAddress,
+    });
+    if (maxTrade && (maxTrade.maxTradeRaw <= 0n || amountInRaw > maxTrade.maxTradeRaw)) {
+      throw new Error(
+        `Order exceeds current on-chain max size (${formatToken18(maxTrade.maxTradeRaw)} ${symbol}). Try a smaller quantity.`,
+      );
+    }
+
+    const allowance = await publicClient.readContract({
       abi: ERC20_ABI,
-      functionName: "approve",
-      args: [routerAddress, amountInRaw],
-    });
-    await (client as any).sendTransaction({
-      account,
-      to: tokenAddress,
-      data: approveData,
-    });
+      address: tokenAddress,
+      functionName: "allowance",
+      args: [address as `0x${string}`, routerAddress],
+    }) as bigint;
+    if (allowance < amountInRaw) {
+      const approveData = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [routerAddress, UINT256_MAX],
+      });
+      await (client as any).sendTransaction({
+        account,
+        to: tokenAddress,
+        data: approveData,
+      });
+    }
 
     tradeData = encodeFunctionData({
       abi: IDENTITY_ROUTER_ABI,
@@ -1023,14 +1191,13 @@ export async function submitStockTradeOnchain(input: {
     throw new Error("Trade submitted but transaction hash is not available yet. Retry in a few seconds.");
   }
 
-  const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
   await publicClient.waitForTransactionReceipt({
     hash: txHash as `0x${string}`,
-    confirmations: Math.max(1, Number(chain.confirmations_required || 1)),
-    timeout: 180_000,
+    confirmations: 1,
+    timeout: 120_000,
   });
 
-  const out = await submitStockOrder({
+  const out = await submitStockOrderWithRetry({
     slug: input.slug,
     side: input.side,
     amount_usdc: input.amount_usdc,

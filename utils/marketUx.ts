@@ -18,6 +18,15 @@ export function friendlyMarketError(error: unknown, fallback = "Something went w
   if (msg.includes("insufficient")) {
     return "Insufficient wallet balance for this action.";
   }
+  if (msg.includes("max trade") || msg.includes("max size")) {
+    return "Trade amount is above the current on-chain max size. Reduce amount and try again.";
+  }
+  if (msg.includes("cooldown")) {
+    return "Trade cooldown is active for this stock. Wait a few seconds and retry.";
+  }
+  if (msg.includes("twap deviation")) {
+    return "Price moved too far from TWAP. Wait briefly and retry with a smaller amount.";
+  }
   if (msg.includes("row-level security") || msg.includes("permission") || msg.includes("policy")) {
     return "This action is currently blocked by permissions. Please contact support if it keeps happening.";
   }

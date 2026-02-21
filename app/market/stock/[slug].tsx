@@ -436,7 +436,6 @@ export default function StockDetailScreen() {
 
   function onSubmitTrade() {
     if (!slug) return;
-    setQuoteErr(null);
     const amt = Number(amountUsdc || 0);
     const qty = Number(quantity || 0);
     if (side === "buy" && (!Number.isFinite(amt) || amt <= 0)) {
@@ -447,6 +446,18 @@ export default function StockDetailScreen() {
       setQuoteErr("Enter valid token quantity");
       return;
     }
+    if (quoting) {
+      setQuoteErr("Quote is still updating. Please wait a moment.");
+      return;
+    }
+    if (quoteErr) {
+      return;
+    }
+    if (!quote) {
+      setQuoteErr("Quote unavailable. Please retry.");
+      return;
+    }
+    setQuoteErr(null);
     setPendingTrade({
       side,
       amount_usdc: side === "buy" ? amt : undefined,
@@ -477,6 +488,11 @@ export default function StockDetailScreen() {
 
   function onQuickBuy() {
     if (!slug || tradingPaused) return;
+    if (quickQuoteErr) return;
+    if (!quickQuote) {
+      setQuickQuoteErr("Quick quote unavailable. Please wait and try again.");
+      return;
+    }
     setQuickQuoteErr(null);
     setPendingTrade({
       side: "buy",
@@ -506,6 +522,10 @@ export default function StockDetailScreen() {
   const confirmQuote = pendingTrade?.side === "buy" && pendingTrade?.amount_usdc === quickAmount
     ? (quickQuote ?? quote)
     : quote;
+  const sideValue = side === "buy" ? Number(amountUsdc || 0) : Number(quantity || 0);
+  const sideInputOk = Number.isFinite(sideValue) && sideValue > 0;
+  const canSubmitTrade = !submitting && !tradingPaused && !quoting && sideInputOk && !quoteErr && !!quote;
+  const canQuickBuy = !submitting && !tradingPaused && !!quickQuote && !quickQuoteErr;
 
   return (
     <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={{ flex: 1, paddingHorizontal: 16, paddingTop: 14 }}>
@@ -789,19 +809,23 @@ export default function StockDetailScreen() {
 
                 <Pressable
                   onPress={onSubmitTrade}
-                  disabled={submitting || tradingPaused}
+                  disabled={!canSubmitTrade}
                   style={{
                     marginTop: 10,
                     borderRadius: 11,
                     paddingVertical: 11,
                     alignItems: "center",
-                    backgroundColor: tradingPaused
+                    backgroundColor: !canSubmitTrade
+                      ? "rgba(255,255,255,0.15)"
+                      : tradingPaused
                       ? "rgba(255,255,255,0.15)"
                       : side === "buy"
                       ? "rgba(45,212,191,0.32)"
                       : "rgba(248,113,113,0.30)",
                     borderWidth: 1,
-                    borderColor: tradingPaused
+                    borderColor: !canSubmitTrade
+                      ? "rgba(255,255,255,0.22)"
+                      : tradingPaused
                       ? "rgba(255,255,255,0.22)"
                       : side === "buy"
                       ? "rgba(45,212,191,0.58)"
@@ -966,18 +990,18 @@ export default function StockDetailScreen() {
             </View>
             <Pressable
               onPress={onQuickBuy}
-              disabled={submitting || tradingPaused}
+              disabled={!canQuickBuy}
               style={{
                 borderRadius: 10,
                 paddingHorizontal: 14,
                 paddingVertical: 10,
-                backgroundColor: tradingPaused ? "rgba(255,255,255,0.14)" : "rgba(45,212,191,0.34)",
+                backgroundColor: !canQuickBuy ? "rgba(255,255,255,0.14)" : "rgba(45,212,191,0.34)",
                 borderWidth: 1,
-                borderColor: tradingPaused ? "rgba(255,255,255,0.26)" : "rgba(45,212,191,0.58)",
+                borderColor: !canQuickBuy ? "rgba(255,255,255,0.26)" : "rgba(45,212,191,0.58)",
               }}
             >
               <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>
-                {submitting ? "Submitting..." : tradingPaused ? "Paused" : `Buy $${quickAmount}`}
+                {submitting ? "Submitting..." : !canQuickBuy ? "Quote Needed" : `Buy $${quickAmount}`}
               </Text>
             </Pressable>
           </View>
