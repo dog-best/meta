@@ -815,9 +815,32 @@ export async function createStockIdentityOnchain(input: {
       );
     }
 
-    const info = await waitForIdentityInfo(publicClient, factoryAddress, storeKey as `0x${string}`);
+    const info = await waitForIdentityInfo(publicClient, factoryAddress, storeKey as `0x${string}`, 45_000);
     if (!info) {
-      throw new Error("On-chain identity addresses not found yet after confirmed transaction. Please retry in a few seconds.");
+      logCreate("identity_info_pending_after_receipt", { tx_hash: txHash, store_key: storeKey });
+      const recovered = await createStockIdentity({
+        name: input.name.trim(),
+        symbol: input.symbol.trim().toUpperCase(),
+        chain: input.chain,
+        slug: input.slug ?? undefined,
+        tx_hash: txHash || undefined,
+        user_op_hash: userOpHash || undefined,
+        store_key: storeKey,
+        force_sync_existing: true,
+      });
+      if (recovered?.ok && recovered?.identity) {
+        logCreate("identity_sync_recovered_after_pending", {
+          identity_id: recovered?.identity?.id ?? null,
+          slug: recovered?.identity?.slug ?? null,
+        });
+        return {
+          ...recovered,
+          tx_hash: txHash || null,
+          user_op_hash: userOpHash || null,
+          explorer_url: txHash ? explorerTxUrl(chain.chain, txHash) : null,
+        };
+      }
+      throw new Error("On-chain identity is still syncing. Please retry in a few seconds.");
     }
     logCreate("identity_info_ok", {
       token: info.tokenAddress,

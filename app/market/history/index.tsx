@@ -362,7 +362,7 @@ export default function MarketHistoryScreen() {
               </View>
 
               <Text style={{ marginTop: 5, color: "rgba(255,255,255,0.66)", fontSize: 12 }}>
-                {kindLabel(String(item.kind))} • {new Date(item.occurred_at).toLocaleString()}
+                {kindLabel(String(item.kind))} - {new Date(item.occurred_at).toLocaleString()}
               </Text>
 
               {!!item.tx_hash ? (
