@@ -120,14 +120,65 @@ export default function UnifiedWalletLauncher() {
           transform: drag.getTranslateTransform(),
         }}
       >
-        <Pressable
-          onPress={() => {
-            if (draggedRef.current) {
-              draggedRef.current = false;
-              return;
-            }
-            setOpen(true);
-          }}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+        >
+          <Pressable
+            onPress={() => {
+              if (draggedRef.current) {
+                draggedRef.current = false;
+                return;
+              }
+              router.push("/market/wallet" as any);
+            }}
+            style={{
+              minWidth: compact ? 96 : 110,
+              height: compact ? 48 : 54,
+              borderRadius: compact ? 18 : 20,
+              paddingHorizontal: compact ? 10 : 12,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              backgroundColor: "rgba(8,23,49,0.92)",
+              borderWidth: 1,
+              borderColor: "rgba(147,197,253,0.45)",
+              shadowColor: "#000",
+              shadowOpacity: 0.35,
+              shadowRadius: 16,
+              shadowOffset: { width: 0, height: 6 },
+              elevation: 12,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+              <View
+                style={{
+                  width: compact ? 28 : 32,
+                  height: compact ? 28 : 32,
+                  borderRadius: compact ? 10 : 11,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(37,99,235,0.32)",
+                }}
+              >
+                <Ionicons name="water-outline" size={compact ? 15 : 17} color="#DBEAFE" />
+              </View>
+              <View>
+                <Text style={{ color: "#DBEAFE", fontWeight: "900", fontSize: compact ? 11 : 12 }}>Faucet</Text>
+                <Text style={{ color: "rgba(219,234,254,0.72)", fontWeight: "700", fontSize: compact ? 9 : 10 }}>
+                  Claim
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="arrow-forward" size={compact ? 13 : 15} color="#DBEAFE" />
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              if (draggedRef.current) {
+                draggedRef.current = false;
+                return;
+              }
+              setOpen(true);
+            }}
           style={{
             minWidth: compact ? 120 : 146,
             height: compact ? 48 : 54,
@@ -145,29 +196,30 @@ export default function UnifiedWalletLauncher() {
             shadowOffset: { width: 0, height: 6 },
             elevation: 12,
           }}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
-            <View
-              style={{
-                width: compact ? 28 : 32,
-                height: compact ? 28 : 32,
-                borderRadius: compact ? 10 : 11,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "rgba(124,58,237,0.3)",
-              }}
-            >
-              <Ionicons name="wallet-outline" size={compact ? 15 : 17} color="#fff" />
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+              <View
+                style={{
+                  width: compact ? 28 : 32,
+                  height: compact ? 28 : 32,
+                  borderRadius: compact ? 10 : 11,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(124,58,237,0.3)",
+                }}
+              >
+                <Ionicons name="wallet-outline" size={compact ? 15 : 17} color="#fff" />
+              </View>
+              <View>
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: compact ? 11 : 12 }}>Wallet</Text>
+                <Text style={{ color: "rgba(255,255,255,0.72)", fontWeight: "700", fontSize: compact ? 9 : 10 }}>
+                  ${wallet.overallUsdApprox.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </Text>
+              </View>
             </View>
-            <View>
-              <Text style={{ color: "#fff", fontWeight: "900", fontSize: compact ? 11 : 12 }}>Wallet</Text>
-              <Text style={{ color: "rgba(255,255,255,0.72)", fontWeight: "700", fontSize: compact ? 9 : 10 }}>
-                ${wallet.overallUsdApprox.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-up" size={compact ? 14 : 16} color="#fff" />
-        </Pressable>
+            <Ionicons name="chevron-up" size={compact ? 14 : 16} color="#fff" />
+          </Pressable>
+        </View>
       </Animated.View>
 
       <UnifiedWalletSheet
