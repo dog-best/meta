@@ -126,6 +126,12 @@ type SellerRow = {
   is_verified: boolean | null;
 };
 
+type BuyerProfileRow = {
+  id: string;
+  username: string | null;
+  full_name: string | null;
+};
+
 type OtpRow = {
   order_id: string;
   expires_at: string;
@@ -237,6 +243,8 @@ export default function OrderDetails() {
   const [order, setOrder] = useState<OrderRow | null>(null);
   const [listing, setListing] = useState<ListingRow | null>(null);
   const [seller, setSeller] = useState<SellerRow | null>(null);
+  const [buyerProfile, setBuyerProfile] = useState<BuyerProfileRow | null>(null);
+  const [sellerProfileUsername, setSellerProfileUsername] = useState<string | null>(null);
 
   const [otp, setOtp] = useState<OtpRow | null>(null);
   const [intents, setIntents] = useState<CryptoIntent[]>([]);
@@ -264,6 +272,58 @@ export default function OrderDetails() {
 
   const isBuyer = useMemo(() => !!me && !!order && order.buyer_id === me, [me, order]);
   const isSeller = useMemo(() => !!me && !!order && order.seller_id === me, [me, order]);
+  const canOrderChat = useMemo(
+    () =>
+      !!order &&
+      ["IN_ESCROW", "OUT_FOR_DELIVERY", "DELIVERED", "RELEASED"].includes(String(order.status || "").toUpperCase()) &&
+      (isBuyer || isSeller),
+    [order, isBuyer, isSeller],
+  );
+  const counterpartyUsername = useMemo(() => {
+    if (!order) return null;
+    if (isBuyer) {
+      const v = String(seller?.market_username || sellerProfileUsername || "").trim().toLowerCase();
+      return v || null;
+    }
+    if (isSeller) {
+      const v = String(buyerProfile?.username || "").trim().toLowerCase();
+      return v || null;
+    }
+    return null;
+  }, [order, isBuyer, isSeller, seller?.market_username, sellerProfileUsername, buyerProfile?.username]);
+  const counterpartyLabel = useMemo(() => {
+    if (isBuyer) return "seller";
+    if (isSeller) return "buyer";
+    return "user";
+  }, [isBuyer, isSeller]);
+  const counterpartyName = useMemo(() => {
+    if (isBuyer) {
+      return (
+        seller?.business_name ||
+        seller?.display_name ||
+        seller?.market_username ||
+        "Seller"
+      );
+    }
+    if (isSeller) {
+      return (
+        buyerProfile?.full_name ||
+        buyerProfile?.username ||
+        (order as any)?.buyer_contact?.name ||
+        "Buyer"
+      );
+    }
+    return "User";
+  }, [
+    isBuyer,
+    isSeller,
+    seller?.business_name,
+    seller?.display_name,
+    seller?.market_username,
+    buyerProfile?.full_name,
+    buyerProfile?.username,
+    order,
+  ]);
 
   const otpVerified = !!otp?.verified_at;
   const latestDepositIntent = useMemo(() => {
@@ -385,6 +445,34 @@ export default function OrderDetails() {
         .maybeSingle();
       if (sErr) throw new Error(sErr.message);
 
+      let bProf: BuyerProfileRow | null = null;
+      let sellerUsernameFallback: string | null = null;
+      try {
+        const { data: pData, error: pErr } = await supabase
+          .from("profiles")
+          .select("id,username,full_name")
+          .in("id", [(o as any).buyer_id, (o as any).seller_id]);
+        if (!pErr) {
+          for (const p of (pData ?? []) as any[]) {
+            const pid = String(p.id || "");
+            if (pid === String((o as any).buyer_id)) {
+              bProf = {
+                id: pid,
+                username: p.username ?? null,
+                full_name: p.full_name ?? null,
+              };
+            }
+            if (pid === String((o as any).seller_id)) {
+              const handle = String(p.username || "").trim().toLowerCase();
+              sellerUsernameFallback = handle || null;
+            }
+          }
+        }
+      } catch {
+        bProf = null;
+        sellerUsernameFallback = null;
+      }
+
       const { data: otpRow } = await supabase
         .from(OTP_TABLE)
         .select("order_id,expires_at,attempts,verified_at")
@@ -409,6 +497,8 @@ export default function OrderDetails() {
       setOrder(o as any);
       setListing((l as any) ?? null);
       setSeller((s as any) ?? null);
+      setBuyerProfile(bProf);
+      setSellerProfileUsername(sellerUsernameFallback);
       setOtp((otpRow as any) ?? null);
       setIntents(((ints as any) ?? []) as any);
     } catch (e: any) {
@@ -416,6 +506,8 @@ export default function OrderDetails() {
       setOrder(null);
       setListing(null);
       setSeller(null);
+      setBuyerProfile(null);
+      setSellerProfileUsername(null);
       setOtp(null);
       setIntents([]);
       setDeliverables([]);
@@ -851,6 +943,20 @@ async function releaseFunds() {
     }
   }
 
+  function openOrderChat() {
+    if (!counterpartyUsername) {
+      Alert.alert(
+        "Chat unavailable",
+        `No username found for this ${counterpartyLabel}. Ask them to set a username first.`,
+      );
+      return;
+    }
+    router.push({
+      pathname: "/market/dm/[username]" as any,
+      params: { username: counterpartyUsername },
+    });
+  }
+
   // Seller upload preview/final (safe + production)
 async function pickAndUpload(access: "preview" | "final") {
   if (!order) return;
@@ -1250,6 +1356,39 @@ async function pickAndUpload(access: "preview" | "final") {
                     Note: {(order as any)?.buyer_contact?.note || (order as any)?.delivery_address?.contact?.note}
                   </Text>
                 ) : null}
+              </Card>
+            ) : null}
+
+            {canOrderChat ? (
+              <Card title={isBuyer ? "Message seller" : "Message buyer"}>
+                <Text style={{ color: "rgba(255,255,255,0.72)", lineHeight: 20 }}>
+                  Chat directly with {counterpartyName}. Keep all order updates in one thread.
+                </Text>
+                <Pressable
+                  disabled={!counterpartyUsername}
+                  onPress={openOrderChat}
+                  style={{
+                    marginTop: 12,
+                    borderRadius: 14,
+                    paddingVertical: 12,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    gap: 8,
+                    backgroundColor: "rgba(124,58,237,0.20)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,237,0.45)",
+                    opacity: counterpartyUsername ? 1 : 0.65,
+                  }}
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
+                  <Text style={{ color: "#fff", fontWeight: "900" }}>
+                    Open chat with {counterpartyLabel}
+                  </Text>
+                </Pressable>
+                <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
+                  {counterpartyUsername ? `@${counterpartyUsername}` : "Username not set yet"}
+                </Text>
               </Card>
             ) : null}
 
