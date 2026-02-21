@@ -443,8 +443,17 @@ export default function ListingDetails() {
     } catch (e: any) {
       const message = friendlyMarketError(e, "We couldn't start checkout for this listing.");
       setErr(message);
-      if (Platform.OS === "web" && typeof window !== "undefined") window.alert(message);
-      else Alert.alert("Checkout failed", message);
+      const details = e?.details;
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        const debugParts: string[] = [];
+        if (details?.status) debugParts.push(`HTTP ${details.status}`);
+        if (details?.text) debugParts.push(String(details.text).slice(0, 280));
+        if (details?.json && !details?.text) debugParts.push(JSON.stringify(details.json).slice(0, 280));
+        const debug = debugParts.length ? `\n\nDebug: ${debugParts.join(" | ")}` : "";
+        window.alert(`${message}${debug}`);
+      } else {
+        Alert.alert("Checkout failed", message);
+      }
     } finally {
       setBuyBusy(false);
     }

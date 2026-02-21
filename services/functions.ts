@@ -150,7 +150,13 @@ export async function callFn<T>(name: string, body?: any, timeoutMs = 20000): Pr
       throw new Error("Session expired. Please sign in again.");
     }
     console.log(`[callFn] ${name} -> error`, msg);
-    throw new Error(msg);
+    const err = new Error(msg);
+    (err as any).details = {
+      status: res.status,
+      text,
+      json,
+    };
+    throw err;
   }
 
   console.log(`[callFn] ${name} -> ok ${res.status}`);
