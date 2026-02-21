@@ -164,6 +164,12 @@ function formatUsdc6(raw: bigint) {
   return fracText ? `${whole.toString()}.${fracText}` : whole.toString();
 }
 
+const CREATE_ERROR_SELECTOR_HINTS: Record<string, string> = {
+  // OpenChain lookup: 0x846ec056 -> Exists()
+  "0x846ec056":
+    "Exists(): identity/name/symbol already exists on-chain. Try a different Name/Symbol, or use the existing identity for this store.",
+};
+
 function shortRevertReason(err: unknown) {
   const candidates = [
     (err as any)?.shortMessage,
@@ -178,6 +184,12 @@ function shortRevertReason(err: unknown) {
 
   for (const raw of candidates) {
     const lowered = raw.toLowerCase();
+    const selectorMatch = raw.match(/0x[a-fA-F0-9]{8}/);
+    if (selectorMatch) {
+      const selector = selectorMatch[0].toLowerCase();
+      const hint = CREATE_ERROR_SELECTOR_HINTS[selector];
+      if (hint) return hint;
+    }
     const execIdx = lowered.indexOf("execution reverted");
     if (execIdx >= 0) {
       return raw.slice(execIdx).replace(/^.*?(execution reverted)/i, "$1").trim();
@@ -728,6 +740,49 @@ export async function createStockIdentityOnchain(input: {
         data: createData,
       });
     } catch (submitErr) {
+      const reason = shortRevertReason(submitErr);
+      if (reason.toLowerCase().includes("exists()")) {
+        // Recovery path: if this store identity already exists on-chain, sync DB from latest event.
+        const postInfo = await publicClient.readContract({
+          abi: IDENTITY_FACTORY_ABI,
+          address: factoryAddress,
+          functionName: "identities",
+          args: [storeKey as `0x${string}`],
+        }) as any;
+        const postToken = String(postInfo?.token || "");
+        const postPool = String(postInfo?.pool || "");
+        const postVault = String(postInfo?.vault || "");
+        const postStaking = String(postInfo?.staking || "");
+
+        if (isAddress(postToken) && isAddress(postPool)) {
+          const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
+          if (recoveredTx) {
+            const db = await createStockIdentity({
+              name: input.name.trim(),
+              symbol: input.symbol.trim().toUpperCase(),
+              chain: input.chain,
+              slug: input.slug ?? undefined,
+              tx_hash: recoveredTx,
+              token_address: postToken,
+              pool_address: postPool,
+              vault_address: postVault,
+              staking_address: postStaking,
+              store_key: storeKey,
+            });
+            return {
+              ...db,
+              tx_hash: recoveredTx,
+              user_op_hash: null,
+              explorer_url: explorerTxUrl(chain.chain, recoveredTx),
+            };
+          }
+          throw new Error(
+            "Exists(): identity already exists on-chain for this store, but creation tx was not found for DB sync.",
+          );
+        }
+
+        throw new Error("Exists(): identity/name/symbol already exists on-chain. Try a different Name/Symbol.");
+      }
       const notes = await diagnoseCreateRevert(publicClient, {
         factoryAddress,
         stableAddress,
@@ -740,7 +795,6 @@ export async function createStockIdentityOnchain(input: {
       if (notes.length) {
         throw new Error(`Create transaction reverted: ${notes.join("; ")}`);
       }
-      const reason = shortRevertReason(submitErr);
       if (reason) {
         throw new Error(`Create transaction reverted: ${reason}`);
       }
