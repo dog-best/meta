@@ -274,6 +274,7 @@ export async function createStockIdentity(input: {
   vault_address?: string;
   staking_address?: string;
   store_key?: string;
+  force_sync_existing?: boolean;
 }) {
   return await callStockFn<{
     ok: boolean;

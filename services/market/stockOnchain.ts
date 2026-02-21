@@ -604,30 +604,26 @@ export async function createStockIdentityOnchain(input: {
         staking: preStaking,
       });
       const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
-      if (!recoveredTx) {
-        throw new Error(
-          "Identity already exists on-chain for this store, but creation transaction was not found for DB sync.",
-        );
-      }
-      logCreate("sync_existing_submit", { tx_hash: recoveredTx });
+      logCreate("sync_existing_submit", { tx_hash: recoveredTx || null });
       const db = await createStockIdentity({
         name: input.name.trim(),
         symbol: input.symbol.trim().toUpperCase(),
         chain: input.chain,
         slug: input.slug ?? undefined,
-        tx_hash: recoveredTx,
+        tx_hash: recoveredTx || undefined,
+        force_sync_existing: true,
         token_address: preToken,
         pool_address: prePool,
         vault_address: preVault,
         staking_address: preStaking,
         store_key: storeKey,
       });
-      logCreate("sync_existing_ok", { tx_hash: recoveredTx, identity_id: db?.identity?.id ?? null });
+      logCreate("sync_existing_ok", { tx_hash: recoveredTx || null, identity_id: db?.identity?.id ?? null });
       return {
         ...db,
-        tx_hash: recoveredTx,
+        tx_hash: recoveredTx || null,
         user_op_hash: null,
-        explorer_url: explorerTxUrl(chain.chain, recoveredTx),
+        explorer_url: recoveredTx ? explorerTxUrl(chain.chain, recoveredTx) : null,
       };
     }
 
@@ -756,29 +752,25 @@ export async function createStockIdentityOnchain(input: {
 
         if (isAddress(postToken) && isAddress(postPool)) {
           const recoveredTx = await findLatestIdentityCreatedTxHash(publicClient, factoryAddress, storeKey as `0x${string}`);
-          if (recoveredTx) {
-            const db = await createStockIdentity({
-              name: input.name.trim(),
-              symbol: input.symbol.trim().toUpperCase(),
-              chain: input.chain,
-              slug: input.slug ?? undefined,
-              tx_hash: recoveredTx,
-              token_address: postToken,
-              pool_address: postPool,
-              vault_address: postVault,
-              staking_address: postStaking,
-              store_key: storeKey,
-            });
-            return {
-              ...db,
-              tx_hash: recoveredTx,
-              user_op_hash: null,
-              explorer_url: explorerTxUrl(chain.chain, recoveredTx),
-            };
-          }
-          throw new Error(
-            "Exists(): identity already exists on-chain for this store, but creation tx was not found for DB sync.",
-          );
+          const db = await createStockIdentity({
+            name: input.name.trim(),
+            symbol: input.symbol.trim().toUpperCase(),
+            chain: input.chain,
+            slug: input.slug ?? undefined,
+            tx_hash: recoveredTx || undefined,
+            force_sync_existing: true,
+            token_address: postToken,
+            pool_address: postPool,
+            vault_address: postVault,
+            staking_address: postStaking,
+            store_key: storeKey,
+          });
+          return {
+            ...db,
+            tx_hash: recoveredTx || null,
+            user_op_hash: null,
+            explorer_url: recoveredTx ? explorerTxUrl(chain.chain, recoveredTx) : null,
+          };
         }
 
         throw new Error("Exists(): identity/name/symbol already exists on-chain. Try a different Name/Symbol.");
@@ -871,7 +863,22 @@ export async function createStockIdentityOnchain(input: {
           db = await upsertFromTx(txHash);
           logCreate("db_sync_recovery_ok", { tx_hash: txHash, identity_id: db?.identity?.id ?? null });
         } else {
-          throw e;
+          db = await createStockIdentity({
+            name: input.name.trim(),
+            symbol: input.symbol.trim().toUpperCase(),
+            chain: input.chain,
+            slug: input.slug ?? undefined,
+            tx_hash: undefined,
+            user_op_hash: userOpHash || undefined,
+            token_address: tokenAddress,
+            pool_address: poolAddress,
+            vault_address: vaultAddress,
+            staking_address: stakingAddress,
+            store_key: storeKey,
+            force_sync_existing: true,
+          });
+          logCreate("db_sync_recovery_ok_no_tx", { identity_id: db?.identity?.id ?? null });
+          txHash = "";
         }
       } else {
         throw e;

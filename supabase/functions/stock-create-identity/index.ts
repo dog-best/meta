@@ -55,6 +55,37 @@ function storeKeyForStoreId(storeId: string) {
   return `0x${Array.from(hash).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+function selector4(signature: string) {
+  const hash = keccak_256(new TextEncoder().encode(signature));
+  return `0x${Array.from(hash.slice(0, 4)).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+const FACTORY_IDENTITIES_SELECTOR = selector4("identities(bytes32)");
+
+async function readIdentityFromFactory(
+  rpcUrl: string,
+  factoryAddress: string,
+  storeKey: string,
+) {
+  const keyClean = String(storeKey || "").replace(/^0x/i, "").toLowerCase();
+  if (keyClean.length !== 64) return null;
+  const data = `${FACTORY_IDENTITIES_SELECTOR}${keyClean}`;
+  const raw = await rpcCall(rpcUrl, "eth_call", [{ to: factoryAddress, data }, "latest"]).catch(() => null);
+  const clean = String(raw || "").replace(/^0x/i, "");
+  if (clean.length < 64 * 6) return null;
+
+  const token = parseAddressWord(clean.slice(0, 64));
+  const vault = parseAddressWord(clean.slice(64, 128));
+  const staking = parseAddressWord(clean.slice(128, 192));
+  const pool = parseAddressWord(clean.slice(192, 256));
+  const stable = parseAddressWord(clean.slice(256, 320));
+  if (!token || !pool || norm(token) === norm(ZERO_ADDRESS) || norm(pool) === norm(ZERO_ADDRESS)) return null;
+
+  return { token, vault, staking, pool, stable };
+}
+
 async function rpcCall(rpcUrl: string, method: string, params: unknown[]) {
   const res = await fetch(rpcUrl, {
     method: "POST",
@@ -123,18 +154,21 @@ Deno.serve(async (req) => {
   const initialPrice = Number(body?.initial_price_usdc ?? body?.initial_price ?? 0.01);
   const txHash = String(body?.tx_hash ?? "").trim();
   const userOpHash = String(body?.user_op_hash ?? "").trim();
+  const forceSyncExisting = body?.force_sync_existing === true || String(body?.force_sync_existing ?? "").toLowerCase() === "true";
   const tokenAddress = String(body?.token_address ?? "").trim();
   const poolAddress = String(body?.pool_address ?? "").trim();
   const vaultAddress = String(body?.vault_address ?? "").trim();
   const stakingAddress = String(body?.staking_address ?? "").trim();
   const storeKey = String(body?.store_key ?? "").trim();
 
+  const hasTxHash = isHexTxHash(txHash);
+
   if (!name || name.length < 3) return bad("name must be at least 3 characters");
   if (!symbol || symbol.length < 2) return bad("symbol must be at least 2 characters");
   if (!Number.isFinite(initialPrice) || initialPrice <= 0) return bad("initial_price_usdc must be > 0");
-  if (!isHexTxHash(txHash)) return bad("tx_hash is required and must be a valid on-chain transaction hash");
-  if (!isAddress(tokenAddress)) return bad("token_address is required");
-  if (!isAddress(poolAddress)) return bad("pool_address is required");
+  if (txHash && !hasTxHash) return bad("tx_hash must be a valid on-chain transaction hash");
+  if (tokenAddress && !isAddress(tokenAddress)) return bad("token_address must be a valid address");
+  if (poolAddress && !isAddress(poolAddress)) return bad("pool_address must be a valid address");
   if (vaultAddress && !isAddress(vaultAddress)) return bad("vault_address must be a valid address");
   if (stakingAddress && !isAddress(stakingAddress)) return bad("staking_address must be a valid address");
 
@@ -166,7 +200,6 @@ Deno.serve(async (req) => {
 
   const allowCreate = perms?.can_create ?? perms?.allow_create ?? true;
   const allowReserved = perms?.allow_reserved ?? false;
-  if (allowCreate === false) return bad("Store cannot create stock identity right now");
 
   const { data: existingByStore, error: existingErr } = await admin
     .from("market_stock_identities")
@@ -175,40 +208,6 @@ Deno.serve(async (req) => {
     .maybeSingle();
   if (existingErr) return bad(existingErr.message);
   const hadExistingIdentity = !!existingByStore?.id;
-
-  if (!hadExistingIdentity) {
-    const reservedFn = await admin.rpc("market_stock_has_reserved_text", {
-      p_name: name,
-      p_symbol: symbol,
-    });
-    let isReserved = false;
-    if (!reservedFn.error) {
-      isReserved = reservedFn.data === true;
-    } else {
-      const normName = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
-      const normSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-      const termsV2 = await admin
-        .from("market_stock_reserved_terms")
-        .select("term_norm")
-        .eq("active", true)
-        .in("term_norm", [normName, normSymbol]);
-      if (!termsV2.error && (termsV2.data?.length ?? 0) > 0) {
-        isReserved = true;
-      } else {
-        const termsLegacy = await admin
-          .from("reserved_name_rules")
-          .select("normalized_pattern")
-          .eq("active", true)
-          .in("normalized_pattern", [normName, normSymbol]);
-        if (!termsLegacy.error && (termsLegacy.data?.length ?? 0) > 0) {
-          isReserved = true;
-        }
-      }
-    }
-    if (isReserved && !allowReserved) {
-      return bad("Reserved identity name/symbol. Contact BestCity support");
-    }
-  }
 
   let chainConfig: any = null;
   if (preferredChain) {
@@ -249,44 +248,112 @@ Deno.serve(async (req) => {
     }
   }
 
-  const receipt: any = await rpcCall(String(chainConfig.rpc_url), "eth_getTransactionReceipt", [txHash]).catch((e) =>
-    ({ __err: String(e?.message ?? e) })
+  const onchainIdentity = await readIdentityFromFactory(
+    String(chainConfig.rpc_url),
+    String(chainConfig.identity_factory),
+    expectedStoreKey,
   );
-  if (receipt?.__err) return bad(receipt.__err);
-  if (!receipt) return bad("Transaction receipt not found on chain yet");
-  if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain create transaction failed");
+  const syncExistingFlow = !!onchainIdentity && (forceSyncExisting || !hasTxHash);
 
-  const latestBlockHex = await rpcCall(String(chainConfig.rpc_url), "eth_blockNumber", []).catch((e) =>
-    ({ __err: String(e?.message ?? e) })
-  );
-  if (latestBlockHex?.__err) return bad(latestBlockHex.__err);
-  const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
-  const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
-  const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 0;
-  const required = Math.max(1, Number(chainConfig.confirmations_required ?? 1));
-  if (confirmations < required) {
-    return bad(`Awaiting confirmations (${confirmations}/${required})`);
+  if (allowCreate === false && !syncExistingFlow) return bad("Store cannot create stock identity right now");
+
+  if (!hadExistingIdentity && !syncExistingFlow) {
+    const reservedFn = await admin.rpc("market_stock_has_reserved_text", {
+      p_name: name,
+      p_symbol: symbol,
+    });
+    let isReserved = false;
+    if (!reservedFn.error) {
+      isReserved = reservedFn.data === true;
+    } else {
+      const normName = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const normSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const termsV2 = await admin
+        .from("market_stock_reserved_terms")
+        .select("term_norm")
+        .eq("active", true)
+        .in("term_norm", [normName, normSymbol]);
+      if (!termsV2.error && (termsV2.data?.length ?? 0) > 0) {
+        isReserved = true;
+      } else {
+        const termsLegacy = await admin
+          .from("reserved_name_rules")
+          .select("normalized_pattern")
+          .eq("active", true)
+          .in("normalized_pattern", [normName, normSymbol]);
+        if (!termsLegacy.error && (termsLegacy.data?.length ?? 0) > 0) {
+          isReserved = true;
+        }
+      }
+    }
+    if (isReserved && !allowReserved) {
+      return bad("Reserved identity name/symbol. Contact BestCity support");
+    }
   }
 
-  const storeTopic = bytes32Topic(expectedStoreKey);
-  const createLog = Array.isArray(receipt.logs)
-    ? receipt.logs.find((log: any) =>
-      norm(String(log?.address || "")) === norm(String(chainConfig.identity_factory || "")) &&
-      norm(String(log?.topics?.[0] || "")) === norm(IDENTITY_CREATED_TOPIC0) &&
-      norm(String(log?.topics?.[1] || "")) === norm(storeTopic)
-    )
-    : null;
-  if (!createLog) return bad("On-chain identity creation event not found in transaction logs");
+  let decoded: { token: string; vault: string | null; staking: string | null; pool: string; stable: string | null } | null = null;
+  let acceptedTxHash = hasTxHash ? txHash : "";
 
-  const decoded = parseIdentityCreatedData(String(createLog.data || ""));
-  if (!decoded) return bad("Failed to decode on-chain identity creation event");
-  if (norm(decoded.token) !== norm(tokenAddress)) return bad("token_address does not match on-chain event");
-  if (norm(decoded.pool) !== norm(poolAddress)) return bad("pool_address does not match on-chain event");
-  if (vaultAddress && norm(decoded.vault) !== norm(vaultAddress)) {
-    return bad("vault_address does not match on-chain event");
+  if (hasTxHash) {
+    const receipt: any = await rpcCall(String(chainConfig.rpc_url), "eth_getTransactionReceipt", [txHash]).catch((e) =>
+      ({ __err: String(e?.message ?? e) })
+    );
+
+    if (!receipt?.__err && receipt && String(receipt.status || "").toLowerCase() === "0x1") {
+      const latestBlockHex = await rpcCall(String(chainConfig.rpc_url), "eth_blockNumber", []).catch((e) =>
+        ({ __err: String(e?.message ?? e) })
+      );
+      if (latestBlockHex?.__err) return bad(latestBlockHex.__err);
+      const latestBlock = Number.parseInt(String(latestBlockHex || "0x0"), 16);
+      const txBlock = Number.parseInt(String(receipt.blockNumber || "0x0"), 16);
+      const confirmations = Number.isFinite(latestBlock) && Number.isFinite(txBlock) ? (latestBlock - txBlock + 1) : 0;
+      const required = Math.max(1, Number(chainConfig.confirmations_required ?? 1));
+      if (confirmations < required) {
+        return bad(`Awaiting confirmations (${confirmations}/${required})`);
+      }
+
+      const storeTopic = bytes32Topic(expectedStoreKey);
+      const createLog = Array.isArray(receipt.logs)
+        ? receipt.logs.find((log: any) =>
+          norm(String(log?.address || "")) === norm(String(chainConfig.identity_factory || "")) &&
+          norm(String(log?.topics?.[0] || "")) === norm(IDENTITY_CREATED_TOPIC0) &&
+          norm(String(log?.topics?.[1] || "")) === norm(storeTopic)
+        )
+        : null;
+
+      if (createLog) {
+        const parsed = parseIdentityCreatedData(String(createLog.data || ""));
+        if (parsed) {
+          decoded = parsed;
+        }
+      }
+    }
+
+    if (!decoded && onchainIdentity) {
+      decoded = onchainIdentity;
+      acceptedTxHash = "";
+    }
+
+    if (!decoded) {
+      if (receipt?.__err) return bad(receipt.__err);
+      if (!receipt) return bad("Transaction receipt not found on chain yet");
+      if (String(receipt.status || "").toLowerCase() !== "0x1") return bad("On-chain create transaction failed");
+      return bad("On-chain identity creation event not found in transaction logs");
+    }
+  } else {
+    if (!onchainIdentity) return bad("tx_hash is required and must be a valid on-chain transaction hash");
+    decoded = onchainIdentity;
+    acceptedTxHash = "";
   }
-  if (stakingAddress && norm(decoded.staking) !== norm(stakingAddress)) {
-    return bad("staking_address does not match on-chain event");
+
+  if (!decoded) return bad("Could not resolve on-chain identity details");
+  if (tokenAddress && norm(decoded.token) !== norm(tokenAddress)) return bad("token_address does not match on-chain identity");
+  if (poolAddress && norm(decoded.pool) !== norm(poolAddress)) return bad("pool_address does not match on-chain identity");
+  if (vaultAddress && decoded.vault && norm(decoded.vault) !== norm(vaultAddress)) {
+    return bad("vault_address does not match on-chain identity");
+  }
+  if (stakingAddress && decoded.staking && norm(decoded.staking) !== norm(stakingAddress)) {
+    return bad("staking_address does not match on-chain identity");
   }
 
   const slug = await resolveUniqueSlug(
@@ -382,7 +449,7 @@ Deno.serve(async (req) => {
       liquidity_usdc: creationLp,
       staking_usdc: 0,
       chain: identity.chain,
-      tx_hash: txHash,
+      tx_hash: acceptedTxHash || null,
       status: "confirmed",
       idempotency_key: `stock:create:${identity.id}`,
     }, { onConflict: "idempotency_key" });
@@ -411,7 +478,7 @@ Deno.serve(async (req) => {
       reserve_usdc: reserveUsdc,
     },
     onchain: {
-      tx_hash: txHash,
+      tx_hash: acceptedTxHash || null,
       user_op_hash: userOpHash || null,
       token_address: decoded.token,
       pool_address: decoded.pool,
