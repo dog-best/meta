@@ -30,6 +30,9 @@ Deno.serve(async (req) => {
   if (listing.stock_qty !== null && listing.stock_qty < quantity) {
     return bad("Not enough stock");
   }
+  if ((listing as any)?.payment_options?.out_of_stock === true) {
+    return bad("Listing is out of stock");
+  }
 
   const expiresAt = (listing as any)?.payment_options?.expires_at;
   if (expiresAt) {
