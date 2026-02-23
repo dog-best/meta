@@ -258,13 +258,23 @@ Deno.serve(async (req) => {
   const tx: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionByHash", [txHash]).catch(() => null);
   const txFrom = isAddress(String(tx?.from || "")) ? String(tx.from) : null;
   if (txFrom && norm(txFrom) !== norm(String(wallet.address))) {
-    if (!isHexTxHash(userOpHash)) {
-      return bad("user_op_hash is required to verify smart account trade sender");
-    }
-    const opSender = await resolveUserOpSender(String(cfg.rpc_url), userOpHash);
-    if (!opSender) return bad("Could not verify smart account sender from user_op_hash");
-    if (norm(opSender) !== norm(String(wallet.address))) {
-      return bad("On-chain sender does not match your wallet");
+    // Fallback: if user wallet mapping is stale, accept txFrom if it belongs to this user/chain.
+    const { data: matchingWallet } = await admin
+      .from("crypto_wallets")
+      .select("id,address")
+      .eq("user_id", user.id)
+      .eq("chain", identity.chain)
+      .eq("address", txFrom)
+      .maybeSingle();
+    if (!matchingWallet) {
+      if (!isHexTxHash(userOpHash)) {
+        return bad("user_op_hash is required to verify smart account trade sender");
+      }
+      const opSender = await resolveUserOpSender(String(cfg.rpc_url), userOpHash);
+      if (!opSender) return bad("Could not verify smart account sender from user_op_hash");
+      if (norm(opSender) !== norm(String(wallet.address))) {
+        return bad("On-chain sender does not match your wallet");
+      }
     }
   }
 

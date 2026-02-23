@@ -24,7 +24,7 @@ import {
   listStockChat,
   postStockChat,
 } from "@/services/market/stocks";
-import { submitStockTradeOnchain } from "@/services/market/stockOnchain";
+import { repairLastStockTradeIndex, submitStockTradeOnchain } from "@/services/market/stockOnchain";
 import { isWalletMismatchError } from "@/services/market/usdcCheckout";
 import { supabase } from "@/services/supabase";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -254,6 +254,7 @@ export default function StockDetailScreen() {
   const [chatRows, setChatRows] = useState<any[]>([]);
   const [chatText, setChatText] = useState("");
   const [posting, setPosting] = useState(false);
+  const [repairing, setRepairing] = useState(false);
 
   async function loadDetail(silent = false) {
     if (!slug) return;
@@ -431,6 +432,23 @@ export default function StockDetailScreen() {
     } finally {
       setSubmitting(false);
       setConfirmVisible(false);
+    }
+  }
+
+  async function onRepairTrade() {
+    if (repairing) return;
+    setRepairing(true);
+    try {
+      const res = await repairLastStockTradeIndex();
+      await loadDetail(true);
+      setPanel("trades");
+      const tx = String((res as any)?.execution?.tx_hash || (res as any)?.tx_hash || "");
+      const msg = tx ? `Trade reindexed.\nTx: ${tx}` : "Trade reindexed.";
+      Alert.alert("Repair complete", msg);
+    } catch (e: any) {
+      Alert.alert("Repair failed", friendlyMarketError(e, "Unable to repair trade history."));
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -834,6 +852,25 @@ export default function StockDetailScreen() {
                 >
                   <Text style={{ color: "#fff", fontWeight: "900" }}>
                     {submitting ? "Submitting..." : tradingPaused ? "Trading Paused" : side === "buy" ? "Submit Buy" : "Submit Sell"}
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={onRepairTrade}
+                  disabled={repairing}
+                  style={{
+                    marginTop: 8,
+                    borderRadius: 11,
+                    paddingVertical: 10,
+                    alignItems: "center",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    borderWidth: 1,
+                    borderColor: BORDER,
+                    opacity: repairing ? 0.7 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>
+                    {repairing ? "Repairing..." : "Repair Last Trade"}
                   </Text>
                 </Pressable>
               </View>

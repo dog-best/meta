@@ -6,6 +6,7 @@ import { supabase } from "@/services/supabase";
 import { requireLocalAuth } from "@/utils/secureAuth";
 import { getSmartAccount } from "@/utils/aaWallet";
 import { ensureWalletAddressOnChain, getMyWalletForChain, registerWallet } from "@/services/market/usdcCheckout";
+import * as SecureStore from "@/utils/secureStore";
 
 const ERC20_ABI = [
   {
@@ -200,6 +201,7 @@ function sleep(ms: number) {
 }
 
 const UINT256_MAX = (2n ** 256n) - 1n;
+const KEY_LAST_TRADE_DRAFT = "stock_last_trade_draft";
 
 const CREATE_ERROR_SELECTOR_HINTS: Record<string, string> = {
   // OpenChain lookup: 0x846ec056 -> Exists()
@@ -307,6 +309,7 @@ async function resolveBootstrapMaxTrade(
       maxTradeBps,
       poolBalanceRaw,
       maxTradeRaw,
+      tradeCfg,
     };
   } catch {
     return null;
@@ -343,6 +346,61 @@ async function submitStockOrderWithRetry(
     }
   }
   throw lastErr ?? new Error("Trade submitted on-chain but indexing is still pending.");
+}
+
+type StockTradeDraft = {
+  slug: string;
+  side: "buy" | "sell";
+  amount_usdc?: number;
+  quantity?: number;
+  max_slippage_bps?: number;
+  quote_snapshot?: any;
+  tx_hash?: string;
+  user_op_hash?: string;
+  created_at?: string;
+};
+
+async function readTradeDraft(): Promise<StockTradeDraft | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(KEY_LAST_TRADE_DRAFT);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.slug || !parsed.side) return null;
+    return parsed as StockTradeDraft;
+  } catch {
+    return null;
+  }
+}
+
+async function writeTradeDraft(next: Partial<StockTradeDraft>) {
+  const current = (await readTradeDraft()) ?? {};
+  const merged = { ...current, ...next, created_at: new Date().toISOString() };
+  try {
+    await SecureStore.setItemAsync(KEY_LAST_TRADE_DRAFT, JSON.stringify(merged));
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+export async function repairLastStockTradeIndex(input?: { tx_hash?: string; user_op_hash?: string }) {
+  const draft = await readTradeDraft();
+  if (!draft) throw new Error("No recent trade found to repair.");
+  const txHash = String(input?.tx_hash || draft.tx_hash || "").trim();
+  if (!txHash.startsWith("0x")) throw new Error("Missing trade transaction hash. Retry a trade first.");
+  const side = draft.side;
+  const maxSlippage = Number(draft.max_slippage_bps ?? 1200);
+
+  return await submitStockOrderWithRetry({
+    slug: draft.slug,
+    side,
+    amount_usdc: side === "buy" ? draft.amount_usdc : undefined,
+    quantity: side === "sell" ? draft.quantity : undefined,
+    max_slippage_bps: maxSlippage,
+    tx_hash: txHash,
+    user_op_hash: String(input?.user_op_hash || draft.user_op_hash || "").trim() || undefined,
+    execution_mode: "onchain",
+    quote_snapshot: draft.quote_snapshot ?? null,
+  });
 }
 
 export function storeKeyFromStoreId(storeId: string) {
@@ -1087,6 +1145,14 @@ export async function submitStockTradeOnchain(input: {
     quantity: input.quantity,
     max_slippage_bps: input.max_slippage_bps ?? 1200,
   });
+  await writeTradeDraft({
+    slug: input.slug,
+    side: input.side,
+    amount_usdc: input.amount_usdc,
+    quantity: input.quantity,
+    max_slippage_bps: input.max_slippage_bps ?? 1200,
+    quote_snapshot: quoteRes?.quote ?? null,
+  });
 
   const chainName = String(quoteRes?.identity?.chain || "");
   const chain = await resolveStockChain(chainName);
@@ -1111,6 +1177,7 @@ export async function submitStockTradeOnchain(input: {
   const poolAddress = normalizeHex(String(quoteRes?.identity?.pool_address || ""));
   const symbol = String(quoteRes?.identity?.symbol || "TOKEN").trim() || "TOKEN";
   let approvalSubmitted = false;
+  let tradeCfgCache: any = null;
 
   let tradeData: `0x${string}`;
   if (input.side === "buy") {
@@ -1124,11 +1191,28 @@ export async function submitStockTradeOnchain(input: {
       tokenIn: stableAddress,
       fallbackPool: poolAddress,
     });
+    tradeCfgCache = (maxTrade as any)?.tradeCfg ?? null;
+    if (tradeCfgCache && tradeCfgCache.enabled === false) {
+      throw new Error("Trading is not enabled for this stock yet.");
+    }
+    if (tradeCfgCache && normalizeHex(String(tradeCfgCache.stableToken || "")) && normalizeHex(String(tradeCfgCache.stableToken || "")) !== stableAddress) {
+      throw new Error("Stable token mismatch for this stock. Please re-sync the stock identity.");
+    }
     const maxAllowed = maxTrade ? bufferedMaxTrade(maxTrade.maxTradeRaw) : 0n;
     if (maxTrade && (maxAllowed <= 0n || amountInRaw > maxAllowed)) {
       throw new Error(
         `Order exceeds current on-chain max size (${formatUsdc6(maxAllowed)} USDC). Try a smaller amount.`,
       );
+    }
+
+    const stableBalance = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: stableAddress,
+      functionName: "balanceOf",
+      args: [address as `0x${string}`],
+    }) as bigint;
+    if (stableBalance < amountInRaw) {
+      throw new Error(`Insufficient USDC balance. Need ${formatUsdc6(amountInRaw)} USDC.`);
     }
 
     const allowance = await publicClient.readContract({
@@ -1194,11 +1278,28 @@ export async function submitStockTradeOnchain(input: {
       tokenIn: tokenAddress,
       fallbackPool: poolAddress,
     });
+    tradeCfgCache = (maxTrade as any)?.tradeCfg ?? null;
+    if (tradeCfgCache && tradeCfgCache.enabled === false) {
+      throw new Error("Trading is not enabled for this stock yet.");
+    }
+    if (tradeCfgCache && normalizeHex(String(tradeCfgCache.identityToken || "")) && normalizeHex(String(tradeCfgCache.identityToken || "")) !== tokenAddress) {
+      throw new Error("Token mismatch for this stock. Please re-sync the stock identity.");
+    }
     const maxAllowed = maxTrade ? bufferedMaxTrade(maxTrade.maxTradeRaw) : 0n;
     if (maxTrade && (maxAllowed <= 0n || amountInRaw > maxAllowed)) {
       throw new Error(
         `Order exceeds current on-chain max size (${formatToken18(maxAllowed)} ${symbol}). Try a smaller quantity.`,
       );
+    }
+
+    const tokenBalance = await publicClient.readContract({
+      abi: ERC20_ABI,
+      address: tokenAddress,
+      functionName: "balanceOf",
+      args: [address as `0x${string}`],
+    }) as bigint;
+    if (tokenBalance < amountInRaw) {
+      throw new Error(`Insufficient ${symbol} balance. Need ${formatToken18(amountInRaw)} ${symbol}.`);
     }
 
     const allowance = await publicClient.readContract({
@@ -1265,12 +1366,24 @@ export async function submitStockTradeOnchain(input: {
   if (!txHash.startsWith("0x")) {
     throw new Error("Trade submitted but transaction hash is not available yet. Retry in a few seconds.");
   }
+  await writeTradeDraft({ tx_hash: txHash, user_op_hash: userOpHash || undefined });
 
   await publicClient.waitForTransactionReceipt({
     hash: txHash as `0x${string}`,
     confirmations: 1,
     timeout: 120_000,
   });
+
+  // Ensure wallet mapping matches the actual tx sender (avoids user_op_hash requirement mismatches).
+  try {
+    const tx = await publicClient.getTransaction({ hash: txHash as `0x${string}` });
+    const txFrom = String((tx as any)?.from || "");
+    if (isAddress(txFrom) && txFrom.toLowerCase() !== String(address || "").toLowerCase()) {
+      await registerWallet(chain.chain, txFrom);
+    }
+  } catch {
+    // ignore tx sender lookup failures
+  }
 
   const out = await submitStockOrderWithRetry({
     slug: input.slug,
