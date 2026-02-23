@@ -106,14 +106,23 @@ Deno.serve(async (req) => {
   if (!isAddress(String(identity.token_address || ""))) return bad("Stock token address is missing");
   if (isTradingPaused(identity)) return bad("Trading is paused for this stock");
 
-  const { data: wallet, error: walletErr } = await admin
+  const { data: walletRows, error: walletErr } = await admin
     .from("crypto_wallets")
-    .select("address,chain")
+    .select("address,chain,created_at")
     .eq("user_id", user.id)
     .eq("chain", identity.chain)
-    .maybeSingle();
+    .order("created_at", { ascending: true });
   if (walletErr) return bad(walletErr.message);
-  if (!wallet?.address) return bad(`No wallet found for ${identity.chain}`);
+  const walletAddresses = (walletRows ?? [])
+    .map((row: any) => String(row?.address ?? "").trim())
+    .filter((addr) => isAddress(addr));
+  if (walletAddresses.length <= 0) return bad(`No wallet found for ${identity.chain}`);
+  const walletAddressSet = new Set(walletAddresses.map((addr) => norm(addr)));
+  const walletTopicSet = new Set(walletAddresses.map((addr) => norm(topicAddress(addr))));
+  const wallet = {
+    address: walletAddresses[0],
+    chain: String((walletRows?.[0] as any)?.chain || identity.chain),
+  };
 
   const cutoff = new Date(Date.now() - 10 * 1000).toISOString();
   const { count: recentCount, error: recentErr } = await admin
@@ -236,46 +245,46 @@ Deno.serve(async (req) => {
   const poolNorm = norm(String(identity.pool_address));
   const tokenNorm = norm(String(identity.token_address));
   const stableNorm = norm(stableAddress);
-  const walletTopic = topicAddress(String(wallet.address));
-
   const hasPoolSwapLog = logs.some((log: any) =>
     norm(String(log?.address || "")) === poolNorm &&
     norm(String(log?.topics?.[0] || "")) === norm(SWAP_EVENT_TOPIC0)
   );
   if (!hasPoolSwapLog) return bad("Transaction does not contain a swap for this stock pool");
 
-  const hasWalletTransferLog = logs.some((log: any) => {
+  const transferLogs = logs.filter((log: any) => norm(String(log?.topics?.[0] || "")) === norm(TRANSFER_EVENT_TOPIC0));
+  const hasWalletTransferOnKnownAssets = transferLogs.some((log: any) => {
     const logAddress = norm(String(log?.address || ""));
     if (logAddress !== tokenNorm && logAddress !== stableNorm) return false;
-    const t0 = norm(String(log?.topics?.[0] || ""));
-    if (t0 !== norm(TRANSFER_EVENT_TOPIC0)) return false;
     const fromTopic = norm(String(log?.topics?.[1] || ""));
     const toTopic = norm(String(log?.topics?.[2] || ""));
-    return fromTopic === norm(walletTopic) || toTopic === norm(walletTopic);
+    return walletTopicSet.has(fromTopic) || walletTopicSet.has(toTopic);
   });
-  if (!hasWalletTransferLog) return bad("Transaction is not tied to this wallet's stock trade");
+  // Fallback for pools/tokens that route through wrapper contracts where token/stable address can drift.
+  const hasWalletTransferAnyAsset = transferLogs.some((log: any) => {
+    const fromTopic = norm(String(log?.topics?.[1] || ""));
+    const toTopic = norm(String(log?.topics?.[2] || ""));
+    return walletTopicSet.has(fromTopic) || walletTopicSet.has(toTopic);
+  });
+  const hasWalletTransferLog = hasWalletTransferOnKnownAssets || hasWalletTransferAnyAsset;
 
   const tx: any = await rpcCall(String(cfg.rpc_url), "eth_getTransactionByHash", [txHash]).catch(() => null);
   const txFrom = isAddress(String(tx?.from || "")) ? String(tx.from) : null;
-  if (txFrom && norm(txFrom) !== norm(String(wallet.address))) {
-    // Fallback: if user wallet mapping is stale, accept txFrom if it belongs to this user/chain.
-    const { data: matchingWallet } = await admin
-      .from("crypto_wallets")
-      .select("id,address")
-      .eq("user_id", user.id)
-      .eq("chain", identity.chain)
-      .eq("address", txFrom)
-      .maybeSingle();
-    if (!matchingWallet) {
-      if (!isHexTxHash(userOpHash)) {
-        return bad("user_op_hash is required to verify smart account trade sender");
-      }
-      const opSender = await resolveUserOpSender(String(cfg.rpc_url), userOpHash);
-      if (!opSender) return bad("Could not verify smart account sender from user_op_hash");
-      if (norm(opSender) !== norm(String(wallet.address))) {
-        return bad("On-chain sender does not match your wallet");
-      }
+  const txFromMatchesUser = txFrom ? walletAddressSet.has(norm(txFrom)) : false;
+
+  let opSenderMatchesUser = false;
+  if (!txFromMatchesUser && isHexTxHash(userOpHash)) {
+    const opSender = await resolveUserOpSender(String(cfg.rpc_url), userOpHash);
+    if (!opSender) return bad("Could not verify smart account sender from user_op_hash");
+    opSenderMatchesUser = walletAddressSet.has(norm(opSender));
+    if (!opSenderMatchesUser) {
+      return bad("On-chain sender does not match your wallet");
     }
+  } else if (!txFromMatchesUser && txFrom && !hasWalletTransferLog) {
+    return bad("user_op_hash is required to verify smart account trade sender");
+  }
+
+  if (!hasWalletTransferLog && !txFromMatchesUser && !opSenderMatchesUser) {
+    return bad("Transaction is not tied to this wallet's stock trade");
   }
 
   const { data: order, error: orderErr } = await admin

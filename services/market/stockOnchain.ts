@@ -759,8 +759,8 @@ export async function createStockIdentityOnchain(input: {
     const { client, account, address } = await getSmartAccount(chain, user.id);
     logCreate("smart_account_ok", { wallet: address });
     const savedWallet = await getMyWalletForChain(chain.chain);
+    await registerWallet(chain.chain, address);
     if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
-      await registerWallet(chain.chain, address);
       logCreate("wallet_mapping_updated", { old_wallet: savedWallet.address, new_wallet: address });
     }
     const storeKey = storeKeyFromStoreId(user.id);
@@ -1159,10 +1159,7 @@ export async function submitStockTradeOnchain(input: {
   await ensureWalletAddressOnChain(chain);
 
   const { client, account, address } = await getSmartAccount(chain, user.id);
-  const savedWallet = await getMyWalletForChain(chain.chain);
-  if (savedWallet?.address && String(savedWallet.address).toLowerCase() !== String(address).toLowerCase()) {
-    await registerWallet(chain.chain, address);
-  }
+  await registerWallet(chain.chain, address);
   const routerAddress = chain.identity_router as `0x${string}`;
   const stableAddress = (chain.identity_stable_address || chain.usdc_address) as `0x${string}`;
   const tokenAddress = normalizeHex(String(quoteRes?.identity?.token_address || ""));
@@ -1373,17 +1370,6 @@ export async function submitStockTradeOnchain(input: {
     confirmations: 1,
     timeout: 120_000,
   });
-
-  // Ensure wallet mapping matches the actual tx sender (avoids user_op_hash requirement mismatches).
-  try {
-    const tx = await publicClient.getTransaction({ hash: txHash as `0x${string}` });
-    const txFrom = String((tx as any)?.from || "");
-    if (isAddress(txFrom) && txFrom.toLowerCase() !== String(address || "").toLowerCase()) {
-      await registerWallet(chain.chain, txFrom);
-    }
-  } catch {
-    // ignore tx sender lookup failures
-  }
 
   const out = await submitStockOrderWithRetry({
     slug: input.slug,
