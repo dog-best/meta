@@ -42,6 +42,11 @@ export type ListingImageInsert = {
   meta?: any;
 };
 
+function asErrorMessage(error: unknown) {
+  const msg = String((error as any)?.message ?? error ?? "").trim();
+  return msg || "Unknown error";
+}
+
 export async function getMySellerProfile() {
   const { data: auth } = await supabase.auth.getUser();
   const user = auth?.user;
@@ -138,27 +143,120 @@ export async function insertListingImages(
   images: ListingImageInsert[],
   options?: { activateListing?: boolean },
 ) {
-  const fallbackRows: any[] = [];
+  if (!images.length) return [];
+
+  const rows: any[] = [];
   for (const img of images) {
-    const out = await callFn<{ image?: any }>("market-add-listing-image", {
-      listing_id: img.listing_id,
-      storage_path: img.storage_path,
-      public_url: img.public_url,
-      sort_order: img.sort_order,
-      meta: img.meta ?? {},
-      // first image becomes cover on the backend
-      set_as_cover: Number(img.sort_order ?? 0) === 0,
-      // when creating product listings, publish only after first image is saved
-      activate_listing: options?.activateListing === true && Number(img.sort_order ?? 0) === 0,
-    });
-    const row = (out as any)?.image;
-    if (!row?.id) {
-      throw new Error("Image saved but DB row id was not returned.");
+    let row: any | null = null;
+    let edgeError: unknown = null;
+
+    try {
+      const out = await callFn<{ image?: any }>("market-add-listing-image", {
+        listing_id: img.listing_id,
+        storage_path: img.storage_path,
+        public_url: img.public_url,
+        sort_order: img.sort_order,
+        meta: img.meta ?? {},
+        // first image becomes cover on the backend
+        set_as_cover: Number(img.sort_order ?? 0) === 0,
+        // publish only after at least one image row is persisted
+        activate_listing: options?.activateListing === true && Number(img.sort_order ?? 0) === 0,
+      });
+      row = (out as any)?.image ?? null;
+      if (!row?.id) {
+        throw new Error("Image saved but DB row id was not returned.");
+      }
+    } catch (error) {
+      edgeError = error;
+      console.log("[insertListingImages] market-add-listing-image failed; falling back to direct DB insert.", asErrorMessage(error));
     }
-    fallbackRows.push(row);
+
+    if (!row?.id) {
+      const { data, error } = await supabase
+        .from("market_listing_images")
+        .insert({
+          listing_id: img.listing_id,
+          storage_path: img.storage_path,
+          public_url: img.public_url ?? null,
+          sort_order: Number.isFinite(Number(img.sort_order)) ? Number(img.sort_order) : 0,
+          meta: img.meta ?? {},
+        })
+        .select("*")
+        .single();
+
+      if (error || !data?.id) {
+        const dbMsg = error?.message || "Direct DB image insert failed.";
+        const edgeMsg = edgeError ? asErrorMessage(edgeError) : "";
+        throw new Error(edgeMsg ? `${dbMsg} (edge function: ${edgeMsg})` : dbMsg);
+      }
+
+      row = data;
+
+      // Keep cover/listing state in sync even when edge function fallback is used.
+      if (Number(img.sort_order ?? 0) === 0) {
+        try {
+          await setListingCoverImage(img.listing_id, row.id);
+        } catch (coverError) {
+          console.log("[insertListingImages] cover_image update fallback failed", asErrorMessage(coverError));
+        }
+      }
+
+      if (options?.activateListing === true && Number(img.sort_order ?? 0) === 0) {
+        const { error: activateError } = await supabase
+          .from("market_listings")
+          .update({ is_active: true, updated_at: new Date().toISOString() })
+          .eq("id", img.listing_id);
+        if (activateError) {
+          throw new Error(activateError.message);
+        }
+      }
+    }
+
+    rows.push(row);
   }
 
-  return fallbackRows;
+  return rows;
+}
+
+export async function rollbackListingDraft(listingId: string, uploadedPaths: string[] = []) {
+  const cleanPaths = Array.from(
+    new Set(
+      uploadedPaths
+        .map((p) => String(p || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (cleanPaths.length) {
+    const { error: storageError } = await supabase.storage.from("market-listings").remove(cleanPaths);
+    if (storageError) {
+      console.log("[rollbackListingDraft] storage cleanup failed", storageError.message);
+    }
+  }
+
+  const { error: imageDeleteError } = await supabase
+    .from("market_listing_images")
+    .delete()
+    .eq("listing_id", listingId);
+  if (imageDeleteError) {
+    console.log("[rollbackListingDraft] image rows cleanup failed", imageDeleteError.message);
+  }
+
+  const { error: deactivateError } = await supabase
+    .from("market_listings")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("id", listingId);
+  if (deactivateError) {
+    console.log("[rollbackListingDraft] listing deactivate failed", deactivateError.message);
+  }
+
+  const { error: listingDeleteError } = await supabase
+    .from("market_listings")
+    .delete()
+    .eq("id", listingId);
+  if (listingDeleteError) {
+    console.log("[rollbackListingDraft] listing delete failed", listingDeleteError.message);
+  }
 }
 
 export async function uploadToBucket(params: {

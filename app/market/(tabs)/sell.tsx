@@ -8,7 +8,7 @@ import { ActivityIndicator, Alert, Image, Linking, Pressable, ScrollView, Text, 
 
 import AppHeader from "@/components/common/AppHeader";
 import { getAllCategories } from "@/services/market/categories";
-import { createListing, getMySellerProfile, insertListingImages, uploadToBucket } from "@/services/market/marketService";
+import { createListing, getMySellerProfile, insertListingImages, rollbackListingDraft, uploadToBucket } from "@/services/market/marketService";
 import { supabase } from "@/services/supabase";
 import { formatAvailabilitySummary, getCurrentLocationWithGeocode } from "@/utils/location";
 import { friendlyMarketError } from "@/utils/marketUx";
@@ -702,7 +702,7 @@ export default function SellTab() {
         : "";
     const finalDesc = (descBase + extra).trim() || null;
     const availability = buildAvailability();
-    const shouldActivateAfterImages = category === "product" && images.length > 0;
+    const shouldActivateAfterImages = images.length > 0;
 
     console.log("[SellTab] createListing -> start");
     setStage("Creating listing...");
@@ -718,7 +718,7 @@ export default function SellTab() {
       stock_qty: category === "product" ? qty : null,
       availability,
       payment_options: paymentOptions,
-      // keep product listings hidden until media rows are persisted
+      // keep listings with selected media hidden until image rows are persisted
       is_active: shouldActivateAfterImages ? false : true,
     } as any);
       console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
@@ -727,46 +727,53 @@ export default function SellTab() {
 
       // If no images (allowed for digital service with website URL), skip images flow
       if (images.length > 0) {
-        console.log("[SellTab] upload images -> start", { count: images.length });
-        setStage("Uploading images...");
-        const inserts: any[] = [];
+        const uploadedPaths: string[] = [];
+        try {
+          console.log("[SellTab] upload images -> start", { count: images.length });
+          setStage("Uploading images...");
+          const inserts: any[] = [];
 
-        for (let i = 0; i < images.length; i++) {
-          const img = images[i];
-          const ext = ensureExtFromMime(img.contentType);
-          const random =
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? (crypto as any).randomUUID()
-              : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          for (let i = 0; i < images.length; i++) {
+            const img = images[i];
+            const ext = ensureExtFromMime(img.contentType);
+            const random =
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? (crypto as any).randomUUID()
+                : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-          const path = `${user.id}/listings/${listing.id}/${i + 1}-${random}.${ext}`;
+            const path = `${user.id}/listings/${listing.id}/${i + 1}-${random}.${ext}`;
 
+            console.log("[SellTab] upload image -> start", { index: i, path });
+            const up = await uploadToBucket({
+              bucket: "market-listings",
+              path,
+              uri: img.uri,
+              contentType: img.contentType,
+            });
+            console.log("[SellTab] upload image -> ok", { index: i, storagePath: up.storagePath });
+            uploadedPaths.push(String(up.storagePath || ""));
 
-          console.log("[SellTab] upload image -> start", { index: i, path });
-          const up = await uploadToBucket({
-            bucket: "market-listings",
-            path,
-            uri: img.uri,
-            contentType: img.contentType,
-          });
-          console.log("[SellTab] upload image -> ok", { index: i, storagePath: up.storagePath });
+            inserts.push({
+              listing_id: listing.id,
+              storage_path: up.storagePath,
+              public_url: up.publicUrl ?? null,
+              sort_order: i,
+              meta: { content_type: img.contentType },
+            });
+          }
 
-          inserts.push({
-            listing_id: listing.id,
-            storage_path: up.storagePath,
-            public_url: up.publicUrl ?? null,
-            sort_order: i,
-            meta: { content_type: img.contentType },
-          });
-        }
+          console.log("[SellTab] insertListingImages -> start", { count: inserts.length });
+          setStage("Saving images...");
+          const rows = await insertListingImages(inserts, { activateListing: shouldActivateAfterImages });
+          console.log("[SellTab] insertListingImages -> ok", { count: rows?.length ?? 0 });
 
-        console.log("[SellTab] insertListingImages -> start", { count: inserts.length });
-        setStage("Saving images…");
-        const rows = await insertListingImages(inserts, { activateListing: shouldActivateAfterImages });
-        console.log("[SellTab] insertListingImages -> ok", { count: rows?.length ?? 0 });
-
-        if (!rows?.length) {
-          throw new Error("Upload finished but image rows were not saved. Please retry.");
+          if (!rows?.length) {
+            throw new Error("Upload finished but image rows were not saved. Please retry.");
+          }
+        } catch (imageErr) {
+          setStage("Reverting draft listing...");
+          await rollbackListingDraft(listing.id, uploadedPaths);
+          throw imageErr;
         }
       }
 
