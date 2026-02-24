@@ -275,7 +275,7 @@ export default function MarketHome() {
       let query = supabase
         .from(LISTINGS_TABLE)
         .select(
-          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,availability,stock_qty,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path),images:market_listing_images(public_url,storage_path,sort_order)"
+          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,availability,stock_qty,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path),images:market_listing_images!market_listing_images_listing_id_fkey(public_url,storage_path,sort_order)"
         )
         .eq("is_active", true)
         .eq("category", main)

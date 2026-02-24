@@ -159,6 +159,12 @@ function isHexHash(v?: string | null) {
   return /^0x[a-fA-F0-9]{64}$/.test(String(v || "").trim());
 }
 
+function isUuid(v?: string | null) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "").trim(),
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string; label: string }> = {
     CREATED: { bg: "rgba(255,255,255,0.08)", fg: "#E5E7EB", label: "Created" },
@@ -282,15 +288,31 @@ export default function OrderDetails() {
   const counterpartyUsername = useMemo(() => {
     if (!order) return null;
     if (isBuyer) {
-      const v = String(seller?.market_username || sellerProfileUsername || "").trim().toLowerCase();
-      return v || null;
+      const sellerHandle = String(seller?.market_username || sellerProfileUsername || "").trim().toLowerCase();
+      if (sellerHandle) return sellerHandle;
+      const sellerId = String((order as any)?.seller_id || "").trim().toLowerCase();
+      return isUuid(sellerId) ? sellerId : null;
     }
     if (isSeller) {
-      const v = String(buyerProfile?.username || "").trim().toLowerCase();
-      return v || null;
+      const buyerHandle = String(buyerProfile?.username || "").trim().toLowerCase();
+      if (buyerHandle) return buyerHandle;
+      const buyerId = String((order as any)?.buyer_id || "").trim().toLowerCase();
+      return isUuid(buyerId) ? buyerId : null;
     }
     return null;
-  }, [order, isBuyer, isSeller, seller?.market_username, sellerProfileUsername, buyerProfile?.username]);
+  }, [
+    order,
+    isBuyer,
+    isSeller,
+    seller?.market_username,
+    sellerProfileUsername,
+    buyerProfile?.username,
+  ]);
+  const counterpartyHandleHint = useMemo(() => {
+    if (!counterpartyUsername) return "Username not set yet";
+    if (isUuid(counterpartyUsername)) return "Direct chat link ready";
+    return `@${counterpartyUsername}`;
+  }, [counterpartyUsername]);
   const counterpartyLabel = useMemo(() => {
     if (isBuyer) return "seller";
     if (isSeller) return "buyer";
@@ -629,6 +651,140 @@ export default function OrderDetails() {
   const otpCooldownRemainingSec = Math.max(0, Math.ceil((otpCooldownUntilMs - nowMs) / 1000));
   const hasPendingUnexpiredOtp = !!otp && !otpVerified && otpExpiryRemainingSec > 0;
   const canGenerateOtpNow = canRequestOtp && !busy && !otpVerified && otpCooldownRemainingSec === 0 && !hasPendingUnexpiredOtp;
+  const orderStatus = String(order?.status || "").toUpperCase();
+  const orderGuidance = useMemo(() => {
+    if (!order) return null;
+
+    if (awaitingConfirmations) {
+      return {
+        tone: "warn" as const,
+        title: "Awaiting blockchain confirmations",
+        body: "Your deposit was submitted. Escrow will activate after confirmations. Do not resend payment unless support tells you to.",
+      };
+    }
+
+    if (orderStatus === "CREATED") {
+      if (isBuyer) {
+        return {
+          tone: "warn" as const,
+          title: "Complete payment to lock escrow",
+          body: "Choose NGN wallet or crypto checkout. Seller actions stay locked until payment is confirmed.",
+        };
+      }
+      return {
+        tone: "neutral" as const,
+        title: "Waiting for buyer payment",
+        body: "Order was created, but escrow is not funded yet. You can prepare deliverables while waiting.",
+      };
+    }
+
+    if (orderStatus === "IN_ESCROW") {
+      if (isSeller) {
+        return {
+          tone: "neutral" as const,
+          title: "Escrow is funded",
+          body: "Prepare delivery, upload files if needed, then mark Out for delivery.",
+        };
+      }
+      return {
+        tone: "neutral" as const,
+        title: "Payment secured in escrow",
+        body: "Seller can now continue with delivery. Keep updates inside order chat.",
+      };
+    }
+
+    if (orderStatus === "OUT_FOR_DELIVERY") {
+      if (isBuyer) {
+        return {
+          tone: "warn" as const,
+          title: "Share OTP only after receiving item",
+          body: "Generate OTP when delivery is complete. Sharing OTP early can release funds too soon.",
+        };
+      }
+      return {
+        tone: "warn" as const,
+        title: "Complete delivery, then verify OTP",
+        body: "Ask buyer for OTP only after handoff, then verify to mark delivery complete.",
+      };
+    }
+
+    if (orderStatus === "DELIVERED") {
+      if (isBuyer) {
+        if (canRelease) {
+          return {
+            tone: "success" as const,
+            title: "Ready to release funds",
+            body: "OTP is verified and delivery is complete. Release funds when satisfied.",
+          };
+        }
+        return {
+          tone: "warn" as const,
+          title: "Waiting for OTP verification",
+          body: "Release stays locked until OTP is verified by the seller.",
+        };
+      }
+      return {
+        tone: "neutral" as const,
+        title: "Delivered - waiting for buyer release",
+        body: "Buyer must release escrow funds. Keep evidence and updates in this order thread.",
+      };
+    }
+
+    if (orderStatus === "RELEASED") {
+      return {
+        tone: "success" as const,
+        title: "Order completed",
+        body: "Escrow funds were released successfully.",
+      };
+    }
+
+    if (orderStatus === "REFUNDED") {
+      return {
+        tone: "danger" as const,
+        title: "Order refunded",
+        body: "Escrow was returned to the buyer.",
+      };
+    }
+
+    if (orderStatus === "CANCELLED") {
+      return {
+        tone: "danger" as const,
+        title: "Order cancelled",
+        body: "This order is closed. Create a new order if both parties still want to proceed.",
+      };
+    }
+
+    return {
+      tone: "neutral" as const,
+      title: "Order in progress",
+      body: "Follow the required actions shown below.",
+    };
+  }, [order, awaitingConfirmations, orderStatus, isBuyer, isSeller, canRelease]);
+  const orderGuidanceColors = useMemo(() => {
+    const tone = orderGuidance?.tone || "neutral";
+    if (tone === "success") {
+      return {
+        bg: "rgba(16,185,129,0.14)",
+        border: "rgba(16,185,129,0.35)",
+      };
+    }
+    if (tone === "warn") {
+      return {
+        bg: "rgba(251,191,36,0.12)",
+        border: "rgba(251,191,36,0.4)",
+      };
+    }
+    if (tone === "danger") {
+      return {
+        bg: "rgba(239,68,68,0.12)",
+        border: "rgba(239,68,68,0.35)",
+      };
+    }
+    return {
+      bg: "rgba(255,255,255,0.06)",
+      border: "rgba(255,255,255,0.12)",
+    };
+  }, [orderGuidance?.tone]);
 
   function fmtCountdown(totalSec: number) {
     const m = Math.floor(totalSec / 60);
@@ -947,7 +1103,7 @@ async function releaseFunds() {
     if (!counterpartyUsername) {
       Alert.alert(
         "Chat unavailable",
-        `No username found for this ${counterpartyLabel}. Ask them to set a username first.`,
+        `No chat handle found for this ${counterpartyLabel} yet. Ask them to complete profile setup.`,
       );
       return;
     }
@@ -1154,6 +1310,24 @@ async function pickAndUpload(access: "preview" | "final") {
                 Order ID: {order.id}
               </Text>
             </View>
+
+            {orderGuidance ? (
+              <View
+                style={{
+                  marginTop: 10,
+                  borderRadius: 16,
+                  padding: 12,
+                  backgroundColor: orderGuidanceColors.bg,
+                  borderWidth: 1,
+                  borderColor: orderGuidanceColors.border,
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>{orderGuidance.title}</Text>
+                <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", lineHeight: 20 }}>
+                  {orderGuidance.body}
+                </Text>
+              </View>
+            ) : null}
 
             {awaitingConfirmations ? (
               <Card title="Waiting for blockchain confirmations">
@@ -1387,7 +1561,7 @@ async function pickAndUpload(access: "preview" | "final") {
                   </Text>
                 </Pressable>
                 <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.6)", fontSize: 12 }}>
-                  {counterpartyUsername ? `@${counterpartyUsername}` : "Username not set yet"}
+                  {counterpartyHandleHint}
                 </Text>
               </Card>
             ) : null}

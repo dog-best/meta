@@ -69,6 +69,34 @@ export type DMAttachment = {
 export async function getUserByUsername(username: string): Promise<UserIdentity | null> {
   const handle = String(username || "").trim().toLowerCase();
   if (!handle) return null;
+  const isUuidHandle = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    handle,
+  );
+
+  if (isUuidHandle) {
+    const { data: prof, error: pErr } = await supabase
+      .from("profiles")
+      .select("id,username,full_name")
+      .eq("id", handle)
+      .maybeSingle();
+    if (pErr) throw new Error(pErr.message);
+    if (!prof?.id) return null;
+
+    const { data: seller, error: sErr } = await supabase
+      .from("market_seller_profiles")
+      .select("user_id,market_username,business_name,logo_path,active")
+      .eq("user_id", prof.id)
+      .eq("active", true)
+      .maybeSingle();
+    if (sErr) throw new Error(sErr.message);
+
+    return {
+      id: prof.id,
+      username: prof.username ?? null,
+      full_name: prof.full_name ?? null,
+      seller_profile: (seller as any) ?? null,
+    };
+  }
 
   // Prefer seller profiles if active
   const { data: seller, error: sErr } = await supabase

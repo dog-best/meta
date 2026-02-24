@@ -133,6 +133,7 @@ export default function ListingDetails() {
   const [deliveryLabel, setDeliveryLabel] = useState("");
   const [locatingDelivery, setLocatingDelivery] = useState(false);
   const [buyBusy, setBuyBusy] = useState(false);
+  const [orderQtyInput, setOrderQtyInput] = useState("1");
   const [meId, setMeId] = useState<string | null>(null);
 
   const [likes, setLikes] = useState(0);
@@ -246,6 +247,21 @@ export default function ListingDetails() {
       mounted = false;
     };
   }, [listingId]);
+
+  useEffect(() => {
+    const stockQty = Number((listing as any)?.stock_qty);
+    const hasStockCap =
+      String((listing as any)?.category || "").toLowerCase() === "product" &&
+      Number.isFinite(stockQty) &&
+      stockQty > 0;
+    const maxQty = hasStockCap ? Math.max(1, Math.floor(stockQty)) : 1;
+
+    setOrderQtyInput((prev) => {
+      const parsed = Number.parseInt(String(prev || "").trim(), 10);
+      const safe = Number.isFinite(parsed) ? Math.max(1, Math.min(maxQty, parsed)) : 1;
+      return String(safe);
+    });
+  }, [listing?.id, listing?.category, listing?.stock_qty]);
 
 
   function openListingPreview(item: ListingPreview) {
@@ -443,7 +459,22 @@ export default function ListingDetails() {
           ? { ...deliveryGeo, label: deliveryLabel.trim() || deliveryGeo.label }
           : null;
 
-      const qty = 1;
+      const stockQty = Number((listing as any)?.stock_qty);
+      const hasStockCap =
+        String((listing as any)?.category || "").toLowerCase() === "product" &&
+        Number.isFinite(stockQty) &&
+        stockQty > 0;
+      const maxQty = hasStockCap ? Math.max(1, Math.floor(stockQty)) : 1;
+      const parsedQty = Number.parseInt(String(orderQtyInput || "").trim(), 10);
+      const qty = Number.isFinite(parsedQty) ? Math.max(1, parsedQty) : 1;
+      if (qty > maxQty) {
+        const msg = `Only ${maxQty} item(s) are currently available for this listing.`;
+        if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+        else Alert.alert("Quantity adjusted", msg);
+        setOrderQtyInput(String(maxQty));
+        return;
+      }
+
       const payload = {
         listing_id: listing.id,
         quantity: qty,
@@ -542,6 +573,37 @@ export default function ListingDetails() {
   const displayPrice = getListingPriceDisplay(listing as any);
   const showDiscount = displayPrice.hasDiscount;
   const isOutOfStock = listing.category === "product" && listing.stock_qty !== null && Number(listing.stock_qty) <= 0;
+  const stockQtyNum = Number(listing.stock_qty);
+  const hasStockCap =
+    String(listing.category || "").toLowerCase() === "product" &&
+    Number.isFinite(stockQtyNum) &&
+    stockQtyNum > 0;
+  const maxOrderQty = hasStockCap ? Math.max(1, Math.floor(stockQtyNum)) : 1;
+  const parsedQty = Number.parseInt(String(orderQtyInput || "").trim(), 10);
+  const orderQty = Number.isFinite(parsedQty) ? Math.max(1, Math.min(maxOrderQty, parsedQty)) : 1;
+  const unitLocal = Number(displayPrice.localNow ?? 0);
+  const unitUsd = Number(displayPrice.usdNow ?? 0);
+  const totalLocal = Number((unitLocal * orderQty).toFixed(2));
+  const totalUsd = Number((unitUsd * orderQty).toFixed(2));
+
+  function adjustOrderQty(delta: number) {
+    const next = Math.max(1, Math.min(maxOrderQty, orderQty + delta));
+    setOrderQtyInput(String(next));
+  }
+
+  function onChangeOrderQty(text: string) {
+    const digits = String(text || "").replace(/[^\d]/g, "");
+    if (!digits) {
+      setOrderQtyInput("");
+      return;
+    }
+    const n = Number.parseInt(digits, 10);
+    if (!Number.isFinite(n)) {
+      setOrderQtyInput("1");
+      return;
+    }
+    setOrderQtyInput(String(Math.max(1, Math.min(maxOrderQty, n))));
+  }
 
   return (
     <LinearGradient
@@ -670,6 +732,84 @@ export default function ListingDetails() {
             <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.65)" }}>
               Stock: {listing.stock_qty}
             </Text>
+          ) : null}
+
+          {hasStockCap ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 14,
+                padding: 12,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.14)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12 }}>Quantity</Text>
+              <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Pressable
+                  onPress={() => adjustOrderQty(-1)}
+                  disabled={orderQty <= 1}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.14)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    opacity: orderQty <= 1 ? 0.5 : 1,
+                  }}
+                >
+                  <Ionicons name="remove" size={18} color="#fff" />
+                </Pressable>
+
+                <TextInput
+                  value={String(orderQtyInput)}
+                  onChangeText={onChangeOrderQty}
+                  keyboardType="number-pad"
+                  style={{
+                    minWidth: 56,
+                    borderRadius: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: 10,
+                    textAlign: "center",
+                    color: "#fff",
+                    fontWeight: "900",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.14)",
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                  }}
+                />
+
+                <Pressable
+                  onPress={() => adjustOrderQty(1)}
+                  disabled={orderQty >= maxOrderQty}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.14)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    opacity: orderQty >= maxOrderQty ? 0.5 : 1,
+                  }}
+                >
+                  <Ionicons name="add" size={18} color="#fff" />
+                </Pressable>
+
+                <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, marginLeft: "auto" }}>
+                  Max {maxOrderQty}
+                </Text>
+              </View>
+
+              <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
+                Total: {formatCurrency(displayPrice.localCurrency, totalLocal)} (USD {formatCurrency("USD", totalUsd)})
+              </Text>
+            </View>
           ) : null}
         </View>
 
@@ -1126,10 +1266,14 @@ export default function ListingDetails() {
           ) : (
             <>
               <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
-                {isOutOfStock ? "Out of stock" : "Buy now"}
+                {isOutOfStock ? "Out of stock" : hasStockCap ? `Buy ${orderQty} item${orderQty > 1 ? "s" : ""}` : "Buy now"}
               </Text>
               <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.8)", fontWeight: "800", fontSize: 12 }}>
-                {isOutOfStock ? "Seller must restock before new orders." : "Escrow protected - choose NGN or USDC next"}
+                {isOutOfStock
+                  ? "Seller must restock before new orders."
+                  : hasStockCap
+                  ? `Total ${formatCurrency(displayPrice.localCurrency, totalLocal)} (USD ${formatCurrency("USD", totalUsd)}) - escrow protected`
+                  : "Escrow protected - choose NGN or USDC next"}
               </Text>
             </>
           )}

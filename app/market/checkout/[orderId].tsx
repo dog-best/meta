@@ -170,6 +170,10 @@ export default function Checkout() {
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
   const orderCurrency = String((order as any)?.currency ?? listingCurrency).toUpperCase();
   const orderAmount = Number((order as any)?.amount ?? 0);
+  const orderQty = Math.max(1, Number((order as any)?.quantity ?? 1));
+  const orderUnitPrice = Number(
+    (order as any)?.unit_price ?? (orderQty > 0 ? orderAmount / orderQty : orderAmount),
+  );
   const paymentOptions = ((listing as any)?.payment_options ?? {}) as any;
   const hasExplicitRoutes =
     typeof paymentOptions?.allow_ngn === "boolean" ||
@@ -297,7 +301,7 @@ export default function Checkout() {
         {
           const first = await supabase
             .from("market_orders")
-            .select("id,listing_id,amount,currency,delivery_address,buyer_contact")
+            .select("id,listing_id,quantity,unit_price,amount,currency,delivery_address,buyer_contact")
             .eq("id", oid)
             .maybeSingle();
           if (!first.error) {
@@ -305,7 +309,7 @@ export default function Checkout() {
           } else if (String(first.error.message || "").includes("buyer_contact")) {
             const fallback = await supabase
               .from("market_orders")
-              .select("id,listing_id,amount,currency,delivery_address")
+              .select("id,listing_id,quantity,unit_price,amount,currency,delivery_address")
               .eq("id", oid)
               .maybeSingle();
             if (fallback.error) throw fallback.error;
@@ -694,8 +698,31 @@ export default function Checkout() {
           <Text style={{ marginTop: 4, color: "#fff", fontWeight: "900", fontSize: 22 }}>
             {Number(orderAmount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} {orderCurrency || listingCurrency || "NGN"}
           </Text>
+          <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+            Qty {orderQty} x {Number(orderUnitPrice || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+            {orderCurrency || listingCurrency || "NGN"}
+          </Text>
           <Text style={{ marginTop: 4, color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
             Fund only appears when your selected payment wallet is insufficient.
+          </Text>
+        </View>
+
+        <View
+          style={{
+            marginTop: 10,
+            borderRadius: 16,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.12)",
+            backgroundColor: "rgba(255,255,255,0.05)",
+          }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>What happens next</Text>
+          <Text style={{ marginTop: 6, color: "rgba(255,255,255,0.75)", lineHeight: 20 }}>
+            1. Your payment locks in escrow.{"\n"}
+            2. Seller marks out for delivery.{"\n"}
+            3. Buyer generates OTP after receiving item.{"\n"}
+            4. Seller verifies OTP, then buyer releases funds.
           </Text>
         </View>
 
