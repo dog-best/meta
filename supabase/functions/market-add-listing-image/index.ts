@@ -14,6 +14,8 @@ Deno.serve(async (req) => {
   const listing_id = String(body.listing_id ?? "");
   const storage_path = String(body.storage_path ?? "").trim();
   const sort_order = body.sort_order === undefined ? 0 : Number(body.sort_order);
+  const setAsCover = body.set_as_cover === true;
+  const activateListing = body.activate_listing === true;
 
   if (!listing_id) return bad("listing_id required");
   if (!storage_path) return bad("storage_path required");
@@ -43,13 +45,35 @@ Deno.serve(async (req) => {
 
   if (error) return bad(error.message);
 
-  // Optionally set cover_image_id if requested or if none exists
-  if (body.set_as_cover === true) {
-    await admin.from("market_listings").update({ cover_image_id: img.id }).eq("id", listing_id);
+  // Optionally set cover_image_id if requested or if none exists.
+  if (setAsCover) {
+    const updates: Record<string, unknown> = {
+      cover_image_id: img.id,
+      updated_at: new Date().toISOString(),
+    };
+    if (activateListing) updates.is_active = true;
+    const { error: coverErr } = await admin.from("market_listings").update(updates).eq("id", listing_id);
+    if (coverErr) return bad(coverErr.message);
   } else {
-    const { data: cur } = await admin.from("market_listings").select("cover_image_id").eq("id", listing_id).single();
+    const { data: cur, error: curErr } = await admin
+      .from("market_listings")
+      .select("cover_image_id")
+      .eq("id", listing_id)
+      .single();
+    if (curErr) return bad(curErr.message);
+
     if (!cur?.cover_image_id) {
-      await admin.from("market_listings").update({ cover_image_id: img.id }).eq("id", listing_id);
+      const { error: setErr } = await admin
+        .from("market_listings")
+        .update({ cover_image_id: img.id, updated_at: new Date().toISOString() })
+        .eq("id", listing_id);
+      if (setErr) return bad(setErr.message);
+    } else if (activateListing) {
+      const { error: activateErr } = await admin
+        .from("market_listings")
+        .update({ is_active: true, updated_at: new Date().toISOString() })
+        .eq("id", listing_id);
+      if (activateErr) return bad(activateErr.message);
     }
   }
 

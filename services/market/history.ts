@@ -123,7 +123,10 @@ function walletTypeTitle(input: unknown) {
   return "Wallet transaction";
 }
 
-async function safeListQuery<T>(label: string, run: () => Promise<{ data: T[] | null; error: any }>) {
+async function safeListQuery<T>(
+  label: string,
+  run: () => Promise<{ data: T[] | null; error: any }> | { data: T[] | null; error: any } | any,
+) {
   try {
     const res = await run();
     if (res.error) {
@@ -486,17 +489,19 @@ async function fetchLegacyHistory(userId: string, limit: number) {
 }
 
 let historyBackfillAttemptedForUser = "";
+let historyBackfillAttemptedAt = 0;
 
 async function maybeBackfillHistory(limit: number) {
   const candidates = ["market_history_backfill_me"];
   for (const fn of candidates) {
     const { error } = await supabase.rpc(fn, { p_limit: Math.min(Math.max(limit, 100), 5000) } as any);
-    if (!error) return;
+    if (!error) return true;
     if (!isMissingHistoryRpcError(error)) {
       console.warn(`[history] ${fn} failed: ${String(error?.message || error)}`);
-      return;
+      return false;
     }
   }
+  return false;
 }
 
 export async function fetchMarketHistory(limit = 300) {
@@ -505,22 +510,40 @@ export async function fetchMarketHistory(limit = 300) {
   const user = auth?.user;
   if (!user) throw new Error("Not authenticated");
 
-  if (historyBackfillAttemptedForUser !== user.id) {
+  const now = Date.now();
+  const shouldAttemptBackfill =
+    historyBackfillAttemptedForUser !== user.id ||
+    now - historyBackfillAttemptedAt > 60_000;
+  if (shouldAttemptBackfill) {
     historyBackfillAttemptedForUser = user.id;
+    historyBackfillAttemptedAt = now;
     await maybeBackfillHistory(limit);
   }
 
-  const tableRes = await supabase
-    .from("market_transaction_history")
-    .select("id,source_table,source_id,kind,title,amount,currency,status,tx_hash,order_id,stock_id,details,occurred_at,created_at")
-    .eq("user_id", user.id)
-    .order("occurred_at", { ascending: false })
-    .limit(Math.min(limit, 500));
+  const readHistoryTable = async () =>
+    await supabase
+      .from("market_transaction_history")
+      .select("id,source_table,source_id,kind,title,amount,currency,status,tx_hash,order_id,stock_id,details,occurred_at,created_at")
+      .eq("user_id", user.id)
+      .order("occurred_at", { ascending: false })
+      .limit(Math.min(limit, 500));
+
+  let tableRes = await readHistoryTable();
 
   if (!tableRes.error) {
-    const rows = ((tableRes.data ?? []) as any[]).map(normalizeRow);
-    // If history table exists but isn't populated yet, fall back to live legacy sources.
+    let rows = ((tableRes.data ?? []) as any[]).map(normalizeRow);
     if (rows.length > 0) return rows;
+
+    const backfilled = await maybeBackfillHistory(limit);
+    if (backfilled) {
+      tableRes = await readHistoryTable();
+      if (!tableRes.error) {
+        rows = ((tableRes.data ?? []) as any[]).map(normalizeRow);
+        if (rows.length > 0) return rows;
+      }
+    }
+
+    // If history table exists but isn't populated yet, fall back to live legacy sources.
     return await fetchLegacyHistory(user.id, limit);
   }
 

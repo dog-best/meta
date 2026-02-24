@@ -280,6 +280,17 @@ export default function ListingDetails() {
     setPreviewOpen(true);
   }
 
+  function openListingImagePreview(url: string, index: number) {
+    if (!url) return;
+    setPreviewPayload({
+      kind: "image",
+      access: "final",
+      title: `${listing?.title || "Listing"} - image ${index + 1}`,
+      urlPromise: async () => url,
+    });
+    setPreviewOpen(true);
+  }
+
   async function loadReactions() {
     if (!listingId) return;
     const { count: likeCount } = await supabase
@@ -575,8 +586,10 @@ export default function ListingDetails() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
           <View style={{ flexDirection: "row", gap: 12 }}>
             {(imageUrls.length ? imageUrls : [null]).map((u, idx) => (
-              <View
+              <Pressable
                 key={`${u ?? "none"}-${idx}`}
+                onPress={() => (u ? openListingImagePreview(u, idx) : null)}
+                disabled={!u}
                 style={{
                   width: 280,
                   height: 200,
@@ -597,10 +610,15 @@ export default function ListingDetails() {
                     </Text>
                   </View>
                 )}
-              </View>
+              </Pressable>
             ))}
           </View>
         </ScrollView>
+        {imageUrls.length > 0 ? (
+          <Text style={{ marginTop: 8, color: "rgba(255,255,255,0.62)", fontSize: 12 }}>
+            Tap any image to view full preview.
+          </Text>
+        ) : null}
 
         <View
           style={{

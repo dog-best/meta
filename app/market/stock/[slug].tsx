@@ -56,6 +56,18 @@ function sellerLogoUrl(path?: string | null) {
   return data?.publicUrl ?? null;
 }
 
+function friendlyStockTradeError(error: unknown, fallback: string) {
+  const raw = String((error as any)?.message ?? error ?? "").trim();
+  const maxMatch = raw.match(/max size\s*\(([\d.]+)\s*usdc\)/i);
+  if (maxMatch) {
+    const maxVal = Number(maxMatch[1] || 0);
+    if (Number.isFinite(maxVal) && maxVal > 0) {
+      return `Trade amount is above current on-chain max (${maxVal.toFixed(6)} USDC). Reduce amount and retry.`;
+    }
+  }
+  return friendlyMarketError(error, fallback);
+}
+
 function CandleChart({ candles }: { candles: Candle[] }) {
   const [width, setWidth] = useState(0);
   const height = 262;
@@ -245,7 +257,7 @@ export default function StockDetailScreen() {
   const [successVisible, setSuccessVisible] = useState(false);
   const [successTxHash, setSuccessTxHash] = useState<string | null>(null);
   const [successExplorer, setSuccessExplorer] = useState<string | null>(null);
-  const [quickAmount, setQuickAmount] = useState(25);
+  const [quickAmount, setQuickAmount] = useState(20);
   const [quickQuote, setQuickQuote] = useState<any | null>(null);
   const [quickQuoteErr, setQuickQuoteErr] = useState<string | null>(null);
 
@@ -350,7 +362,7 @@ export default function StockDetailScreen() {
       } catch (e: any) {
         if (!cancelled) {
           setQuote(null);
-          setQuoteErr(friendlyMarketError(e, "Quote unavailable"));
+          setQuoteErr(friendlyStockTradeError(e, "Quote unavailable"));
         }
       } finally {
         if (!cancelled) setQuoting(false);
@@ -384,7 +396,7 @@ export default function StockDetailScreen() {
       } catch (e: any) {
         if (!cancelled) {
           setQuickQuote(null);
-          setQuickQuoteErr(friendlyMarketError(e, "Quick quote unavailable"));
+          setQuickQuoteErr(friendlyStockTradeError(e, "Quick quote unavailable"));
         }
       }
     }, 220);
@@ -428,7 +440,7 @@ export default function StockDetailScreen() {
           ],
         );
       }
-      setQuoteErr(friendlyMarketError(e, "Trade failed"));
+      setQuoteErr(friendlyStockTradeError(e, "Trade failed"));
     } finally {
       setSubmitting(false);
       setConfirmVisible(false);
@@ -818,6 +830,9 @@ export default function StockDetailScreen() {
                     <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>
                       Qty {Number(quote.quantity || 0).toFixed(6)} - Notional ${Number(quote.notional_usdc || 0).toFixed(6)} - Fee ${Number(quote.fee_usdc || 0).toFixed(6)}
                     </Text>
+                    <Text style={{ marginTop: 3, color: MUTED, fontSize: 12 }}>
+                      Max trade (quote): ${Number(quote.max_trade_usdc || 0).toFixed(6)} USDC
+                    </Text>
                   </View>
                 ) : null}
 
@@ -994,7 +1009,7 @@ export default function StockDetailScreen() {
           </View>
 
           <View style={{ marginTop: 8, flexDirection: "row", gap: 8 }}>
-            {[10, 25, 50, 100].map((v) => (
+            {[10, 20, 50, 100].map((v) => (
               <Pressable
                 key={v}
                 onPress={() => setQuickAmount(v)}
@@ -1016,9 +1031,14 @@ export default function StockDetailScreen() {
           <View style={{ marginTop: 8, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <View style={{ flex: 1 }}>
               {quickQuote ? (
-                <Text style={{ color: MUTED, fontSize: 11 }}>
-                  Exec ${Number(quickQuote.price_execution_usdc || 0).toFixed(6)} - Impact {Number(quickQuote.price_impact_bps || 0).toFixed(2)} bps
-                </Text>
+                <View>
+                  <Text style={{ color: MUTED, fontSize: 11 }}>
+                    Exec ${Number(quickQuote.price_execution_usdc || 0).toFixed(6)} - Impact {Number(quickQuote.price_impact_bps || 0).toFixed(2)} bps
+                  </Text>
+                  <Text style={{ marginTop: 2, color: MUTED, fontSize: 11 }}>
+                    Max trade (quote): ${Number(quickQuote.max_trade_usdc || 0).toFixed(6)} USDC
+                  </Text>
+                </View>
               ) : quickQuoteErr ? (
                 <Text style={{ color: "#FCA5A5", fontSize: 11, fontWeight: "700" }}>{quickQuoteErr}</Text>
               ) : (

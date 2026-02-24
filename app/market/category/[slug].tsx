@@ -30,6 +30,7 @@ type ListingRow = {
   cover_image_id: string | null;
   availability?: any;
   market_listing_images?: { id: string; public_url: string | null; storage_path: string | null } | null;
+  images?: { id: string; public_url: string | null; storage_path: string | null; sort_order: number | null }[] | null;
 };
 
 export default function CategoryFeed() {
@@ -80,6 +81,12 @@ export default function CategoryFeed() {
                 id,
                 public_url,
                 storage_path
+              ),
+              images:market_listing_images (
+                id,
+                public_url,
+                storage_path,
+                sort_order
               )
             `
           )
@@ -219,11 +226,17 @@ export default function CategoryFeed() {
         ) : (
           <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
             {rows.map((r) => {
+              const firstImage = (r.images ?? [])
+                .slice()
+                .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))[0];
               const img =
                 r.market_listing_images?.public_url ??
                 (r.market_listing_images?.storage_path
                   ? `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${r.market_listing_images.storage_path}`
-                  : null);
+                  : firstImage?.public_url ??
+                    (firstImage?.storage_path
+                      ? `${supabaseUrl}/storage/v1/object/public/${LISTING_IMAGES_BUCKET}/${firstImage.storage_path}`
+                      : null));
 
               return (
                 <Pressable

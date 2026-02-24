@@ -702,6 +702,7 @@ export default function SellTab() {
         : "";
     const finalDesc = (descBase + extra).trim() || null;
     const availability = buildAvailability();
+    const shouldActivateAfterImages = category === "product" && images.length > 0;
 
     console.log("[SellTab] createListing -> start");
     setStage("Creating listing...");
@@ -717,6 +718,8 @@ export default function SellTab() {
       stock_qty: category === "product" ? qty : null,
       availability,
       payment_options: paymentOptions,
+      // keep product listings hidden until media rows are persisted
+      is_active: shouldActivateAfterImages ? false : true,
     } as any);
       console.log("[SellTab] createListing -> ok", listing?.id ?? "no-id");
 
@@ -759,7 +762,7 @@ export default function SellTab() {
 
         console.log("[SellTab] insertListingImages -> start", { count: inserts.length });
         setStage("Saving images…");
-        const rows = await insertListingImages(inserts);
+        const rows = await insertListingImages(inserts, { activateListing: shouldActivateAfterImages });
         console.log("[SellTab] insertListingImages -> ok", { count: rows?.length ?? 0 });
 
         if (!rows?.length) {

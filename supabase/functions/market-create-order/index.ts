@@ -1,6 +1,19 @@
 import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 
+function isMissingReserveStockFunction(input: unknown) {
+  const msg = String(input ?? "").toLowerCase();
+  return (
+    msg.includes("market_reserve_listing_stock") &&
+    (
+      msg.includes("does not exist") ||
+      msg.includes("could not find the function") ||
+      msg.includes("pgrst202") ||
+      msg.includes("42883")
+    )
+  );
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed(req);
 
@@ -71,16 +84,55 @@ Deno.serve(async (req) => {
     if (reserveErr) {
       const reserveMsg = String(reserveErr.message || "");
       if (reserveMsg.toLowerCase().includes("not enough stock")) return bad("Not enough stock");
-      return bad(reserveMsg || "Unable to reserve stock");
-    }
 
-    const row: any = Array.isArray(reserveData) ? reserveData[0] : reserveData;
-    reservedStock = {
-      stock_before: row?.stock_before === null || row?.stock_before === undefined ? null : Number(row.stock_before),
-      stock_after: row?.stock_after === null || row?.stock_after === undefined ? null : Number(row.stock_after),
-      depleted: row?.depleted === true,
-      listing_active: row?.listing_active === true,
-    };
+      if (!isMissingReserveStockFunction(reserveMsg)) {
+        return bad(reserveMsg || "Unable to reserve stock");
+      }
+
+      // Fallback path if SQL function is missing in the target DB.
+      const stockBefore = Number(listing.stock_qty);
+      if (!Number.isFinite(stockBefore) || stockBefore < quantity) return bad("Not enough stock");
+      const stockAfter = stockBefore - quantity;
+      const nextPaymentOptions = (() => {
+        const base = { ...((listing as any)?.payment_options ?? {}) } as any;
+        delete base.out_of_stock;
+        delete base.out_of_stock_at;
+        if (stockAfter <= 0) {
+          base.out_of_stock = true;
+          base.out_of_stock_at = new Date().toISOString();
+        }
+        return base;
+      })();
+
+      const { data: updated, error: updateErr } = await admin
+        .from("market_listings")
+        .update({
+          stock_qty: stockAfter,
+          is_active: stockAfter > 0,
+          payment_options: nextPaymentOptions,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", listing.id)
+        .eq("stock_qty", stockBefore)
+        .select("id")
+        .maybeSingle();
+      if (updateErr || !updated) return bad(updateErr?.message || "Unable to reserve stock");
+
+      reservedStock = {
+        stock_before: stockBefore,
+        stock_after: stockAfter,
+        depleted: stockAfter <= 0,
+        listing_active: stockAfter > 0,
+      };
+    } else {
+      const row: any = Array.isArray(reserveData) ? reserveData[0] : reserveData;
+      reservedStock = {
+        stock_before: row?.stock_before === null || row?.stock_before === undefined ? null : Number(row.stock_before),
+        stock_after: row?.stock_after === null || row?.stock_after === undefined ? null : Number(row.stock_after),
+        depleted: row?.depleted === true,
+        listing_active: row?.listing_active === true,
+      };
+    }
   }
 
   const { data: order, error } = await admin

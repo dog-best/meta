@@ -2,6 +2,19 @@ import { bad, methodNotAllowed, ok, unauth } from "../_shared/market/http.ts";
 import { supabaseAdminClient, supabaseUserClient } from "../_shared/market/supabase.ts";
 import { orderKeyKeccak } from "../_shared/market/crypto.ts";
 
+function isMissingReserveStockFunction(input: unknown) {
+  const msg = String(input ?? "").toLowerCase();
+  return (
+    msg.includes("market_reserve_listing_stock") &&
+    (
+      msg.includes("does not exist") ||
+      msg.includes("could not find the function") ||
+      msg.includes("pgrst202") ||
+      msg.includes("42883")
+    )
+  );
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed(req);
 
@@ -16,18 +29,128 @@ Deno.serve(async (req) => {
   const listing_id = String(body?.listing_id ?? "");
   const buyer_wallet = String(body?.buyer_wallet ?? "");
   const chain = String(body?.chain ?? "");
+  const quantity = body?.quantity === undefined ? 1 : Number(body.quantity);
 
   if (!listing_id) return bad("listing_id required");
   if (!buyer_wallet || !buyer_wallet.startsWith("0x")) return bad("buyer_wallet required");
+  if (!Number.isInteger(quantity) || quantity < 1) return bad("quantity must be >= 1");
 
   const { data: listing, error: listErr } = await admin
     .from("market_listings")
-    .select("id,seller_id,price_amount,currency,is_active")
+    .select("id,seller_id,price_amount,currency,is_active,stock_qty,payment_options")
     .eq("id", listing_id)
     .maybeSingle();
 
   if (listErr || !listing || !listing.is_active) return bad("Listing not found");
   if (listing.currency !== "USDC") return bad("Listing is not USDC");
+  if (listing.seller_id === user.id) return bad("You cannot buy your own listing");
+  if (listing.stock_qty !== null && Number(listing.stock_qty) < quantity) return bad("Not enough stock");
+  if ((listing as any)?.payment_options?.out_of_stock === true) return bad("Listing is out of stock");
+
+  const expiresAt = (listing as any)?.payment_options?.expires_at;
+  if (expiresAt) {
+    const exp = Date.parse(String(expiresAt));
+    if (Number.isFinite(exp) && exp <= Date.now()) return bad("This listing has expired");
+  }
+
+  let unit_price = Number(listing.price_amount);
+  const discount = (listing as any)?.payment_options?.discount;
+  if (discount?.enabled) {
+    const endsAt = discount?.endsAt ? Date.parse(String(discount.endsAt)) : null;
+    const stillValid = !endsAt || (Number.isFinite(endsAt) && endsAt > Date.now());
+    const discounted = Number(discount?.discountedPrice);
+    if (stillValid && Number.isFinite(discounted) && discounted > 0) {
+      unit_price = discounted;
+    }
+  }
+  const amount = Number((unit_price * quantity).toFixed(2));
+
+  let reservedStock:
+    | {
+        stock_before: number | null;
+        stock_after: number | null;
+        depleted: boolean;
+        listing_active: boolean;
+      }
+    | null = null;
+
+  const restoreReservedStock = async () => {
+    if (
+      reservedStock &&
+      reservedStock.stock_before !== null &&
+      reservedStock.stock_after !== null
+    ) {
+      await admin
+        .from("market_listings")
+        .update({
+          stock_qty: reservedStock.stock_before,
+          is_active: true,
+          payment_options: (listing as any)?.payment_options ?? {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", listing.id)
+        .eq("stock_qty", reservedStock.stock_after);
+    }
+  };
+
+  if (listing.stock_qty !== null) {
+    const { data: reserveData, error: reserveErr } = await admin.rpc("market_reserve_listing_stock", {
+      p_listing_id: listing.id,
+      p_quantity: quantity,
+    });
+    if (reserveErr) {
+      const reserveMsg = String(reserveErr.message || "");
+      if (reserveMsg.toLowerCase().includes("not enough stock")) return bad("Not enough stock");
+
+      if (!isMissingReserveStockFunction(reserveMsg)) {
+        return bad(reserveMsg || "Unable to reserve stock");
+      }
+
+      // Fallback path when SQL reservation function is missing on target DB.
+      const stockBefore = Number(listing.stock_qty);
+      if (!Number.isFinite(stockBefore) || stockBefore < quantity) return bad("Not enough stock");
+      const stockAfter = stockBefore - quantity;
+      const nextPaymentOptions = (() => {
+        const base = { ...((listing as any)?.payment_options ?? {}) } as any;
+        delete base.out_of_stock;
+        delete base.out_of_stock_at;
+        if (stockAfter <= 0) {
+          base.out_of_stock = true;
+          base.out_of_stock_at = new Date().toISOString();
+        }
+        return base;
+      })();
+
+      const { data: updated, error: updateErr } = await admin
+        .from("market_listings")
+        .update({
+          stock_qty: stockAfter,
+          is_active: stockAfter > 0,
+          payment_options: nextPaymentOptions,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", listing.id)
+        .eq("stock_qty", stockBefore)
+        .select("id")
+        .maybeSingle();
+      if (updateErr || !updated) return bad(updateErr?.message || "Unable to reserve stock");
+
+      reservedStock = {
+        stock_before: stockBefore,
+        stock_after: stockAfter,
+        depleted: stockAfter <= 0,
+        listing_active: stockAfter > 0,
+      };
+    } else {
+      const row: any = Array.isArray(reserveData) ? reserveData[0] : reserveData;
+      reservedStock = {
+        stock_before: row?.stock_before === null || row?.stock_before === undefined ? null : Number(row.stock_before),
+        stock_after: row?.stock_after === null || row?.stock_after === undefined ? null : Number(row.stock_after),
+        depleted: row?.depleted === true,
+        listing_active: row?.listing_active === true,
+      };
+    }
+  }
 
   const cfgQuery = admin
     .from("market_chain_config")
@@ -38,7 +161,10 @@ Deno.serve(async (req) => {
     ? await cfgQuery.eq("chain", chain).maybeSingle()
     : await cfgQuery.maybeSingle();
 
-  if (cfgErr || !cfg) return bad("Chain config missing");
+  if (cfgErr || !cfg) {
+    await restoreReservedStock();
+    return bad("Chain config missing");
+  }
 
   const { data: sellerWallet } = await admin
     .from("crypto_wallets")
@@ -47,7 +173,10 @@ Deno.serve(async (req) => {
     .eq("chain", cfg.chain)
     .maybeSingle();
 
-  if (!sellerWallet?.address) return bad("Seller wallet not found for this chain");
+  if (!sellerWallet?.address) {
+    await restoreReservedStock();
+    return bad("Seller wallet not found for this chain");
+  }
 
   const { data: order, error: ordErr } = await admin
     .from("market_orders")
@@ -55,14 +184,19 @@ Deno.serve(async (req) => {
       buyer_id: user.id,
       seller_id: listing.seller_id,
       listing_id: listing.id,
-      amount: listing.price_amount,
+      quantity,
+      unit_price,
+      amount,
       currency: "USDC",
       status: "CREATED",
     })
     .select("*")
     .single();
 
-  if (ordErr || !order) return bad(ordErr?.message ?? "Order create failed");
+  if (ordErr || !order) {
+    await restoreReservedStock();
+    return bad(ordErr?.message ?? "Order create failed");
+  }
 
   const orderKey = orderKeyKeccak(order.id);
 
@@ -81,7 +215,11 @@ Deno.serve(async (req) => {
     { onConflict: "order_id" },
   );
 
-  if (escErr) return bad(escErr.message);
+  if (escErr) {
+    await restoreReservedStock();
+    await admin.from("market_orders").delete().eq("id", order.id);
+    return bad(escErr.message);
+  }
 
   await admin.from("market_audit_logs").insert({
     actor_id: user.id,
@@ -96,8 +234,29 @@ Deno.serve(async (req) => {
       escrow: cfg.escrow_address,
       usdc: cfg.usdc_address,
       chain: cfg.chain,
+      quantity,
+      amount,
+      stock_before: reservedStock?.stock_before ?? null,
+      stock_after: reservedStock?.stock_after ?? null,
+      stock_depleted: reservedStock?.depleted === true,
     },
   });
+
+  if (reservedStock?.depleted) {
+    await admin.from("market_audit_logs").insert({
+      actor_id: user.id,
+      actor_type: "system",
+      action: "LISTING_AUTO_CLOSED_OUT_OF_STOCK",
+      entity_type: "market_listings",
+      entity_id: listing.id,
+      payload: {
+        listing_id: listing.id,
+        order_id: order.id,
+        stock_before: reservedStock.stock_before,
+        stock_after: reservedStock.stock_after,
+      },
+    });
+  }
 
   return ok({
     ok: true,

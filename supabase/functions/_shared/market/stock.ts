@@ -199,7 +199,9 @@ export function buildQuote(input: {
   }
 
   const maxTradeRatio = input.launchGuardActive ? 0.1 : 0.2;
-  const maxTradeUsdc = liquidityUsdc * maxTradeRatio;
+  // Product requirement: allow users to attempt up to $20 per trade from quote layer.
+  // On-chain bootstrap guardrails still apply and can reject above-chain limits.
+  const maxTradeUsdc = Math.max(liquidityUsdc * maxTradeRatio, 20);
 
   const notionalPreImpact = side === "buy" ? amountUsdc : quantity * spot;
   if (notionalPreImpact > maxTradeUsdc) {

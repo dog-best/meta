@@ -54,6 +54,7 @@ type ListingRow = {
   availability?: any;
   stock_qty?: number | null;
   cover?: { public_url?: string | null; storage_path?: string | null } | null;
+  images?: { public_url?: string | null; storage_path?: string | null; sort_order?: number | null }[] | null;
 };
 
 type SellerCard = {
@@ -274,7 +275,7 @@ export default function MarketHome() {
       let query = supabase
         .from(LISTINGS_TABLE)
         .select(
-          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,availability,stock_qty,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path)"
+          "id,seller_id,title,price_amount,currency,delivery_type,category,sub_category,created_at,payment_options,availability,stock_qty,cover:market_listing_images!market_listings_cover_image_fk(public_url,storage_path),images:market_listing_images(public_url,storage_path,sort_order)"
         )
         .eq("is_active", true)
         .eq("category", main)
@@ -395,7 +396,14 @@ export default function MarketHome() {
   }, [directoryMode, featuredSellers, verifiedSellers, q]);
 
   const renderListing = ({ item }: { item: ListingRow }) => {
-    const coverUrl = item.cover?.public_url ?? buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null);
+    const firstImage = (item.images ?? [])
+      .slice()
+      .sort((a, b) => Number(a?.sort_order ?? 0) - Number(b?.sort_order ?? 0))[0];
+    const coverUrl =
+      item.cover?.public_url ??
+      buildPublicFromStorage(supabaseUrl, item.cover?.storage_path ?? null) ??
+      firstImage?.public_url ??
+      buildPublicFromStorage(supabaseUrl, firstImage?.storage_path ?? null);
     const seller = sellersMap[item.seller_id];
     const stats = statsMap[item.id] ?? { completed: 0, cancelled: 0, failed: 0 };
     const displayPrice = getListingPriceDisplay(item as any);

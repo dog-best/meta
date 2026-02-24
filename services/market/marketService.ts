@@ -31,6 +31,7 @@ export type CreateListingInput = {
   stock_qty?: number | null; // products
   availability?: any;
   payment_options?: any;
+  is_active?: boolean;
 };
 
 export type ListingImageInsert = {
@@ -91,6 +92,7 @@ export async function createListing(input: CreateListingInput) {
   const stockQty =
     input.stock_qty === undefined || input.stock_qty === null ? null : Number(input.stock_qty);
   const outOfStock = input.category === "product" && stockQty !== null && Number(stockQty) <= 0;
+  const requestedActive = typeof input.is_active === "boolean" ? input.is_active : true;
   const paymentOptions = { ...(input.payment_options ?? {}) } as any;
   if (outOfStock) {
     paymentOptions.out_of_stock = true;
@@ -114,7 +116,7 @@ export async function createListing(input: CreateListingInput) {
       stock_qty: stockQty,
       availability: input.availability ?? {},
       payment_options: paymentOptions,
-      is_active: !outOfStock,
+      is_active: requestedActive && !outOfStock,
     })
     .select("*")
     .single();
@@ -132,7 +134,10 @@ export async function setListingCoverImage(listingId: string, coverImageId: stri
   if (error) throw new Error(error.message);
 }
 
-export async function insertListingImages(images: ListingImageInsert[]) {
+export async function insertListingImages(
+  images: ListingImageInsert[],
+  options?: { activateListing?: boolean },
+) {
   const fallbackRows: any[] = [];
   for (const img of images) {
     const out = await callFn<{ image?: any }>("market-add-listing-image", {
@@ -143,6 +148,8 @@ export async function insertListingImages(images: ListingImageInsert[]) {
       meta: img.meta ?? {},
       // first image becomes cover on the backend
       set_as_cover: Number(img.sort_order ?? 0) === 0,
+      // when creating product listings, publish only after first image is saved
+      activate_listing: options?.activateListing === true && Number(img.sort_order ?? 0) === 0,
     });
     const row = (out as any)?.image;
     if (!row?.id) {
