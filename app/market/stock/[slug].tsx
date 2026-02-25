@@ -36,6 +36,7 @@ const BORDER = "rgba(255,255,255,0.12)";
 const MINT = "#2DD4BF";
 const RED = "#F87171";
 const MUTED = "rgba(255,255,255,0.68)";
+const DEFAULT_TRADE_SLIPPAGE_BPS = 2200;
 
 type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 
@@ -356,7 +357,7 @@ export default function StockDetailScreen() {
           side,
           amount_usdc: side === "buy" ? amt : undefined,
           quantity: side === "sell" ? qty : undefined,
-          max_slippage_bps: 1200,
+          max_slippage_bps: DEFAULT_TRADE_SLIPPAGE_BPS,
         });
         if (!cancelled) setQuote(res.quote ?? null);
       } catch (e: any) {
@@ -390,7 +391,7 @@ export default function StockDetailScreen() {
           slug,
           side: "buy",
           amount_usdc: quickAmount,
-          max_slippage_bps: 1200,
+          max_slippage_bps: DEFAULT_TRADE_SLIPPAGE_BPS,
         });
         if (!cancelled) setQuickQuote(res.quote ?? null);
       } catch (e: any) {
@@ -417,7 +418,7 @@ export default function StockDetailScreen() {
         side: pendingTrade.side,
         amount_usdc: pendingTrade.amount_usdc,
         quantity: pendingTrade.quantity,
-        max_slippage_bps: 1200,
+        max_slippage_bps: DEFAULT_TRADE_SLIPPAGE_BPS,
       });
 
       setSuccessTxHash(String(res?.tx_hash || "") || null);

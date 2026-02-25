@@ -259,6 +259,31 @@ function isAllowanceSimulationReason(reason: string) {
   );
 }
 
+function isTooLittleReceivedReason(reason: string) {
+  const r = String(reason || "").toLowerCase();
+  return r.includes("too little received") || r.includes("insufficient output amount");
+}
+
+function slippageFromBps(bps: number) {
+  return Math.max(0.0001, Math.min(0.95, bps / 10_000));
+}
+
+function buildAdaptiveSlippagePlan(baseBps: number, quoteImpactBps: number, launchGuardActive: boolean) {
+  const normalizedBase = Math.max(100, Math.round(baseBps || 1200));
+  const cap = launchGuardActive ? 7000 : 6000;
+  const dynamicFloor = launchGuardActive ? 2200 : 1500;
+  const impactTarget = Math.ceil(Math.max(0, quoteImpactBps) + (launchGuardActive ? 1300 : 900));
+  const target = Math.max(normalizedBase, dynamicFloor, impactTarget);
+
+  const candidates = [normalizedBase, target, target + 700, target + 1400, cap];
+  const out: number[] = [];
+  for (const n of candidates) {
+    const v = Math.max(100, Math.min(cap, Math.round(n)));
+    if (!out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
 async function resolveBootstrapMaxTrade(
   publicClient: any,
   args: {
@@ -1169,7 +1194,6 @@ export async function submitStockTradeOnchain(input: {
   if (!storeId) throw new Error("Stock store reference missing.");
   const storeKey = storeKeyFromStoreId(storeId);
   const slippageBps = toNumber(input.max_slippage_bps, 1200);
-  const slippage = Math.max(0.0001, Math.min(0.95, slippageBps / 10_000));
   const publicClient = createPublicClient({ transport: http(String(chain.rpc_url || "")) });
   const poolAddress = normalizeHex(String(quoteRes?.identity?.pool_address || ""));
   const symbol = String(quoteRes?.identity?.symbol || "TOKEN").trim() || "TOKEN";
@@ -1179,8 +1203,8 @@ export async function submitStockTradeOnchain(input: {
   let tradeData: `0x${string}`;
   if (input.side === "buy") {
     const amountInRaw = toRaw(toNumber(quoteRes?.quote?.notional_usdc, 0), 6, 6);
-    const amountOutMinRaw = toRaw(toNumber(quoteRes?.quote?.quantity, 0) * (1 - slippage), 18, 12);
-    if (amountInRaw <= 0n || amountOutMinRaw <= 0n) throw new Error("Invalid buy quote amount.");
+    const quotedOut = toNumber(quoteRes?.quote?.quantity, 0);
+    if (amountInRaw <= 0n || quotedOut <= 0) throw new Error("Invalid buy quote amount.");
 
     const maxTrade = await resolveBootstrapMaxTrade(publicClient, {
       routerAddress,
@@ -1232,42 +1256,72 @@ export async function submitStockTradeOnchain(input: {
       approvalSubmitted = true;
     }
 
+    const quoteImpactBps = toNumber(quoteRes?.quote?.price_impact_bps, 0);
+    const launchGuardActive = Boolean(quoteRes?.quote?.launch_guard_active);
+    const slippagePlan = buildAdaptiveSlippagePlan(slippageBps, quoteImpactBps, launchGuardActive);
+
+    let amountOutMinRaw = 0n;
+    let preflightPassed = false;
+    let sawTooLittleReceived = false;
+    let lastReason = "";
+
+    for (const slippageTryBps of slippagePlan) {
+      const minOut = toRaw(quotedOut * (1 - slippageFromBps(slippageTryBps)), 18, 12);
+      if (minOut <= 0n) continue;
+      amountOutMinRaw = minOut;
+
+      try {
+        await publicClient.simulateContract({
+          abi: IDENTITY_ROUTER_ABI,
+          address: routerAddress,
+          functionName: "buyExactIn",
+          args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
+          account: address as `0x${string}`,
+        });
+        preflightPassed = true;
+        break;
+      } catch (e: any) {
+        const reason = shortRevertReason(e).toLowerCase();
+        lastReason = reason;
+        if (reason.includes("max trade")) {
+          throw new Error("Order exceeds current on-chain max size. Try a smaller amount.");
+        }
+        if (reason.includes("cooldown")) {
+          throw new Error("Trade cooldown is active. Wait a few seconds and retry.");
+        }
+        if (reason.includes("twap deviation")) {
+          throw new Error("Price moved too far from TWAP. Wait briefly and retry.");
+        }
+        if (approvalSubmitted && isAllowanceSimulationReason(reason)) {
+          // Approval may still be pending in mempool while simulation runs on latest confirmed state.
+          preflightPassed = true;
+          break;
+        }
+        if (isTooLittleReceivedReason(reason)) {
+          sawTooLittleReceived = true;
+          continue;
+        }
+        throw new Error(reason ? `Cannot submit buy yet: ${reason}` : "Cannot submit buy yet due to on-chain guardrails.");
+      }
+    }
+
+    if (!preflightPassed || amountOutMinRaw <= 0n) {
+      if (sawTooLittleReceived) {
+        throw new Error("Cannot submit buy yet: pool price moved during quote. Reduce amount and retry.");
+      }
+      throw new Error(lastReason ? `Cannot submit buy yet: ${lastReason}` : "Cannot submit buy yet due to on-chain guardrails.");
+    }
+
     tradeData = encodeFunctionData({
       abi: IDENTITY_ROUTER_ABI,
       functionName: "buyExactIn",
       args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
     });
-
-    // Final preflight against latest on-chain state before opening the main trade signature.
-    try {
-      await publicClient.simulateContract({
-        abi: IDENTITY_ROUTER_ABI,
-        address: routerAddress,
-        functionName: "buyExactIn",
-        args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
-        account: address as `0x${string}`,
-      });
-    } catch (e: any) {
-      const reason = shortRevertReason(e).toLowerCase();
-      if (reason.includes("max trade")) {
-        throw new Error("Order exceeds current on-chain max size. Try a smaller amount.");
-      }
-      if (reason.includes("cooldown")) {
-        throw new Error("Trade cooldown is active. Wait a few seconds and retry.");
-      }
-      if (reason.includes("twap deviation")) {
-        throw new Error("Price moved too far from TWAP. Wait briefly and retry.");
-      }
-      if (approvalSubmitted && isAllowanceSimulationReason(reason)) {
-        // Approval may still be pending in mempool while simulation runs on latest confirmed state.
-      } else {
-        throw new Error(reason ? `Cannot submit buy yet: ${reason}` : "Cannot submit buy yet due to on-chain guardrails.");
-      }
-    }
   } else {
-    const amountInRaw = toRaw(toNumber(quoteRes?.quote?.quantity, 0), 18, 12);
-    const amountOutMinRaw = toRaw(toNumber(quoteRes?.quote?.notional_usdc, 0) * (1 - slippage), 6, 6);
-    if (amountInRaw <= 0n || amountOutMinRaw <= 0n) throw new Error("Invalid sell quote amount.");
+    const quotedInQty = toNumber(quoteRes?.quote?.quantity, 0);
+    const quotedOutUsdc = toNumber(quoteRes?.quote?.notional_usdc, 0);
+    const amountInRaw = toRaw(quotedInQty, 18, 12);
+    if (amountInRaw <= 0n || quotedOutUsdc <= 0) throw new Error("Invalid sell quote amount.");
 
     const maxTrade = await resolveBootstrapMaxTrade(publicClient, {
       routerAddress,
@@ -1319,38 +1373,67 @@ export async function submitStockTradeOnchain(input: {
       approvalSubmitted = true;
     }
 
+    const quoteImpactBps = toNumber(quoteRes?.quote?.price_impact_bps, 0);
+    const launchGuardActive = Boolean(quoteRes?.quote?.launch_guard_active);
+    const slippagePlan = buildAdaptiveSlippagePlan(slippageBps, quoteImpactBps, launchGuardActive);
+
+    let amountOutMinRaw = 0n;
+    let preflightPassed = false;
+    let sawTooLittleReceived = false;
+    let lastReason = "";
+
+    for (const slippageTryBps of slippagePlan) {
+      const minOut = toRaw(quotedOutUsdc * (1 - slippageFromBps(slippageTryBps)), 6, 6);
+      if (minOut <= 0n) continue;
+      amountOutMinRaw = minOut;
+
+      try {
+        await publicClient.simulateContract({
+          abi: IDENTITY_ROUTER_ABI,
+          address: routerAddress,
+          functionName: "sellExactIn",
+          args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
+          account: address as `0x${string}`,
+        });
+        preflightPassed = true;
+        break;
+      } catch (e: any) {
+        const reason = shortRevertReason(e).toLowerCase();
+        lastReason = reason;
+        if (reason.includes("max trade")) {
+          throw new Error("Order exceeds current on-chain max size. Try a smaller quantity.");
+        }
+        if (reason.includes("cooldown")) {
+          throw new Error("Trade cooldown is active. Wait a few seconds and retry.");
+        }
+        if (reason.includes("twap deviation")) {
+          throw new Error("Price moved too far from TWAP. Wait briefly and retry.");
+        }
+        if (approvalSubmitted && isAllowanceSimulationReason(reason)) {
+          // Approval may still be pending in mempool while simulation runs on latest confirmed state.
+          preflightPassed = true;
+          break;
+        }
+        if (isTooLittleReceivedReason(reason)) {
+          sawTooLittleReceived = true;
+          continue;
+        }
+        throw new Error(reason ? `Cannot submit sell yet: ${reason}` : "Cannot submit sell yet due to on-chain guardrails.");
+      }
+    }
+
+    if (!preflightPassed || amountOutMinRaw <= 0n) {
+      if (sawTooLittleReceived) {
+        throw new Error("Cannot submit sell yet: pool price moved during quote. Reduce quantity and retry.");
+      }
+      throw new Error(lastReason ? `Cannot submit sell yet: ${lastReason}` : "Cannot submit sell yet due to on-chain guardrails.");
+    }
+
     tradeData = encodeFunctionData({
       abi: IDENTITY_ROUTER_ABI,
       functionName: "sellExactIn",
       args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
     });
-
-    // Final preflight against latest on-chain state before opening the main trade signature.
-    try {
-      await publicClient.simulateContract({
-        abi: IDENTITY_ROUTER_ABI,
-        address: routerAddress,
-        functionName: "sellExactIn",
-        args: [storeKey as `0x${string}`, amountInRaw, amountOutMinRaw, 0n],
-        account: address as `0x${string}`,
-      });
-    } catch (e: any) {
-      const reason = shortRevertReason(e).toLowerCase();
-      if (reason.includes("max trade")) {
-        throw new Error("Order exceeds current on-chain max size. Try a smaller quantity.");
-      }
-      if (reason.includes("cooldown")) {
-        throw new Error("Trade cooldown is active. Wait a few seconds and retry.");
-      }
-      if (reason.includes("twap deviation")) {
-        throw new Error("Price moved too far from TWAP. Wait briefly and retry.");
-      }
-      if (approvalSubmitted && isAllowanceSimulationReason(reason)) {
-        // Approval may still be pending in mempool while simulation runs on latest confirmed state.
-      } else {
-        throw new Error(reason ? `Cannot submit sell yet: ${reason}` : "Cannot submit sell yet due to on-chain guardrails.");
-      }
-    }
   }
 
   const sendResult = await (client as any).sendTransaction({

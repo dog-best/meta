@@ -15,6 +15,14 @@ function isMissingReserveStockFunction(input: unknown) {
   );
 }
 
+function isListingEditGuardError(input: unknown) {
+  const msg = String(input ?? "").toLowerCase();
+  return (
+    msg.includes("listings cannot be edited") ||
+    (msg.includes("delete and create a new listing") && msg.includes("listing"))
+  );
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return methodNotAllowed(req);
 
@@ -101,6 +109,9 @@ Deno.serve(async (req) => {
     if (reserveErr) {
       const reserveMsg = String(reserveErr.message || "");
       if (reserveMsg.toLowerCase().includes("not enough stock")) return bad("Not enough stock");
+      if (isListingEditGuardError(reserveMsg)) {
+        return bad("Stock reservation is blocked by listing edit guard. Apply latest DB migration and retry.");
+      }
 
       if (!isMissingReserveStockFunction(reserveMsg)) {
         return bad(reserveMsg || "Unable to reserve stock");
@@ -133,6 +144,9 @@ Deno.serve(async (req) => {
         .eq("stock_qty", stockBefore)
         .select("id")
         .maybeSingle();
+      if (isListingEditGuardError(updateErr?.message || "")) {
+        return bad("Stock reservation is blocked by listing edit guard. Apply latest DB migration and retry.");
+      }
       if (updateErr || !updated) return bad(updateErr?.message || "Unable to reserve stock");
 
       reservedStock = {
