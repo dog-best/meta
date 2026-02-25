@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
@@ -22,6 +22,12 @@ const BG1 = "#0A0620";
 
 // Real function names in your repo
 const RPC_CHECKOUT_WALLET = "market_checkout_wallet_rpc"; // NGN wallet escrow lock (SQL RPC)
+
+function shouldExitCheckoutForStatus(status: unknown) {
+  const s = String(status ?? "").trim().toUpperCase();
+  if (!s) return false;
+  return s !== "CREATED" && s !== "PENDING_PAYMENT";
+}
 
 const ERC20_ABI = [
   { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] },
@@ -167,9 +173,11 @@ export default function Checkout() {
   const [usdtBalance, setUsdtBalance] = useState(0);
   const [fundingLoading, setFundingLoading] = useState(false);
   const [userCountry, setUserCountry] = useState<UserCountry | null>(null);
+  const autoRoutedRef = useRef(false);
   const listingCurrency = String((listing as any)?.currency ?? "").toUpperCase();
   const orderCurrency = String((order as any)?.currency ?? listingCurrency).toUpperCase();
   const orderAmount = Number((order as any)?.amount ?? 0);
+  const orderStatus = String((order as any)?.status ?? "").toUpperCase();
   const orderQty = Math.max(1, Number((order as any)?.quantity ?? 1));
   const orderUnitPrice = Number(
     (order as any)?.unit_price ?? (orderQty > 0 ? orderAmount / orderQty : orderAmount),
@@ -301,7 +309,7 @@ export default function Checkout() {
         {
           const first = await supabase
             .from("market_orders")
-            .select("id,listing_id,quantity,unit_price,amount,currency,delivery_address,buyer_contact")
+            .select("id,listing_id,status,quantity,unit_price,amount,currency,delivery_address,buyer_contact")
             .eq("id", oid)
             .maybeSingle();
           if (!first.error) {
@@ -309,7 +317,7 @@ export default function Checkout() {
           } else if (String(first.error.message || "").includes("buyer_contact")) {
             const fallback = await supabase
               .from("market_orders")
-              .select("id,listing_id,quantity,unit_price,amount,currency,delivery_address")
+              .select("id,listing_id,status,quantity,unit_price,amount,currency,delivery_address")
               .eq("id", oid)
               .maybeSingle();
             if (fallback.error) throw fallback.error;
@@ -371,6 +379,32 @@ export default function Checkout() {
   useEffect(() => {
     refreshFunding();
   }, [chain?.chain, order?.id, order?.amount, order?.currency, userCountry?.code, userCountry?.name]);
+
+  useEffect(() => {
+    if (!oid) return;
+    const channel = supabase
+      .channel(`checkout-order-${oid}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "market_orders", filter: `id=eq.${oid}` },
+        (payload) => {
+          const next = (payload.new ?? {}) as any;
+          setOrder((prev: any) => ({ ...(prev ?? {}), ...next }));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [oid]);
+
+  useEffect(() => {
+    if (!oid || autoRoutedRef.current) return;
+    if (!shouldExitCheckoutForStatus(orderStatus)) return;
+    autoRoutedRef.current = true;
+    router.replace(`/market/order/${oid}` as any);
+  }, [oid, orderStatus]);
 
   async function saveDeliveryGeo(geo: DeliveryGeo) {
     if (!oid) return;
